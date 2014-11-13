@@ -92,6 +92,7 @@ import com.android.server.net.BaseNetworkObserver;
 import com.android.server.net.NetlinkTracker;
 
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
+import android.net.wifi.p2p.WifiP2pManager;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -958,10 +959,10 @@ public class WifiStateMachine extends StateMachine {
         int val = SystemProperties.getInt("persist.cne.feature", 0);
         boolean isPropFeatureAvail = (val == 3) ? true : false;
         if (isPropFeatureAvail) {
-            int featureVal = SystemProperties.getInt("persist.sys.cnd.wqe", 1);
-            DEFAULT_SCORE = (featureVal == 2) ? 1 : NetworkAgent.WIFI_BASE_SCORE;
+            DEFAULT_SCORE = 1;
             filter.addAction("com.quicinc.cne.CNE_PREFERENCE_CHANGED");
             filter.addAction("prop_state_change");
+            filter.addAction("blacklist_bad_bssid");
         }
 
         mContext.registerReceiver(
@@ -984,6 +985,12 @@ public class WifiStateMachine extends StateMachine {
                         } else if (action.equals("prop_state_change")) {
                             int state = intent.getIntExtra("state", 0);
                             handleStateChange(state);
+                        } else if (action.equals("blacklist_bad_bssid") ) {
+                            // 1 = blacklist, 0 = unblacklist
+                            int blacklist = intent.getIntExtra("blacklistBSSID", -1);
+                            String bssid  =  intent.getStringExtra("BSSIDToBlacklist");
+                            int reason = intent.getIntExtra("blacklistReason", -1 );
+                            handleBSSIDBlacklist( ( blacklist == 0) ? true : false, bssid, reason );
                         }
                     }
                 }, filter);
@@ -2905,6 +2912,17 @@ public class WifiStateMachine extends StateMachine {
         return sb.toString();
     }
 
+    private void handleBSSIDBlacklist(boolean enable, String bssid, int reason) {
+        log("Blacklisting BSSID: " + bssid + ",reason:" + reason + ",enable:" + enable );
+        if (bssid != null) {
+            // Tell configStore to black list it
+            synchronized(mScanResultCache) {
+                mWifiAutoJoinController.handleBSSIDBlackList( enable, bssid, reason );
+                mWifiConfigStore.handleDisabledAPs( enable, bssid, reason );
+            }
+        }
+    }
+
     private void handleStateChange(int state) {
         int offset;
         log("handle state change: " + state);
@@ -4751,6 +4769,8 @@ public class WifiStateMachine extends StateMachine {
                 case WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST:
                     mTemporarilyDisconnectWifi = (message.arg1 == 1);
                     replyToMessage(message, WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE);
+                    break;
+                case WifiP2pServiceImpl.P2P_MIRACAST_MODE_CHANGED:
                     break;
                 /* Link configuration (IP address, DNS, ...) changes notified via netlink */
                 case CMD_UPDATE_LINKPROPERTIES:
@@ -6689,7 +6709,12 @@ public class WifiStateMachine extends StateMachine {
                     + " config.bssid " + config.BSSID);
         }
         config.autoJoinBSSID = "any";
-        config.BSSID = "any";
+
+        // If an app specified a BSSID then dont over-write it
+        if ( !mWifiAutoJoinController.isBlacklistedBSSID(config.BSSID) ) {
+            config.BSSID = "any";
+        }
+
         if (DBG) {
            loge(dbg + " " + config.SSID
                     + " nid=" + Integer.toString(config.networkId));
@@ -7773,6 +7798,9 @@ public class WifiStateMachine extends StateMachine {
                         ret = NOT_HANDLED;
                     }
                     break;
+                case WifiP2pServiceImpl.P2P_MIRACAST_MODE_CHANGED:
+                    setScanIntevelOnMiracastModeChange(message.arg1);
+                    break;
                 case CMD_SCREEN_STATE_CHANGED:
                     handleScreenStateChanged(message.arg1 != 0,
                             /* startBackgroundScanIfNeeded = */ true);
@@ -8320,5 +8348,18 @@ public class WifiStateMachine extends StateMachine {
 
     void handle3GAuthRequest(SimAuthRequestData requestData) {
 
+    }
+    private void setScanIntevelOnMiracastModeChange(int mode) {
+        if ((mode == WifiP2pManager.MIRACAST_SOURCE)
+                || (mode == WifiP2pManager.MIRACAST_SINK)) {
+            int defaultWfdIntervel = mContext.getResources().getInteger(
+                    R.integer.config_wifi_scan_interval_wfd_connected);
+            long wfdScanIntervalMs = Settings.Global
+                    .getLong(
+                            mContext.getContentResolver(),
+                            Settings.Global.WIFI_SUPPLICANT_SCAN_INTERVAL_WFD_CONNECTED_MS,
+                            defaultWfdIntervel);
+            mWifiNative.setScanInterval((int) wfdScanIntervalMs / 1000);
+        }
     }
 }
