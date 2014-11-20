@@ -1779,10 +1779,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         mWifiStateMachine.enableVerboseLogging(verbose);
     }
 
-    public void enableRssiThreshold(int enabled) {
-        mWifiStateMachine.enableRssiThreshold(enabled);
-    }
-
     public int getVerboseLoggingLevel() {
         enforceAccessPermission();
         return mWifiStateMachine.getVerboseLoggingLevel();
