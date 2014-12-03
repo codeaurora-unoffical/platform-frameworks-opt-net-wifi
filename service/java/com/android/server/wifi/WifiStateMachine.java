@@ -5026,7 +5026,13 @@ public class WifiStateMachine extends StateMachine {
             mWifiNative.setExternalSim(true);
 
             setRandomMacOui();
-            mWifiNative.enableAutoConnect(false);
+            if (mWifiConfigStore.enableAutoJoinWhenAssociated) {
+                mWifiNative.enableAutoConnect(false);
+            } else {
+                if (DBG) {
+                    log("Autojoin is disabled, keep autoconnect enabled in supplicant");
+                }
+            }
         }
 
         @Override
