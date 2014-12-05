@@ -185,6 +185,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     public static final int ENABLED                         = 1;
     public static final int DISABLED                        = 0;
 
+    static final int P2P_BLUETOOTH_COEXISTENCE_MODE_DISABLED    = 1;
+    static final int P2P_BLUETOOTH_COEXISTENCE_MODE_SENSE       = 2;
+
     private final boolean mP2pSupported;
 
     private WifiP2pDevice mThisDevice = new WifiP2pDevice();
@@ -1696,6 +1699,8 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                 P2pStateMachine.this, mGroup.getInterface());
                         // TODO: We should use DHCP state machine PRE message like WifiStateMachine
                         mWifiNative.setP2pPowerSave(mGroup.getInterface(), false);
+                        mWifiNative.setBluetoothCoexistenceMode(
+                                P2P_BLUETOOTH_COEXISTENCE_MODE_DISABLED);
                         mDhcpStateMachine.sendMessage(DhcpStateMachine.CMD_START_DHCP);
                         WifiP2pDevice groupOwner = mGroup.getOwner();
                         WifiP2pDevice peer = mPeers.get(groupOwner.deviceAddress);
@@ -1986,6 +1991,8 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         if (DBG) logd("DhcpResults: " + dhcpResults);
                         setWifiP2pInfoOnGroupFormation(dhcpResults.serverAddress);
                         sendP2pConnectionChangedBroadcast();
+                        mWifiNative.setBluetoothCoexistenceMode(
+                                P2P_BLUETOOTH_COEXISTENCE_MODE_SENSE);
                         //Turn on power save on client
                         mWifiNative.setP2pPowerSave(mGroup.getInterface(), true);
                         try {
