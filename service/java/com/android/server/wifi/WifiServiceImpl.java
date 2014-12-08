@@ -1106,7 +1106,10 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
 
         if (dhcpResults.ipAddress != null &&
                 dhcpResults.ipAddress.getAddress() instanceof Inet4Address) {
-            info.ipAddress = NetworkUtils.inetAddressToInt((Inet4Address) dhcpResults.ipAddress.getAddress());
+            info.ipAddress = NetworkUtils.inetAddressToInt(
+               (Inet4Address) dhcpResults.ipAddress.getAddress());
+            info.netmask = NetworkUtils.prefixLengthToNetmaskInt(
+               dhcpResults.ipAddress.getNetworkPrefixLength());
         }
 
         if (dhcpResults.gateway != null) {
@@ -1777,10 +1780,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
     public void enableVerboseLogging(int verbose) {
         enforceAccessPermission();
         mWifiStateMachine.enableVerboseLogging(verbose);
-    }
-
-    public void enableRssiThreshold(int enabled) {
-        mWifiStateMachine.enableRssiThreshold(enabled);
     }
 
     public int getVerboseLoggingLevel() {
