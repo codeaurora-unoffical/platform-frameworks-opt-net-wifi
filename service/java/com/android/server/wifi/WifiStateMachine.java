@@ -198,6 +198,9 @@ public class WifiStateMachine extends StateMachine {
     /* Chipset supports background scan */
     private final boolean mBackgroundScanSupported;
 
+    /* Flag to verify backgroundScan is configured successfully */
+    private boolean mBackgroundScanConfigured = false;
+
     private String mInterfaceName;
     /* Tethering interface could be separate from wlan interface */
     private String mTetherInterfaceName;
@@ -1088,10 +1091,6 @@ public class WifiStateMachine extends StateMachine {
         return mVerboseLoggingLevel;
     }
 
-    void enableRssiThreshold(int enabled) {
-        mWifiAutoJoinController.enableRssiThreshold(enabled);
-    }
-
     void enableVerboseLogging(int verbose) {
         mVerboseLoggingLevel = verbose;
         if (verbose > 0) {
@@ -1613,13 +1612,39 @@ public class WifiStateMachine extends StateMachine {
     private static int MESSAGE_HANDLING_STATUS_HANDLING_ERROR = -7;
 
     private int messageHandlingStatus = 0;
+    private static long lastScanDuringP2p = 0;
 
     //TODO: this is used only to track connection attempts, however the link state and packet per
     //TODO: second logic should be folded into that
-    private boolean isScanAllowed() {
+    private boolean isScanAllowed(int scanSource) {
         long now = System.currentTimeMillis();
         if (lastConnectAttempt != 0 && (now - lastConnectAttempt) < 10000) {
             return false;
+        }
+        if (mP2pConnected.get()) {
+            if (scanSource == SCAN_ALARM_SOURCE) {
+                if (VDBG) {
+                    logd("P2P connected: lastScanDuringP2p=" +
+                         lastScanDuringP2p +
+                         " CurrentTime=" + now +
+                         " autoJoinScanIntervalWhenP2pConnected=" +
+                         mWifiConfigStore.autoJoinScanIntervalWhenP2pConnected);
+                }
+
+                if (lastScanDuringP2p == 0 || (now - lastScanDuringP2p)
+                    < mWifiConfigStore.autoJoinScanIntervalWhenP2pConnected) {
+                    if (lastScanDuringP2p == 0) lastScanDuringP2p = now;
+                    if (VDBG) {
+                        logd("P2P connected, discard scan within " +
+                             mWifiConfigStore.autoJoinScanIntervalWhenP2pConnected
+                             + " milliseconds");
+                    }
+                    return false;
+                }
+                lastScanDuringP2p = now;
+            }
+        } else {
+            lastScanDuringP2p = 0;
         }
         return true;
     }
@@ -2994,7 +3019,19 @@ public class WifiStateMachine extends StateMachine {
                 // Scan after 200ms
                 setScanAlarm(true, 200);
             } else if (getCurrentState() == mDisconnectedState) {
-                mCurrentScanAlarmMs = mDisconnectedScanPeriodMs;
+
+                // Configure the scan alarm time to mFrameworkScanIntervalMs
+                // (5 minutes) if there are no saved profiles as there is
+                // already a periodic scan getting issued for every
+                // mSupplicantScanIntervalMs seconds. However keep the
+                // scan frequency by setting it to mDisconnectedScanPeriodMs
+                // (10 seconds) when there are configured profiles.
+                if (mWifiConfigStore.getConfiguredNetworks().size() != 0) {
+                    mCurrentScanAlarmMs = mDisconnectedScanPeriodMs;
+                } else {
+                    mCurrentScanAlarmMs = mFrameworkScanIntervalMs;
+                }
+
                 // Scan after 200ms
                 setScanAlarm(true, 200);
             }
@@ -6840,6 +6877,11 @@ public class WifiStateMachine extends StateMachine {
                     deferMessage(message);
                     break;
                 case CMD_START_SCAN:
+                    if (!isScanAllowed(message.arg1)) {
+                        // Ignore the scan request
+                        if (VDBG) logd("L2ConnectedState: ignore scan");
+                        return HANDLED;
+                    }
                     //if (DBG) {
                         loge("WifiStateMachine CMD_START_SCAN source " + message.arg1
                               + " txSuccessRate="+String.format( "%.2f", mWifiInfo.txSuccessRate)
@@ -7650,9 +7692,19 @@ public class WifiStateMachine extends StateMachine {
                     Settings.Global.WIFI_FRAMEWORK_SCAN_INTERVAL_MS,
                     mDefaultFrameworkScanIntervalMs);
 
-            if (mScreenOn)
-                mCurrentScanAlarmMs = mDisconnectedScanPeriodMs;
-
+            // Configure the scan alarm time to mFrameworkScanIntervalMs
+            // (5 minutes) if there are no saved profiles as there is
+            // already a periodic scan getting issued for every
+            // mSupplicantScanIntervalMs seconds. However keep the
+            // scan frequency by setting it to mDisconnectedScanPeriodMs
+            // (10 seconds) when there are configured profiles.
+            if (mScreenOn) {
+                if (mWifiConfigStore.getConfiguredNetworks().size() != 0) {
+                    mCurrentScanAlarmMs = mDisconnectedScanPeriodMs;
+                } else {
+                    mCurrentScanAlarmMs = mFrameworkScanIntervalMs;
+                }
+            }
             if (PDBG) {
                 loge(" Enter disconnected State scan interval " + mFrameworkScanIntervalMs
                         + " mEnableBackgroundScan= " + mEnableBackgroundScan
@@ -7716,9 +7768,9 @@ public class WifiStateMachine extends StateMachine {
                     }
                     break;
                 case CMD_PNO_PERIODIC_SCAN:
-                     if ((message.arg1 == mPnoPeriodicScanToken) &&
-                         (mEnableBackgroundScan) &&
-                       (mWifiConfigStore.getConfiguredNetworks().size() != 0)) {
+                     if ((mBackgroundScanConfigured == false) &&
+                         (message.arg1 == mPnoPeriodicScanToken) &&
+                         (mEnableBackgroundScan)) {
                          startScan(UNKNOWN_SCAN_SOURCE, -1, null, null);
                          sendMessageDelayed(obtainMessage(CMD_PNO_PERIODIC_SCAN,
                                              ++mPnoPeriodicScanToken, 0),
@@ -7762,8 +7814,9 @@ public class WifiStateMachine extends StateMachine {
                     ret = NOT_HANDLED;
                     break;
                 case CMD_START_SCAN:
-                    if (!isScanAllowed()) {
+                    if (!isScanAllowed(message.arg1)) {
                         // Ignore the scan request
+                        if (VDBG) logd("DisconnectedState: ignore scan");
                         return HANDLED;
                     }
                     /* Disable background scan temporarily during a regular scan */
@@ -7801,6 +7854,9 @@ public class WifiStateMachine extends StateMachine {
                                (mWifiConfigStore.getConfiguredNetworks().size() != 0)) {
                         if (!mWifiNative.enableBackgroundScan(true)) {
                             handlePnoFailError();
+                        } else {
+                            if (DBG) log("Stop periodic scan on PNO success");
+                            mBackgroundScanConfigured = true;
                         }
                     }
                 case CMD_RECONNECT:
@@ -8380,12 +8436,15 @@ public class WifiStateMachine extends StateMachine {
     }
 
     private void handlePnoFailError() {
+        /* PNO should not fail when P2P is not connected and there are
+           saved profiles */
         if (!mP2pConnected.get() &&
             (mWifiConfigStore.getConfiguredNetworks().size() == 0)) {
             return;
         }
-        if (mEnableBackgroundScan &&
-            (mWifiConfigStore.getConfiguredNetworks().size() != 0)) {
+        /* Trigger a periodic scan for every 300Sec if PNO fails */
+        if (mEnableBackgroundScan) {
+            mBackgroundScanConfigured = false;
             sendMessageDelayed(obtainMessage(CMD_PNO_PERIODIC_SCAN,
                                ++mPnoPeriodicScanToken, 0),
                                mDefaultFrameworkScanIntervalMs);

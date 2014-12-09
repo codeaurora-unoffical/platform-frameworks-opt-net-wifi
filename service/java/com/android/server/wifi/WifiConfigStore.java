@@ -261,6 +261,8 @@ public class WifiConfigStore extends IpConfigStore {
             = "ASSOCIATED_FULL_SCAN_BACKOFF_PERIOD:   ";
     private static final String ALWAYS_ENABLE_SCAN_WHILE_ASSOCIATED_KEY
             = "ALWAYS_ENABLE_SCAN_WHILE_ASSOCIATED:   ";
+    private static final String AUTO_JOIN_SCAN_INTERVAL_WHEN_P2P_CONNECTED_KEY
+            = "AUTO_JOIN_SCAN_INTERVAL_WHEN_P2P_CONNECTED:   ";
     private static final String ONLY_LINK_SAME_CREDENTIAL_CONFIGURATIONS_KEY
             = "ONLY_LINK_SAME_CREDENTIAL_CONFIGURATIONS:   ";
 
@@ -351,6 +353,7 @@ public class WifiConfigStore extends IpConfigStore {
     boolean showNetworks = true; // TODO set this back to false, used for debugging 17516271
 
     public int alwaysEnableScansWhileAssociated = 0;
+    public int autoJoinScanIntervalWhenP2pConnected = 300000;
 
     public int maxNumActiveChannelsForPartialScans = 6;
     public int maxNumPassiveChannelsForPartialScans = 2;
@@ -1407,8 +1410,32 @@ public class WifiConfigStore extends IpConfigStore {
 
             if (mNetworkIds.containsKey(configKey(config))) {
                 // That SSID is already known, just ignore this duplicate entry
-                if (showNetworks) localLog("discarded duplicate network ", config.networkId);
-            } else if(config.isValid()){
+                if (showNetworks)
+                    localLog("Duplicate network found ", config.networkId);
+
+                Integer n = mNetworkIds.get(configKey(config));
+                WifiConfiguration tempCfg = mConfiguredNetworks.get(n);
+
+                if ( (tempCfg != null &&
+                      tempCfg.status != WifiConfiguration.Status.CURRENT) &&
+                      config.status == WifiConfiguration.Status.CURRENT) {
+
+                    // Clear the existing entry, we don't need it
+                    mConfiguredNetworks.remove(tempCfg.networkId);
+                    mNetworkIds.remove(configKey(tempCfg));
+
+                    // Add current entry to the list
+                    mConfiguredNetworks.put(config.networkId, config);
+                    mNetworkIds.put(configKey(config), config.networkId);
+
+                    // Enable AutoJoin status and indicate the network as
+                    // duplicate The duplicateNetwork flag will be used
+                    // to decide whether to restore network configurations
+                    // in readNetworkHistory() along with IP and proxy settings
+                    config.setAutoJoinStatus(WifiConfiguration.AUTO_JOIN_ENABLED);
+                    config.duplicateNetwork = true;
+                }
+            } else if (config.isValid()) {
                 mConfiguredNetworks.put(config.networkId, config);
                 mNetworkIds.put(configKey(config), config.networkId);
                 if (showNetworks) localLog("loaded configured network", config.networkId);
@@ -1808,7 +1835,7 @@ public class WifiConfigStore extends IpConfigStore {
                     rssi = WifiConfiguration.INVALID_RSSI;
                     caps = null;
 
-                } else if (config != null) {
+                } else if (config != null && config.duplicateNetwork == false) {
                     if (key.startsWith(SSID_KEY)) {
                         ssid = key.replace(SSID_KEY, "");
                         ssid = ssid.replace(SEPARATOR_KEY, "");
@@ -2427,6 +2454,31 @@ public class WifiConfigStore extends IpConfigStore {
                         Log.d(TAG,"readAutoJoinConfig: incorrect format :" + key);
                     }
                 }
+                if (key.startsWith(
+                    AUTO_JOIN_SCAN_INTERVAL_WHEN_P2P_CONNECTED_KEY)) {
+                    int scanInterval;
+                    String st = key.replace(
+                                AUTO_JOIN_SCAN_INTERVAL_WHEN_P2P_CONNECTED_KEY,
+                                "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        scanInterval = Integer.parseInt(st);
+                        if (scanInterval >= 10000) {
+                            autoJoinScanIntervalWhenP2pConnected = scanInterval;
+                        } else {
+                            Log.d(TAG,
+                                  "Cfg value is less then 10sec, Using default="
+                                  + autoJoinScanIntervalWhenP2pConnected);
+                        }
+                        Log.d(TAG, "readAutoJoinConfig: " +
+                              "autoJoinScanIntervalWhenP2pConnected = "
+                              + Integer.toString(
+                              autoJoinScanIntervalWhenP2pConnected));
+                    } catch (NumberFormatException e) {
+                        Log.d(TAG, "readAutoJoinConfig: incorrect format :" +
+                              key);
+                    }
+                }
             }
         } catch (EOFException ignore) {
             if (reader != null) {
@@ -2483,10 +2535,13 @@ public class WifiConfigStore extends IpConfigStore {
             int id = networks.keyAt(i);
             WifiConfiguration config = mConfiguredNetworks.get(mNetworkIds.get(id));
 
-
             if (config == null || config.autoJoinStatus == WifiConfiguration.AUTO_JOIN_DELETED) {
                 loge("configuration found for missing network, nid=" + id
                         +", ignored, networks.size=" + Integer.toString(networks.size()));
+            } else if (config != null && config.duplicateNetwork == true) {
+                if (VDBG)
+                    loge("Network configuration is not updated for duplicate network id="
+                          + config.networkId + " SSID=" + config.SSID);
             } else {
                 config.setIpConfiguration(networks.valueAt(i));
             }
