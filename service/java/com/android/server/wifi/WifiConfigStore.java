@@ -18,10 +18,12 @@ package com.android.server.wifi;
 
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
 import android.net.IpConfiguration;
 import android.net.IpConfiguration.IpAssignment;
 import android.net.IpConfiguration.ProxySettings;
 import android.net.LinkAddress;
+import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
 import android.net.ProxyInfo;
 import android.net.RouteInfo;
@@ -429,6 +431,7 @@ public class WifiConfigStore extends IpConfigStore {
      * WiFi state machine is the only object that sets this variable.
      */
     private String lastSelectedConfiguration = null;
+    private static final int WIFI_AUTO_CONNECT_TYPE_AUTO = 0;
 
     WifiConfigStore(Context c, WifiNative wn) {
         mContext = c;
@@ -4172,4 +4175,43 @@ public class WifiConfigStore extends IpConfigStore {
         }
     }
 
+    boolean isWifiAuto() {
+        int autoConnectPolicy = Settings.System.getInt(
+                mContext.getContentResolver(),
+                Settings.System.WIFI_AUTO_CONNECT_TYPE,
+                WIFI_AUTO_CONNECT_TYPE_AUTO);
+        return (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO);
+    }
+
+    int existActiveNetwork() {
+        ConnectivityManager mConnectivityManager = (ConnectivityManager) mContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo info = mConnectivityManager.getActiveNetworkInfo();
+        if (info == null) {
+            return -1;
+        }
+        return info.getType();
+    }
+
+    boolean isWifiAutoConn() {
+        /*
+         * If no active network(info == null) and Wifi connection type is auto
+         * connect, auto connect to Wifi.
+         */
+         return (isWifiAuto() && ((existActiveNetwork() == -1)
+                || (existActiveNetwork() == ConnectivityManager.TYPE_WIFI)));
+    }
+
+    boolean shouldAutoConnect() {
+        if (isWifiAutoConn()) {
+            if (VDBG) {
+                Log.d(TAG, "Wlan connection type is auto, should auto connect");
+            }
+            return true;
+        }
+        if (VDBG) {
+            Log.d(TAG, "Shouldn't auto connect");
+        }
+        return false;
+    }
 }
