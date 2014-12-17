@@ -47,10 +47,20 @@ import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.WorkSource;
+import android.os.Environment;
 import android.provider.Settings;
 import android.util.Log;
 import android.util.Slog;
 
+import java.io.EOFException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.nio.channels.FileChannel;
 import java.io.FileNotFoundException;
 import java.io.BufferedReader;
 import java.io.FileDescriptor;
@@ -90,6 +100,7 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
     private static final boolean DBG = true;
 
     final WifiStateMachine mWifiStateMachine;
+    final WifiTetherStateMachine mWifiTetherStateMachine;
 
     private final Context mContext;
 
@@ -124,7 +135,28 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
 
     final boolean mBatchedScanSupported;
 
-     private boolean mIsControllerStarted = false;
+    private boolean mIsControllerStarted = false;
+    public boolean mEnableConcurrency = false;
+    public String mSAPInterfaceName = "softap.0";
+    public int mSAPChannel = 6;
+    public boolean mIsP2pAutoGoSet = false;
+    public int mGOChannel = 36;
+    private static final String SEPARATOR_KEY = "\n";
+    private static final String ENABLE_STA_P2P_SAP
+            = "ENABLE_STA_P2P_SAP_CONCURRENCY:";
+    private static final String SAP_INTERFACE_NAME
+            = "SAP_INTERFACE_NAME:";
+    private static final String SAP_CHANNEL
+            = "SAP_CHANNEL:";
+    private static final String ENABLE_P2P_GO
+            = "ENABLE_P2P_GO:";
+    private static final String P2P_GO_CHANNEL
+            = "P2P_GO_CHANNEL:";
+    private static final String ConcurrencyCfgTemplateFile =
+            "/etc/wifi/wifi_concurrency_cfg.txt";
+    private static final String ConcurrencyCfgFile =
+            Environment.getDataDirectory() +
+            "/misc/wifi/wifi_concurrency_cfg.txt";
 
     /**
      * Asynchronous channel to WifiStateMachine
@@ -304,7 +336,24 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         mInterfaceName =  SystemProperties.get("wifi.interface", "wlan0");
 
         mTrafficPoller = new WifiTrafficPoller(mContext, mInterfaceName);
-        mWifiStateMachine = new WifiStateMachine(mContext, mInterfaceName, mTrafficPoller);
+
+        if (ensureConcurrencyFileExist())
+            readConcurrencyConfig();
+
+        mWifiStateMachine = new WifiStateMachine(mContext, mInterfaceName,
+                                                 mTrafficPoller,
+                                                 mEnableConcurrency,
+                                                 mSAPInterfaceName,
+                                                 mGOChannel);
+
+        mWifiTetherStateMachine = mWifiStateMachine.mWifiTetherStateMachine;
+        if (mWifiTetherStateMachine != null) {
+            mWifiTetherStateMachine.setWifiStateMachine(mWifiStateMachine);
+            mWifiTetherStateMachine.channel = mSAPChannel;
+            if (mIsP2pAutoGoSet) {
+                mWifiStateMachine.mWifiNative.p2pSetOperatingFreq(mGOChannel);
+            }
+        }
         mWifiStateMachine.enableRssiPolling(true);
         mBatteryStats = BatteryStatsService.getService();
         mAppOps = (AppOpsManager)context.getSystemService(Context.APP_OPS_SERVICE);
@@ -723,7 +772,11 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
      */
     public int getWifiApEnabledState() {
         enforceAccessPermission();
-        return mWifiStateMachine.syncGetWifiApState();
+        if (mEnableConcurrency && mWifiTetherStateMachine != null) {
+            return mWifiTetherStateMachine.syncGetWifiApState();
+        } else {
+            return mWifiStateMachine.syncGetWifiApState();
+        }
     }
 
     /**
@@ -732,7 +785,11 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
      */
     public WifiConfiguration getWifiApConfiguration() {
         enforceAccessPermission();
-        return mWifiStateMachine.syncGetWifiApConfiguration();
+        if (mEnableConcurrency && mWifiTetherStateMachine != null) {
+            return mWifiTetherStateMachine.syncGetWifiApConfiguration();
+        } else {
+            return mWifiStateMachine.syncGetWifiApConfiguration();
+        }
     }
 
     /**
@@ -744,7 +801,11 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         if (wifiConfig == null)
             return;
         if (wifiConfig.isValid()) {
-            mWifiStateMachine.setWifiApConfiguration(wifiConfig);
+            if (mEnableConcurrency && mWifiTetherStateMachine != null) {
+                mWifiTetherStateMachine.setWifiApConfiguration(wifiConfig);
+            } else {
+                mWifiStateMachine.setWifiApConfiguration(wifiConfig);
+            }
         } else {
             Slog.e(TAG, "Invalid WifiConfiguration");
         }
@@ -1780,6 +1841,7 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
     public void enableVerboseLogging(int verbose) {
         enforceAccessPermission();
         mWifiStateMachine.enableVerboseLogging(verbose);
+        mWifiController.enableVerboseLogging(verbose);
     }
 
     public void enableRssiThreshold(int enabled) {
@@ -1821,5 +1883,210 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
             Slog.e(TAG, "mWifiStateMachineChannel is not initialized");
             return null;
         }
+    }
+
+    public boolean getConcurrency() {
+        if (DBG) {
+            Log.d(TAG,"getConcurrency:= " + mEnableConcurrency);
+        }
+        return mEnableConcurrency;
+    }
+
+    public boolean isP2pAutoGoSet() {
+        if (DBG) {
+            Log.d(TAG,"isP2pAutoGoSet:= " + mIsP2pAutoGoSet);
+        }
+        return mIsP2pAutoGoSet;
+    }
+
+    public String getSAPInterfaceName() {
+        if (DBG) {
+            Log.d(TAG,"SAPInterfaceName:= " + mSAPInterfaceName);
+        }
+        return mSAPInterfaceName;
+    }
+
+    public String fetchStaStateNative() {
+        enforceAccessPermission();
+        return mWifiStateMachine.fetchStaStateNative();
+    }
+
+    public void setP2pAutoGoRestart() {
+        enforceAccessPermission();
+        mWifiStateMachine.mP2pAutoGoRestart = true;
+    }
+
+    public void setP2pGoChannel() {
+        enforceAccessPermission();
+        mWifiStateMachine.setP2pGoChannel();
+    }
+
+    private void readConcurrencyConfig() {
+        BufferedReader reader = null;
+        try {
+            if (ConcurrencyCfgFile != null) {
+                Log.d(TAG, "readConcurrencyConfig : "
+                      + ConcurrencyCfgFile);
+            }
+            reader = new BufferedReader(new FileReader(ConcurrencyCfgFile));
+            for (String key = reader.readLine(); key != null;
+            key = reader.readLine()) {
+                if (key != null) {
+                    Log.d(TAG, "readConcurrencyConfig line: " + key);
+                }
+                if (key.startsWith(ENABLE_STA_P2P_SAP)) {
+                    String st = key.replace(ENABLE_STA_P2P_SAP, "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        mEnableConcurrency = Integer.parseInt(st) != 0;
+                        Log.d(TAG,"readConcurrencyConfig EnableConcurrency = "
+                              + mEnableConcurrency);
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG,"readConcurrencyConfig: incorrect format :"
+                              + key);
+                    }
+                }
+                if (key.startsWith(SAP_INTERFACE_NAME)) {
+                    String st = key.replace(SAP_INTERFACE_NAME, "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        mSAPInterfaceName = st;
+                        Log.d(TAG,"readConcurrencyConfig SAPInterfaceName = "
+                              + mSAPInterfaceName);
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG,"readConcurrencyConfig: incorrect format :"
+                              + key);
+                    }
+                }
+                if (key.startsWith(SAP_CHANNEL)) {
+                    String st = key.replace(SAP_CHANNEL, "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        mSAPChannel = Integer.parseInt(st);
+                        Log.d(TAG,"readConcurrencyConfig SAPChannel = "
+                              + mSAPChannel);
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG,"readConcurrencyConfig: incorrect format :"
+                              + key);
+                    }
+                }
+                if (key.startsWith(ENABLE_P2P_GO)) {
+                    String st = key.replace(ENABLE_P2P_GO, "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        mIsP2pAutoGoSet = Integer.parseInt(st) != 0;
+                        Log.d(TAG,"readConcurrencyConfig enableP2pGO = "
+                              + mIsP2pAutoGoSet);
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG,"readConcurrencyConfig: incorrect format :"
+                              + key);
+                    }
+                }
+                if (key.startsWith(P2P_GO_CHANNEL)) {
+                    String st = key.replace(P2P_GO_CHANNEL, "");
+                    st = st.replace(SEPARATOR_KEY, "");
+                    try {
+                        mGOChannel = Integer.parseInt(st);
+                        Log.d(TAG,"readConcurrencyConfig P2P GO Channel = "
+                              + mGOChannel);
+                    } catch (NumberFormatException e) {
+                        Log.e(TAG,"readConcurrencyConfig: incorrect format :"
+                              + key);
+                    }
+                }
+            }
+
+        } catch (EOFException ignore) {
+            if (reader != null) {
+                try {
+                    reader.close();
+                    reader = null;
+                } catch (Exception e) {
+                    Log.e(TAG, "readConcurrencyConfig: Error closing file" + e);
+                }
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "readConcurrencyConfig: Error parsing configuration" + e);
+        }
+        if (reader!=null) {
+           try {
+               reader.close();
+           } catch (Exception e) {
+               Log.e(TAG, "readConcurrencyConfig: Error closing file" + e);
+           }
+        }
+    }
+
+    private boolean ensureConcurrencyFileExist() {
+        FileOutputStream dstStream = null;
+        FileInputStream srcStream = null;
+        DataInputStream in = null;
+
+        // check ConcurrencyCfgFile  exist
+        try {
+            in = new DataInputStream(new BufferedInputStream(new FileInputStream(
+                            ConcurrencyCfgFile)));
+        } catch (Exception e) {
+            Log.e(TAG,
+                  "ensureConcurrencyFileExist error create from template file");
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                    return true;
+                } catch (IOException e) {}
+            }
+        }
+
+        // check ConcurrencyCfgTemplateFile  exist
+        try {
+            in = new DataInputStream(new BufferedInputStream(new FileInputStream(
+                            ConcurrencyCfgTemplateFile)));
+        } catch (Exception e) {
+            Log.e(TAG, "ensureConcurrencyFile template file doesnt exist" + e);
+            return false;
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (IOException e) {}
+            }
+        }
+
+        // copy template to ConcurrencyCfgFile
+        File file = new File(ConcurrencyCfgFile);
+        if (file == null) {
+            Log.d(TAG,"ensureConcurrencyFileExist: new failed");
+            return false;
+        }
+        try {
+            file.createNewFile();
+            if (!file.exists()) {
+                Log.d(TAG,"ensureConcurrencyFileExist: Error create new file");
+                return false;
+            }
+            dstStream = new FileOutputStream(ConcurrencyCfgFile);
+            srcStream = new FileInputStream(ConcurrencyCfgTemplateFile);
+
+            FileChannel dstChannel = dstStream.getChannel();
+            FileChannel srcChannel = srcStream.getChannel();
+            dstChannel.transferFrom(srcChannel, 0, srcChannel.size());
+        } catch (Exception e) {
+            Log.e(TAG, "ensureConcurrencyFileExist: Error opening file" + e);
+        } finally {
+            if (dstStream != null) {
+                try {
+                    dstStream.close();
+                    if (srcStream != null) {
+                        srcStream.close();
+                        return true;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "ensureConcurrencyFileExist: Error closing file"
+                          + e);
+               }
+            }
+        }
+        return false;
     }
 }
