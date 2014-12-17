@@ -78,6 +78,7 @@ public class WifiNative {
     public final String mInterfacePrefix;
 
     private boolean mSuspendOptEnabled = false;
+    private static int mP2pOperatingFreq = 0;
 
     private static final int EID_HT_OPERATION = 61;
     private static final int EID_VHT_OPERATION = 192;
@@ -921,6 +922,19 @@ public class WifiNative {
         return false;
     }
 
+    public boolean p2pSetOperatingFreq(int oc) {
+        if (oc >= 1 && oc <= 165 ) {
+            int freq = (oc <= 14 ? 2407 : 5000) + oc * 5;
+            mP2pOperatingFreq = freq;
+            if (DBG) {
+                Log.d(mTAG, "p2pSetOperatingFreq: "
+                      + mP2pOperatingFreq);
+            }
+            return true;
+        }
+        return false;
+    }
+
     public boolean p2pFlush() {
         return doBooleanCommand("P2P_FLUSH");
     }
@@ -1002,13 +1016,27 @@ public class WifiNative {
 
     public boolean p2pGroupAdd(boolean persistent) {
         if (persistent) {
-            return doBooleanCommand("P2P_GROUP_ADD persistent");
+            if (mP2pOperatingFreq != 0) {
+                return doBooleanCommand("P2P_GROUP_ADD persistent freq="
+                                         + mP2pOperatingFreq);
+            } else {
+                return doBooleanCommand("P2P_GROUP_ADD persistent");
+            }
         }
-        return doBooleanCommand("P2P_GROUP_ADD");
+        if (mP2pOperatingFreq != 0) {
+            return doBooleanCommand("P2P_GROUP_ADD freq=" + mP2pOperatingFreq);
+        } else {
+            return doBooleanCommand("P2P_GROUP_ADD");
+        }
     }
 
     public boolean p2pGroupAdd(int netId) {
-        return doBooleanCommand("P2P_GROUP_ADD persistent=" + netId);
+        if (mP2pOperatingFreq != 0) {
+            return doBooleanCommand("P2P_GROUP_ADD persistent="
+                                     + netId + " freq=" + mP2pOperatingFreq);
+        } else {
+            return doBooleanCommand("P2P_GROUP_ADD persistent=" + netId);
+        }
     }
 
     public boolean p2pGroupRemove(String iface) {
@@ -2401,4 +2429,60 @@ public class WifiNative {
             }
         }
     }
+    public String getInterfaceList() {
+        return doStringCommand("INTERFACES");
+    }
+
+    // Fetch Frequency on current connection
+    public int fetchChannelNative() {
+        int newFrequency = -1;
+        String signalPoll = signalPoll();
+
+        if (signalPoll != null) {
+            String[] lines = signalPoll.split("\n");
+            for (String line : lines) {
+                String[] prop = line.split("=");
+                if (prop.length < 2) continue;
+                try {
+                    if (prop[0].equals("FREQUENCY")) {
+                        newFrequency= Integer.parseInt(prop[1]);
+                        return freqToChannel(newFrequency);
+                    }
+                } catch (NumberFormatException e) {
+                }
+            }
+        }
+        return 0;
+    }
+
+    public int freqToChannel(int freq) {
+        int channel = 0;
+        if (freq >= 2412 && freq <= 2472) {
+            if (((freq - 2407) % 5) != 0) {
+                return 0;
+            }
+            channel = (freq - 2407) / 5;
+            return channel;
+        } else if (freq == 2484) {
+            // channel 14
+            channel = 14;
+            return channel;
+        } else if (freq >= 5180 && freq <= 5240) {
+            if (((freq - 5000) % 5) != 0) {
+                return 0;
+            }
+            // 5 GHz, channels 36..48
+            channel = (freq - 5000) / 5;
+            return channel;
+        } else if (freq >= 5745 && freq <= 5805) {
+            if (((freq - 5000) % 5) != 0) {
+                return 0;
+            }
+            // 5 GHz, channels 149..161
+            channel = (freq - 5000) / 5;
+            return channel;
+        }
+        return 0;
+    }
+
 }

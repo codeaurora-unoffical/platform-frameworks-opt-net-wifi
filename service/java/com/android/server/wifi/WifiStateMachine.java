@@ -82,6 +82,8 @@ import android.net.wifi.WpsInfo;
 import android.net.wifi.WpsResult;
 import android.net.wifi.WpsResult.Status;
 import android.net.wifi.p2p.IWifiP2pManager;
+import android.net.wifi.p2p.WifiP2pManager;
+import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import android.os.BatteryStats;
 import android.os.Binder;
 import android.os.Bundle;
@@ -186,13 +188,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     }
 
     private WifiMonitor mWifiMonitor;
-    private WifiNative mWifiNative;
-    private WifiConfigStore mWifiConfigStore;
+    public WifiNative mWifiNative;
+    public WifiConfigStore mWifiConfigStore;
     private WifiAutoJoinController mWifiAutoJoinController;
-    private INetworkManagementService mNwService;
+    public INetworkManagementService mNwService;
     private ConnectivityManager mCm;
     private WifiLogger mWifiLogger;
     private WifiApConfigStore mWifiApConfigStore;
+    public WifiTetherStateMachine mWifiTetherStateMachine = null;
+
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
@@ -399,6 +403,12 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     private boolean mDhcpActive = false;
 
     private int mWifiLinkLayerStatsSupported = 4; // Temporary disable
+    public boolean mP2pAutoGoRestart = false;
+    static final int P2P_GO_2_4_BAND = 1;
+    static final int P2P_GO_5_BAND   = 2;
+    private int mP2pGoBand = 0;
+    private int mP2pGoChannel = 36;
+
 
     private final AtomicInteger mCountryCodeSequence = new AtomicInteger();
 
@@ -1065,7 +1075,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     long mGScanPeriodMilli;
 
     public WifiStateMachine(Context context, String wlanInterface,
-                            WifiTrafficPoller trafficPoller) {
+            WifiTrafficPoller trafficPoller,
+            boolean enableConcurrency,
+            String SAPInterfaceName,
+            int P2pGoChannel) {
         super("WifiStateMachine");
         mContext = context;
         mSetCountryCode = Settings.Global.getString(
@@ -1109,6 +1122,21 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         mLastBssid = null;
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
         mLastSignalLevel = -1;
+        if (enableConcurrency) {
+            mWifiTetherStateMachine =
+                new WifiTetherStateMachine(mContext, SAPInterfaceName,
+                                           mWifiNative, mWifiConfigStore,
+                                           mWifiMonitor, mNwService);
+            mP2pGoChannel = P2pGoChannel;
+            if (mP2pGoChannel <= 14) {
+                mP2pGoBand = P2P_GO_2_4_BAND;
+            } else if (mP2pGoChannel >= 36 && mP2pGoChannel <= 165) {
+                mP2pGoBand = P2P_GO_5_BAND;
+            }
+            if (DBG) {
+                log("Concurrency band  is " + mP2pGoBand);
+            }
+        }
 
         mNetlinkTracker = new NetlinkTracker(mDataInterfaceName, new NetlinkTracker.Callback() {
             public void update() {
@@ -1344,6 +1372,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         mWifiNative.enableVerboseLogging(verbose);
         mWifiConfigStore.enableVerboseLogging(verbose);
         mSupplicantStateTracker.enableVerboseLogging(verbose);
+        if (mWifiTetherStateMachine != null) {
+            mWifiTetherStateMachine.enableVerboseLogging(verbose);
+        }
     }
 
     public void setHalBasedAutojoinOffload(int enabled) {
@@ -1636,6 +1667,45 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
      */
     public void startScanForUntrustedSettingChange() {
         startScan(SET_ALLOW_UNTRUSTED_SOURCE, 0, null, null);
+    }
+    public String fetchStaStateNative() {
+        // Supplicant state and Wifistatemachine supplicant status
+        // will mismatch hence get wpa_state from supplicant.
+        String statusString = mWifiNative.status();
+        String[] dataTokens = statusString.split("\n");
+        for (String token : dataTokens) {
+            String[] nameValue = token.split("=");
+            if (nameValue[0].equals("wpa_state")) {
+                log("wpa_state = " + nameValue[1]);
+                return nameValue[1];
+            }
+        }
+        return null;
+    }
+
+    public void setP2pGoChannel() {
+        int staOperatingChannel = 0;
+        if (DBG) {
+            log("setP2pGoChannel");
+        }
+        String StaState = fetchStaStateNative();
+        if (StaState != null) {
+            if (StaState.equals("ASSOCIATING") ||
+                StaState.equals("ASSOCIATED") ||
+                StaState.equals("COMPLETED")) {
+                staOperatingChannel = mWifiNative.fetchChannelNative();
+                if ((mP2pGoBand == P2P_GO_2_4_BAND) &&
+                    (staOperatingChannel <= 14)) {
+                    mWifiNative.p2pSetOperatingFreq(staOperatingChannel);
+                } else if ((mP2pGoBand == P2P_GO_5_BAND) &&
+                           ((staOperatingChannel >= 36) &&
+                            (staOperatingChannel <= 165))){
+                    mWifiNative.p2pSetOperatingFreq(staOperatingChannel);
+                } else {
+                    mWifiNative.p2pSetOperatingFreq(mP2pGoChannel);
+                }
+            }
+        }
     }
 
     /**
@@ -5055,6 +5125,33 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             disableLastNetwork();
         }
 
+        if (mP2pAutoGoRestart) {
+            if (DBG) {
+                log("STA failed to connect, restart P2P Group");
+            }
+            mP2pAutoGoRestart = false;
+            int channel = mWifiNative.fetchChannelNative();
+            if (DBG) {
+                log("Native channel is " + channel);
+            }
+            if (channel > 0) {
+                if ((mP2pGoBand == P2P_GO_2_4_BAND)&&
+                    (channel <= 14)) {
+                    mWifiNative.p2pSetOperatingFreq(channel);
+                } else if ((mP2pGoBand == P2P_GO_5_BAND) &&
+                          ((channel >= 36) && (channel <= 165))){
+                    mWifiNative.p2pSetOperatingFreq(channel);
+                } else {
+                    mWifiNative.p2pSetOperatingFreq(mP2pGoChannel);
+                }
+                if (mWifiP2pChannel == null) {
+                    mWifiP2pChannel = new AsyncChannel();
+                }
+                mWifiP2pChannel.sendMessage(
+                        WifiP2pManager.CREATE_GROUP);
+            }
+        }
+
         stopDhcp();
 
         try {
@@ -5805,8 +5902,19 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class InitialState extends State {
         @Override
         public void enter() {
-            WifiNative.stopHal();
-            mWifiNative.unloadDriver();
+            int wifiApState = 0;
+            if (mWifiTetherStateMachine != null) {
+                wifiApState = mWifiTetherStateMachine.syncGetWifiApState();
+            }
+            if ((wifiApState == WifiManager.WIFI_AP_STATE_ENABLING) ||
+                (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
+                log("Avoid unloading driver, AP_STATE is enabled/enabling");
+            }
+            else {
+                WifiNative.stopHal();
+                mWifiNative.unloadDriver();
+            }
+
             if (mWifiP2pChannel == null) {
                 mWifiP2pChannel = new AsyncChannel();
                 mWifiP2pChannel.connect(mContext, getHandler(),
@@ -6163,7 +6271,30 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             logd("SupplicantStoppingState: stopSupplicant "
                     + " init.svc.wpa_supplicant=" + suppState
                     + " init.svc.p2p_supplicant=" + p2pSuppState);
-            mWifiMonitor.stopSupplicant();
+            int wifiApState = 0;
+            if (mWifiTetherStateMachine != null) {
+                wifiApState = mWifiTetherStateMachine.syncGetWifiApState();
+            }
+            if ((wifiApState == WifiManager.WIFI_AP_STATE_ENABLING) ||
+                (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
+                log("Do not stop supplicant, just bring down interface");
+                try {
+                      String Interfaces = mWifiNative.getInterfaceList();
+                      String[] intf = Interfaces.split("\n");
+                      for (String i : intf) {
+                          if (DBG) log("Setting interface down " +i);
+                          mNwService.setInterfaceDown(i);
+                      }
+                } catch (RemoteException re) {
+                      loge("RE: Unable to change interface settings: " + re);
+                } catch (IllegalStateException ie) {
+                      loge("IE: Unable to change interface settings: " + ie);
+                }
+            }
+            else {
+                if (DBG) log("stopping supplicant");
+                mWifiMonitor.stopSupplicant();
+            }
 
             /* Send ourselves a delayed message to indicate failure after a wait time */
             sendMessageDelayed(obtainMessage(CMD_STOP_SUPPLICANT_FAILED,
@@ -6188,6 +6319,16 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     if (message.arg1 == mSupplicantStopFailureToken) {
                         loge("Timed out on a supplicant stop, kill and proceed");
                         handleSupplicantConnectionLoss(true);
+                        transitionTo(mInitialState);
+                    }
+                    break;
+                case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
+                    /* STATE if interfaces are down */
+                    SupplicantState state = handleSupplicantStateChange(message);
+                    if (state == SupplicantState.INTERFACE_DISABLED) {
+                        if (DBG) log("Supplicant event for interface down");
+                        sendSupplicantConnectionChangedBroadcast(false);
+                        setWifiState(WIFI_STATE_DISABLED);
                         transitionTo(mInitialState);
                     }
                     break;
@@ -7966,6 +8107,34 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     mWifiInfo.setNetworkId(mLastNetworkId);
 
                     sendNetworkStateChangeBroadcast(mLastBssid);
+
+                    // Start P2P Group on STA channel
+                    if (mP2pAutoGoRestart) {
+                        if (DBG) {
+                            log("Connected, restart P2P Group on STA channel");
+                        }
+                        mP2pAutoGoRestart = false;
+                        int channel = mWifiNative.fetchChannelNative();
+                        if (DBG) {
+                            log("Native channel is " + channel);
+                        }
+                        if (channel > 0) {
+                            if ((mP2pGoBand == P2P_GO_2_4_BAND) &&
+                                (channel <= 14)) {
+                                mWifiNative.p2pSetOperatingFreq(channel);
+                            } else if ((mP2pGoBand == P2P_GO_5_BAND) &&
+                                      ((channel >= 36) && (channel <= 165))){
+                                mWifiNative.p2pSetOperatingFreq(channel);
+                            } else {
+                                mWifiNative.p2pSetOperatingFreq(mP2pGoChannel);
+                            }
+                            if (mWifiP2pChannel == null) {
+                                mWifiP2pChannel = new AsyncChannel();
+                            }
+                            mWifiP2pChannel.sendMessage(
+                                    WifiP2pManager.CREATE_GROUP);
+                        }
+                    }
                     transitionTo(mObtainingIpState);
                     break;
                 case WifiMonitor.NETWORK_DISCONNECTION_EVENT:
