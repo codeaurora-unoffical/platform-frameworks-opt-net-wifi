@@ -1421,7 +1421,8 @@ public class WifiConfigStore extends IpConfigStore {
 
                 if ( (tempCfg != null &&
                       tempCfg.status != WifiConfiguration.Status.CURRENT) &&
-                      config.status == WifiConfiguration.Status.CURRENT) {
+                      (config.status == WifiConfiguration.Status.CURRENT ||
+                      config.status == WifiConfiguration.Status.ENABLED)) {
 
                     // Clear the existing entry, we don't need it
                     mConfiguredNetworks.remove(tempCfg.networkId);
