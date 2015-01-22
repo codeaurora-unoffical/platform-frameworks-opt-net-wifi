@@ -1220,6 +1220,10 @@ public class WifiNative {
         return doBooleanCommand("P2P_SERV_DISC_CANCEL_REQ " + id);
     }
 
+    public String p2pGroupPassphraseReq(String iface) {
+        return doStringCommand("IFNAME=" + iface + " P2P_GET_PASSPHRASE");
+    }
+
     /* Set the current mode of miracast operation.
      *  0 = disabled
      *  1 = operating as source

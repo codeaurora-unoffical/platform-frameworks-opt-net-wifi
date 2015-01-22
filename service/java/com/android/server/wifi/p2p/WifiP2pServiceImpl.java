@@ -108,6 +108,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
     private Context mContext;
     private String mInterface;
+    private boolean mP2pHotspotMode = false;
+    private boolean isDhcpServerStartedByMe = false;
+    private boolean isP2pAutoGoStarted = false;
     private Notification mNotification;
 
     INetworkManagementService mNwService;
@@ -443,6 +446,38 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         enforceAccessPermission();
         enforceChangePermission();
         return new Messenger(mP2pStateMachine.getHandler());
+    }
+
+    /**
+     * Get p2p tetherable interface
+     * @hide
+     */
+    public String getP2pTetherInterface() {
+        return mInterface;
+    }
+
+    /**
+     * return true if P2P Auto GO is started
+     * @hide
+     */
+    public boolean getP2pAutoGoStatus() {
+        return isP2pAutoGoStarted;
+    }
+
+    /**
+     * enable p2p tether mode
+     * @hide
+     */
+    public void enableP2pTethering() {
+        mP2pHotspotMode = true;
+    }
+
+    /**
+     * disable p2p tether mode
+     * @hide
+     */
+    public void disableP2pTethering() {
+        mP2pHotspotMode = false;
     }
 
     public void enableVerboseLogging(int verbose) {
@@ -1340,6 +1375,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 case WifiP2pManager.CREATE_GROUP:
                     mAutonomousGroup = true;
                     int netId = message.arg1;
+
                     boolean ret = false;
                     if (mWifiManager != null &&
                         mWifiManager.getConcurrency() &&
@@ -1704,6 +1740,23 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         if (!mAutonomousGroup) {
                             mWifiNative.setP2pGroupIdle(mGroup.getInterface(), GROUP_IDLE_TIME_S);
                         }
+
+                        // Update group passphrase
+                        String passPhrase =
+                            mWifiNative.p2pGroupPassphraseReq(mInterface);
+                        mGroup.setPassphrase(passPhrase);
+
+                        WifiP2pGroup grp = mGroups.getGroup(mGroup.getNetworkId());
+                        if (grp != null) {
+                            grp.setPassphrase(passPhrase);
+                        } else {
+                            loge("**** grp is null ****");
+                        }
+
+                        // Broadcast group creation success
+                        sendP2pAutonomousGOStateChangedBroadcast(
+                                WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED);
+
                         startDhcpServer(mGroup.getInterface());
                     } else {
                         mWifiNative.setP2pGroupIdle(mGroup.getInterface(), GROUP_IDLE_TIME_S);
@@ -1911,6 +1964,11 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             if (mWifiNative.p2pGroupRemove(mGroup.getInterface())) {
                 Slog.d(TAG, "Removed P2P group successfully");
                 transitionTo(mOngoingGroupRemovalState);
+                if (mAutonomousGroup) {
+                   // Send broadcast for p2p auto go removal
+                   sendP2pAutonomousGOStateChangedBroadcast(WifiP2pManager.
+                             WIFI_P2P_AUTONOMOUS_GO_STOPPED);
+                }
             } else {
                 Slog.d(TAG, "Failed to remove the P2P group");
                 handleGroupRemoved();
@@ -2055,6 +2113,11 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     enableBTCoex();
                     if (mWifiNative.p2pGroupRemove(mGroup.getInterface())) {
                         transitionTo(mOngoingGroupRemovalState);
+                        if (mAutonomousGroup) {
+                            // Send broadcast for p2p auto go removal
+                            sendP2pAutonomousGOStateChangedBroadcast(WifiP2pManager.
+                                    WIFI_P2P_AUTONOMOUS_GO_STOPPED);
+                        }
                         replyToMessage(message, WifiP2pManager.REMOVE_GROUP_SUCCEEDED);
                     } else {
                         handleGroupRemoved();
@@ -2338,6 +2401,14 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 new NetworkInfo(mNetworkInfo));
     }
 
+    private void sendP2pAutonomousGOStateChangedBroadcast(int subState) {
+        if (DBG) logd("sending p2p auto go state changed broadcast");
+        Intent intent = new Intent(WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STATE);
+        intent.putExtra(WifiP2pManager.EXTRA_P2P_AUTO_GO_STATE, subState);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
     private void sendP2pPersistentGroupsChangedBroadcast() {
         if (DBG) logd("sending p2p persistent groups changed broadcast");
         Intent intent = new Intent(WifiP2pManager.WIFI_P2P_PERSISTENT_GROUPS_CHANGED_ACTION);
@@ -2353,16 +2424,22 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         SERVER_ADDRESS), 24));
             ifcg.setInterfaceUp();
             mNwService.setInterfaceConfig(intf, ifcg);
-            /* This starts the dnsmasq server */
-            ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(
-                    Context.CONNECTIVITY_SERVICE);
-            String[] tetheringDhcpRanges = cm.getTetheredDhcpRanges();
-            if (mNwService.isTetheringStarted()) {
-                if (DBG) logd("Stop existing tethering and restart it");
-                mNwService.stopTethering(intf);
+            if (mP2pHotspotMode == false) {
+                /* This starts the dnsmasq server */
+                ConnectivityManager cm = (ConnectivityManager) mContext.getSystemService(
+                        Context.CONNECTIVITY_SERVICE);
+                String[] tetheringDhcpRanges = cm.getTetheredDhcpRanges();
+                if (isDhcpServerStartedByMe) {
+                    if (DBG) logd("Stop existing tethering and restart it");
+                    mNwService.stopTethering();
+                }
+                mNwService.tetherInterface(intf);
+                isP2pAutoGoStarted = true;
+                if (!mNwService.isTetheringStarted()) {
+                    mNwService.startTethering(tetheringDhcpRanges);
+                    isDhcpServerStartedByMe = true;
+                }
             }
-            mNwService.tetherInterface(intf);
-            mNwService.startTethering(tetheringDhcpRanges, intf);
         } catch (Exception e) {
             loge("Error configuring interface " + intf + ", :" + e);
             return;
@@ -2374,6 +2451,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     private void stopDhcpServer(String intf) {
         try {
             mNwService.untetherInterface(intf);
+            isP2pAutoGoStarted = false;
             for (String temp : mNwService.listTetheredInterfaces()) {
                 logd("List all interfaces " + temp);
                 if (temp.compareTo(intf) != 0) {
@@ -2381,7 +2459,8 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     return;
                 }
             }
-            mNwService.stopTethering(intf);
+            mNwService.stopTethering();
+            isDhcpServerStartedByMe = false;
         } catch (Exception e) {
             loge("Error stopping Dhcp server" + e);
             return;
@@ -2552,6 +2631,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
      */
     private void updatePersistentNetworks(boolean reload) {
         String listStr = mWifiNative.listNetworks();
+
         if (listStr == null) return;
 
         boolean isSaveRequired = false;
@@ -2945,7 +3025,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
     private void handleGroupRemoved() {
         if (mGroup.isGroupOwner()) {
-            stopDhcpServer(mGroup.getInterface());
+            if (mP2pHotspotMode == false) {
+                stopDhcpServer(mGroup.getInterface());
+            }
         } else {
             if (DBG) logd("stop DHCP client");
             mDhcpStateMachine.sendMessage(DhcpStateMachine.CMD_STOP_DHCP);
