@@ -33,6 +33,7 @@ import android.net.LinkAddress;
 import android.net.NetworkInfo;
 import android.net.NetworkUtils;
 import android.net.wifi.WpsInfo;
+import android.net.wifi.WifiManager;
 import android.net.wifi.p2p.IWifiP2pManager;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
@@ -188,6 +189,8 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     private final boolean mP2pSupported;
 
     private WifiP2pDevice mThisDevice = new WifiP2pDevice();
+
+    private WifiManager mWifiManager;
 
     /* When a group has been explicitly created by an app, we persist the group
      * even after all clients have been disconnected until an explicit remove
@@ -964,6 +967,20 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             mNetworkInfo.setIsAvailable(true);
             sendP2pConnectionChangedBroadcast();
             initializeP2pSettings();
+            mWifiManager
+                = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
+            int AutoGO = getAutoGoState();
+            if (AutoGO == 1) {
+                if (DBG) {
+                    Slog.d(TAG, "Start Auto GO Enabled");
+                }
+                sendMessage(WifiP2pManager.CREATE_GROUP,
+                    WifiP2pGroup.PERSISTENT_NET_ID);
+            } else {
+                if (DBG) {
+                    Slog.d(TAG, "Start Auto GO Disabled");
+                }
+            }
         }
 
         @Override
@@ -1330,6 +1347,11 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     mAutonomousGroup = true;
                     int netId = message.arg1;
                     boolean ret = false;
+                    if (mWifiManager != null &&
+                        mWifiManager.getConcurrency() &&
+                        mWifiManager.isP2pAutoGoSet()) {
+                        mWifiManager.setP2pGoChannel();
+                    }
                     if (netId == WifiP2pGroup.PERSISTENT_NET_ID) {
                         // check if the go persistent group is present.
                         netId = mGroups.getNetworkId(mThisDevice.deviceAddress);
@@ -1959,6 +1981,26 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                      * autonoums group formation is set to true
                      */
                     Slog.d(TAG, "Received event P2P_REMOVE_AND_REFORM_GROUP, remove P2P group");
+                    boolean isStaAssociating = false;
+                    if (mWifiManager.getConcurrency()) {
+                        // In case of 3-port-concurrency,
+                        // if STA connects on same band of P2PGO
+                        // then driver sends channel avoidance event
+                        // to wpa_supplicant. Supplicant then sends
+                        // P2P-REMOVE-AND-REFORM-GROUP event to
+                        // framework.
+                        // Start p2p group after STA connection is
+                        // success/failure on STA channel.
+                        String StaAssociating
+                               = mWifiManager.fetchStaStateNative();
+                        if (StaAssociating != null) {
+                            if (StaAssociating.equals("ASSOCIATING") ||
+                                StaAssociating.equals("ASSOCIATED")) {
+                                isStaAssociating = true;
+                            }
+                        }
+                        if (DBG) logd(isStaAssociating + " isStaAssociating");
+                    }
                     if (mWifiNative.p2pGroupRemove(mGroup.getInterface())) {
                         Slog.d(TAG, "Removed P2P group successfully");
                         transitionTo(mOngoingGroupRemovalState);
@@ -1972,8 +2014,15 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                        WifiP2pManager.ERROR);
                     }
                     if (mAutonomousGroup) {
-                        Slog.d(TAG, "AutonomousGroup is set, reform P2P Group");
-                        sendMessage(WifiP2pManager.CREATE_GROUP);
+                        if (isStaAssociating && mWifiManager.getConcurrency()) {
+                            Slog.d(TAG,
+                                "Reform P2P Group after Station connects");
+                            mWifiManager.setP2pAutoGoRestart();
+                        } else {
+                            Slog.d(TAG,
+                                "AutonomousGroup is set, reform P2P Group");
+                            sendMessage(WifiP2pManager.CREATE_GROUP);
+                        }
                     } else {
                         Slog.d(TAG, "AutonomousGroup is not set, will not reform P2P Group");
                     }
@@ -2228,6 +2277,17 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         pw.println();
     }
 
+    private int getAutoGoState() {
+        int AutoGo = 0;
+        try {
+            AutoGo = Settings.Global.getInt(mContext.getContentResolver(),
+            Settings.Global.AUTO_GO);
+        } catch (Settings.SettingNotFoundException e) {
+             Slog.e(TAG, "Failed to getAutoGoState");;
+        }
+        return AutoGo;
+    }
+
     private void sendP2pStateChangedBroadcast(boolean enabled) {
         final Intent intent = new Intent(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
@@ -2308,10 +2368,10 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             String[] tetheringDhcpRanges = cm.getTetheredDhcpRanges();
             if (mNwService.isTetheringStarted()) {
                 if (DBG) logd("Stop existing tethering and restart it");
-                mNwService.stopTethering();
+                mNwService.stopTethering(intf);
             }
             mNwService.tetherInterface(intf);
-            mNwService.startTethering(tetheringDhcpRanges);
+            mNwService.startTethering(tetheringDhcpRanges, intf);
         } catch (Exception e) {
             loge("Error configuring interface " + intf + ", :" + e);
             return;
@@ -2330,7 +2390,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     return;
                 }
             }
-            mNwService.stopTethering();
+            mNwService.stopTethering(intf);
         } catch (Exception e) {
             loge("Error stopping Dhcp server" + e);
             return;
