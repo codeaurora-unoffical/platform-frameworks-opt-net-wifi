@@ -194,6 +194,7 @@ public class WifiStateMachine extends StateMachine {
     private long mBatchedScanMinPollTime = 0;
 
     private boolean mScreenOn = false;
+    private boolean mIsAutoJoinEnabled = false;
 
     /* Chipset supports background scan */
     private final boolean mBackgroundScanSupported;
@@ -1021,6 +1022,15 @@ public class WifiStateMachine extends StateMachine {
                     public void onChange(boolean selfChange) {
                         mUserWantsSuspendOpt.set(Settings.Global.getInt(mContext.getContentResolver(),
                                 Settings.Global.WIFI_SUSPEND_OPTIMIZATIONS_ENABLED, 1) == 1);
+                    }
+                });
+
+        mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
+                Settings.System.WIFI_AUTO_CONNECT_TYPE), false,
+                new ContentObserver(getHandler()) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                           checkAndSetAutoConnection();
                     }
                 });
 
@@ -3467,6 +3477,10 @@ public class WifiStateMachine extends StateMachine {
 
         if (mWifiConfigStore.enableAutoJoinWhenAssociated) {
             synchronized(mScanResultCache) {
+                if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                    attemptAutoJoin = false;
+                }
                 // AutoJoincontroller will directly acces the scan result list and update it with
                 // ScanResult status
                 mNumScanResultsKnown = mWifiAutoJoinController.newSupplicantResults(attemptAutoJoin);
@@ -4293,6 +4307,10 @@ public class WifiStateMachine extends StateMachine {
 
 
         clearCurrentConfigBSSID("handleNetworkDisconnect");
+        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                && !mWifiConfigStore.shouldAutoConnect()) {
+            disableLastNetwork();
+        }
 
         stopDhcp();
 
@@ -4979,6 +4997,10 @@ public class WifiStateMachine extends StateMachine {
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
                     mWifiNative.enableSaveConfig();
                     mWifiConfigStore.loadAndEnableAllNetworks();
+                    if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                        mWifiConfigStore.disableAllNetworks();
+                    }
                     if (mWifiConfigStore.enableVerboseLogging > 0) {
                         enableVerboseLogging(mWifiConfigStore.enableVerboseLogging);
                     }
@@ -5045,11 +5067,14 @@ public class WifiStateMachine extends StateMachine {
             setRandomMacOui();
             if (mWifiConfigStore.enableAutoJoinWhenAssociated) {
                 mWifiNative.enableAutoConnect(false);
+                mIsAutoJoinEnabled = true;
             } else {
+                mIsAutoJoinEnabled = false;
                 if (DBG) {
                     log("Autojoin is disabled, keep autoconnect enabled in supplicant");
                 }
             }
+            checkAndSetAutoConnection();
         }
 
         @Override
@@ -8468,6 +8493,33 @@ public class WifiStateMachine extends StateMachine {
             sendMessageDelayed(obtainMessage(CMD_PNO_PERIODIC_SCAN,
                                ++mPnoPeriodicScanToken, 0),
                                mDefaultFrameworkScanIntervalMs);
+        }
+    }
+
+    void disableLastNetwork() {
+        if (getCurrentState() != mSupplicantStoppingState) {
+            mWifiConfigStore.disableNetwork(mLastNetworkId,
+                    WifiConfiguration.DISABLED_UNKNOWN_REASON);
+        }
+    }
+
+    void checkAndSetAutoConnection() {
+        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)) {
+            if (mWifiConfigStore.shouldAutoConnect()){
+                if(mIsAutoJoinEnabled == false) {
+                   mWifiNative.enableAutoConnect(true);
+                } else if (mIsAutoJoinEnabled == true) {
+                   mWifiConfigStore.enableAutoJoinWhenAssociated = true;
+                   mWifiConfigStore.enableAutoJoinScanWhenAssociated = true;
+                }
+            } else {
+               if (mIsAutoJoinEnabled == false) {
+                   mWifiNative.enableAutoConnect(false);
+               } else if (mIsAutoJoinEnabled == true ) {
+                   mWifiConfigStore.enableAutoJoinWhenAssociated = false;
+                   mWifiConfigStore.enableAutoJoinScanWhenAssociated = false;
+                }
+            }
         }
     }
 }
