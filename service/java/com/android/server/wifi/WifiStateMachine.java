@@ -4526,6 +4526,11 @@ public class WifiStateMachine extends StateMachine {
          * disconnect thru supplicant, we will let autojoin retry connecting to the network
          */
         mWifiNative.disconnect();
+
+        /* If autojoin is disabled, give an immediate reconnect to try again */
+        if (!mWifiConfigStore.enableAutoJoinWhenAssociated) {
+            mWifiNative.reconnect();
+        }
     }
 
     /* Current design is to not set the config on a running hostapd but instead
