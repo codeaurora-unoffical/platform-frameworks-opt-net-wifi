@@ -975,18 +975,6 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             initializeP2pSettings();
             mWifiManager
                 = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
-            int AutoGO = getAutoGoState();
-            if (AutoGO == 1) {
-                if (DBG) {
-                    Slog.d(TAG, "Start Auto GO Enabled");
-                }
-                sendMessage(WifiP2pManager.CREATE_GROUP,
-                    WifiP2pGroup.PERSISTENT_NET_ID);
-            } else {
-                if (DBG) {
-                    Slog.d(TAG, "Start Auto GO Disabled");
-                }
-            }
         }
 
         @Override
@@ -2294,17 +2282,6 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         pw.println("mSavedPeerConfig " + mSavedPeerConfig);
         pw.println("mSavedP2pGroup " + mSavedP2pGroup);
         pw.println();
-    }
-
-    private int getAutoGoState() {
-        int AutoGo = 0;
-        try {
-            AutoGo = Settings.Global.getInt(mContext.getContentResolver(),
-            Settings.Global.AUTO_GO);
-        } catch (Settings.SettingNotFoundException e) {
-             Slog.e(TAG, "Failed to getAutoGoState");;
-        }
-        return AutoGo;
     }
 
     private void sendP2pStateChangedBroadcast(boolean enabled) {
