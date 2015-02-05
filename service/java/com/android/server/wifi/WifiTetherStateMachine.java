@@ -93,6 +93,7 @@ import com.android.server.net.NetlinkTracker;
 
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.WifiManager;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -126,7 +127,7 @@ public class WifiTetherStateMachine extends StateMachine {
 
 
     private String mInterfaceName = "wlan0";
-    private String mSoftApInterfaceName = "softap.0";
+    private String mSoftApInterfaceName = "softap0";
     WifiStateMachine mWifiStateMachine = null;
     public int channel = 6;
 
@@ -632,38 +633,45 @@ public class WifiTetherStateMachine extends StateMachine {
     private boolean startTethering(ArrayList<String> available) {
 
         boolean wifiAvailable = false;
+        WifiManager mWifiManager = null;
 
         checkAndSetConnectivityInstance();
 
         String[] wifiRegexs = mCm.getTetherableWifiRegexs();
+        String apInterface = mInterfaceName;
+
+        if (mContext != null) {
+            mWifiManager =
+                (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
+            if (mWifiManager != null && mWifiManager.getConcurrency()) {
+                apInterface = mSoftApInterfaceName;
+            }
+        }
 
         for (String intf : available) {
-            for (String regex : wifiRegexs) {
-                if (intf.matches(regex)) {
-
-                    InterfaceConfiguration ifcg = null;
-                    try {
-                        ifcg = mNwService.getInterfaceConfig(intf);
-                        if (ifcg != null) {
-                            /* IP/netmask: 192.168.43.1/255.255.255.0 */
-                            ifcg.setLinkAddress(new LinkAddress(
+            if (intf.matches(apInterface)) {
+                InterfaceConfiguration ifcg = null;
+                try {
+                    ifcg = mNwService.getInterfaceConfig(intf);
+                    if (ifcg != null) {
+                        /* IP/netmask: 192.168.43.1/255.255.255.0 */
+                        ifcg.setLinkAddress(new LinkAddress(
                                     NetworkUtils.numericToInetAddress("192.168.43.1"), 24));
-                            ifcg.setInterfaceUp();
+                        ifcg.setInterfaceUp();
 
-                            mNwService.setInterfaceConfig(intf, ifcg);
-                        }
-                    } catch (Exception e) {
-                        loge("Error configuring interface " + intf + ", :" + e);
-                        return false;
+                        mNwService.setInterfaceConfig(intf, ifcg);
                     }
-
-                    if(mCm.tether(intf) != ConnectivityManager.TETHER_ERROR_NO_ERROR) {
-                        loge("Error tethering on " + intf);
-                        return false;
-                    }
-                    mTetherInterfaceName = intf;
-                    return true;
+                } catch (Exception e) {
+                    loge("Error configuring interface " + intf + ", :" + e);
+                    return false;
                 }
+
+                if(mCm.tether(intf) != ConnectivityManager.TETHER_ERROR_NO_ERROR) {
+                    loge("Error tethering on " + intf);
+                    return false;
+                }
+                mTetherInterfaceName = intf;
+                return true;
             }
         }
         // We found no interfaces to tether
