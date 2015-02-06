@@ -4196,43 +4196,19 @@ public class WifiConfigStore extends IpConfigStore {
         }
     }
 
-    boolean isWifiAuto() {
+
+    boolean shouldAutoConnect() {
         int autoConnectPolicy = Settings.System.getInt(
                 mContext.getContentResolver(),
                 Settings.System.WIFI_AUTO_CONNECT_TYPE,
                 WIFI_AUTO_CONNECT_TYPE_AUTO);
-        return (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO);
-    }
-
-    int existActiveNetwork() {
-        ConnectivityManager mConnectivityManager = (ConnectivityManager) mContext
-            .getSystemService(Context.CONNECTIVITY_SERVICE);
-        NetworkInfo info = mConnectivityManager.getActiveNetworkInfo();
-        if (info == null) {
-            return -1;
-        }
-        return info.getType();
-    }
-
-    boolean isWifiAutoConn() {
-        /*
-         * If no active network(info == null) and Wifi connection type is auto
-         * connect, auto connect to Wifi.
-         */
-         return (isWifiAuto() && ((existActiveNetwork() == -1)
-                || (existActiveNetwork() == ConnectivityManager.TYPE_WIFI)));
-    }
-
-    boolean shouldAutoConnect() {
-        if (isWifiAutoConn()) {
-            if (VDBG) {
-                Log.d(TAG, "Wlan connection type is auto, should auto connect");
-            }
-            return true;
-        }
         if (VDBG) {
-            Log.d(TAG, "Shouldn't auto connect");
+            if (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO) {
+                Log.d(TAG, "Wlan connection type is auto, should auto connect");
+            } else {
+                Log.d(TAG, "Shouldn't auto connect");
+            }
         }
-        return false;
+        return (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO);
     }
 }

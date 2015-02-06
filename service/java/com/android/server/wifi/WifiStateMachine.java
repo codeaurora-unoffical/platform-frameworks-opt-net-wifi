@@ -7783,9 +7783,15 @@ public class WifiStateMachine extends StateMachine {
 
             /** clear the roaming state, if we were roaming, we failed */
             mAutoRoaming = WifiAutoJoinController.AUTO_JOIN_IDLE;
-
-            // Reenable all networks, allow for hidden networks to be scanned
-            mWifiConfigStore.enableAllNetworks();
+            if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                    && !mWifiConfigStore.shouldAutoConnect()) {
+               if (DBG) {
+                   logd("Auto connect disabled, skip enable networks");
+               }
+            } else {
+               // Reenable all networks, allow for hidden networks to be scanned
+               mWifiConfigStore.enableAllNetworks();
+            }
 
             /**
              * - screen dark and PNO supported => scan alarm disabled
@@ -8532,6 +8538,7 @@ public class WifiStateMachine extends StateMachine {
         if (mContext.getResources().getBoolean(R.bool.wifi_autocon)) {
             if (mWifiConfigStore.shouldAutoConnect()){
                 if(mIsAutoJoinEnabled == false) {
+                   mWifiConfigStore.enableAllNetworks();
                    mWifiNative.enableAutoConnect(true);
                 } else if (mIsAutoJoinEnabled == true) {
                    mWifiConfigStore.enableAutoJoinWhenAssociated = true;
