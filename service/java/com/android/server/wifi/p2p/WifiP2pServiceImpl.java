@@ -1335,6 +1335,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         @Override
         public void enter() {
             if (DBG) logd(getName());
+            mIsInvite = false;
             mSavedPeerConfig.invalidate();
         }
 
@@ -1389,7 +1390,6 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 case WifiMonitor.P2P_INVITATION_RECEIVED_EVENT:
                     WifiP2pGroup group = (WifiP2pGroup) message.obj;
                     WifiP2pDevice owner = group.getOwner();
-                    mIsInvite = true;
 
                     if (owner == null) {
                         loge("Ignored invitation from null owner");
@@ -1419,6 +1419,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
                     mAutonomousGroup = false;
                     mJoinExistingGroup = true;
+                    mIsInvite = true;
                     transitionTo(mUserAuthorizingInviteRequestState);
                     break;
                 case WifiMonitor.P2P_PROV_DISC_PBC_REQ_EVENT:
