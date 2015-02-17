@@ -4063,6 +4063,9 @@ public class WifiStateMachine extends StateMachine {
             return true;
         } catch (RemoteException e) {
             return false;
+        } catch (IllegalStateException ie) {
+           loge("Unable to set interface config: " + ie);
+           return false;
         }
     }
 
