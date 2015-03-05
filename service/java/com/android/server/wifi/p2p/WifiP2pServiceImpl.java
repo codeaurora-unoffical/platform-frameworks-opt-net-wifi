@@ -141,6 +141,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     /* Idle time after a peer is gone when the group is torn down */
     private static final int GROUP_IDLE_TIME_S = 10;
 
+    /* Whether the currently selected is a dfs channel */
+    private static int mDfsMode = 0;
+
     private static final String ACTION_SAFE_WIFI_CHANNELS_CHANGED =
             "qualcomm.intent.action.SAFE_WIFI_CHANNELS_CHANGED";
 
@@ -895,6 +898,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 // failure causes supplicant issues. Ignore right now.
                 case WifiMonitor.P2P_GROUP_FORMATION_FAILURE_EVENT:
                     break;
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    loge("Unexpected DFS event in the default state");
+                    break;
                 default:
                     loge("Unhandled message " + message);
                     return NOT_HANDLED;
@@ -1576,6 +1585,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         replyToMessage(message, WifiP2pManager.REPORT_NFC_HANDOVER_FAILED);
                     }
                     break;
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    loge("Unexpected DFS event in the inactive state");
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -1587,8 +1602,13 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         @Override
         public void enter() {
             if (DBG) logd(getName());
-            sendMessageDelayed(obtainMessage(GROUP_CREATING_TIMED_OUT,
-                    ++mGroupCreatingTimeoutIndex, 0), GROUP_CREATING_WAIT_TIME_MS);
+            // If autonomous GO is coming up on a DFS channel, the
+            // radar scan can take significant time causing the delay upto
+            // 600 seconds. Hence, don't need to send this message
+            if (mAutonomousGroup == false) {
+                sendMessageDelayed(obtainMessage(GROUP_CREATING_TIMED_OUT,
+                            ++mGroupCreatingTimeoutIndex, 0), GROUP_CREATING_WAIT_TIME_MS);
+            }
         }
 
         @Override
@@ -1598,7 +1618,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             switch (message.what) {
                case GROUP_CREATING_TIMED_OUT:
                     if (mGroupCreatingTimeoutIndex == message.arg1) {
-                        if (DBG) logd("Group negotiation timed out");
+                        if (DBG) logd("Group creation timed out");
                         handleGroupCreationFailure();
                         transitionTo(mInactiveState);
                     }
@@ -1638,6 +1658,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     // We hit this scenario when NFC handover is invoked.
                     mAutonomousGroup = false;
                     transitionTo(mGroupNegotiationState);
+                    break;
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    loge("Unexpected DFS event in group creating state");
                     break;
                 default:
                     ret = NOT_HANDLED;
@@ -1853,7 +1879,8 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
                         // Broadcast group creation success
                         sendP2pAutonomousGOStateChangedBroadcast(
-                                WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED);
+                                WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED,
+                                WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_DEFAULT);
 
                         startDhcpServer(mGroup.getInterface());
                     } else {
@@ -1936,6 +1963,24 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         handleGroupCreationFailure();
                         transitionTo(mInactiveState);
                     }
+                    break;
+                     // Nothing much to be done for following DFS events
+                     // just wait for GROUP_STARTED event for updating the UI
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                    if (DBG) logd("Received CSA_FINISHED event in group negotiation state");
+                    handleP2PDfsCSAFinishedEvent(message);
+                    break;
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                    if (DBG) logd("Received RADAR_DETECTED event in group negotiation state");
+                    handleP2pDfsRadarDetectedEvent();
+                    break;
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                    if (DBG) logd("Received CAC_STARTED event in group negotiation state");
+                    handleP2PDfsCACStartedEvent();
+                    break;
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    if (DBG) logd("Received CAC_COMPLETED event in group negotiation state");
+                    handleP2PDfsCACCompletedEvent();
                     break;
                 default:
                     return NOT_HANDLED;
@@ -2151,8 +2196,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         transitionTo(mOngoingGroupRemovalState);
                         if (mAutonomousGroup) {
                             // Send broadcast for p2p auto go removal
-                            sendP2pAutonomousGOStateChangedBroadcast(WifiP2pManager.
-                                    WIFI_P2P_AUTONOMOUS_GO_STOPPED);
+                            sendP2pAutonomousGOStateChangedBroadcast(
+                                    WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STOPPED,
+                                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_DEFAULT);
                         }
                         replyToMessage(message, WifiP2pManager.REMOVE_GROUP_SUCCEEDED);
                     } else {
@@ -2206,8 +2252,9 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                         transitionTo(mOngoingGroupRemovalState);
                         if (mAutonomousGroup) {
                             // Send broadcast for p2p auto go removal
-                            sendP2pAutonomousGOStateChangedBroadcast(WifiP2pManager.
-                                    WIFI_P2P_AUTONOMOUS_GO_STOPPED);
+                            sendP2pAutonomousGOStateChangedBroadcast(
+                                    WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STOPPED,
+                                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_DEFAULT);
                         }
                         replyToMessage(message, WifiP2pManager.REMOVE_GROUP_SUCCEEDED);
                     } else {
@@ -2341,6 +2388,21 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 case WifiMonitor.P2P_GROUP_STARTED_EVENT:
                     loge("Duplicate group creation event notice, ignore");
                     break;
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                    if (DBG) logd("RADAR_DETECTED event received");
+                    handleP2pDfsRadarDetectedEvent();
+                    break;
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                    if (DBG) logd("CSA_FINISHED event received");
+                    handleP2PDfsCSAFinishedEvent(message);
+                    break;
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                    if (DBG) logd("CAC_STARTED event received");
+                    break;
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    if (DBG) logd("CAC_COMPLETED event received");
+                    handleP2PDfsCACCompletedEvent();
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -2412,6 +2474,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 // end up removing persisted network. Do nothing.
                 case WifiP2pManager.REMOVE_GROUP:
                     replyToMessage(message, WifiP2pManager.REMOVE_GROUP_SUCCEEDED);
+                    break;
+                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
+                case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
+                    loge("Unexpected DFS event in group removal state");
                     break;
                 // Parent state will transition out of this state
                 // when removal is complete
@@ -2486,10 +2554,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 new NetworkInfo(mNetworkInfo));
     }
 
-    private void sendP2pAutonomousGOStateChangedBroadcast(int subState) {
+    private void sendP2pAutonomousGOStateChangedBroadcast(int subState, int reason) {
         if (DBG) logd("sending p2p auto go state changed broadcast");
         Intent intent = new Intent(WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STATE);
         intent.putExtra(WifiP2pManager.EXTRA_P2P_AUTO_GO_STATE, subState);
+        intent.putExtra(WifiP2pManager.EXTRA_P2P_AUTO_GO_STATE_CHANGE_REASON,
+                reason);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
     }
@@ -2504,6 +2574,73 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         Intent intent = new Intent(WifiP2pManager.WIFI_P2P_PERSISTENT_GROUPS_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    // P2P DFS event handler functions
+    private void handleP2pDfsRadarDetectedEvent() {
+        // Radar detected, update the UI
+        sendP2pAutonomousGOStateChangedBroadcast(
+                WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STOPPED_RESTARTING,
+                WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+        if (DBG) {
+            logd("Updating UI with stopped, restarting event");
+        }
+    }
+
+    private void handleP2PDfsCSAFinishedEvent(Message message) {
+        int freq = (int) message.arg1;
+        mDfsMode = (int) message.arg2;
+
+        if (mDfsMode > 1) mDfsMode = 1;
+        if (freq >= 5180 && freq <= 5825) {
+            if (mGroup.isGroupOwner()) {
+                // update group's operating frequency
+                mGroup.setGoOperatingFrequency(freq);
+                loge("p2p group frequency updated to: " + freq + " MHz");
+            }
+        } else {
+            loge("Invalid p2p group frequency: " + freq);
+        }
+
+        if (mDfsMode == 1) {
+            // The selected channel is DFS, will have to wait
+            // for CAC completed event from the supplicant
+        } else {
+            // The selected channel is non-DFS, the group would
+            // have resumed, update the UI accordingly
+            sendP2pAutonomousGOStateChangedBroadcast(
+                    WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED,
+                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+            if (DBG) {
+                logd("Updating UI with p2p-go started event");
+            }
+        }
+    }
+
+    private void handleP2PDfsCACStartedEvent() {
+        // Supplicant will generate this event when the scan
+        // for radar starts, need to update the UI accordingly
+        sendP2pAutonomousGOStateChangedBroadcast(
+                WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTING,
+                WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+        if (DBG) {
+            logd("Updating UI with p2p-go starting event");
+        }
+    }
+
+    private void handleP2PDfsCACCompletedEvent() {
+        // The cac complete event implicitely indicates p2p
+        // group restart. Indicate the same to UI if mDfsMode
+        // is set
+        if (mDfsMode == 1) {
+            mDfsMode = 0;
+            sendP2pAutonomousGOStateChangedBroadcast(
+                    WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED,
+                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+            if (DBG) {
+                logd("Updating UI with p2p-go started event");
+            }
+        }
     }
 
     private void startDhcpServer(String intf) {
@@ -3096,6 +3233,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         resetWifiP2pInfo();
         mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.FAILED, null, null);
         sendP2pConnectionChangedBroadcast();
+
+        // If autonomous GO is started, there is no group negotiation with
+        // the peer, hence peer list will be empty
+        if (mAutonomousGroup == true) {
+            return;
+        }
 
         // Remove only the peer we failed to connect to so that other devices discovered
         // that have not timed out still remain in list for connection
