@@ -6699,6 +6699,16 @@ public class WifiStateMachine extends StateMachine {
                     handleNetworkDisconnect();
                     transitionTo(mDisconnectedState);
                     break;
+                case CMD_NETWORK_STATUS:
+                    if (message.arg1 == NetworkAgent.VALID_NETWORK) {
+                        config = getCurrentWifiConfiguration();
+                        if (config != null) {
+                            // re-enable autojoin
+                            config.numNoInternetAccessReports = 0;
+                            config.validatedInternetAccess = true;
+                        }
+                    }
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -7503,16 +7513,6 @@ public class WifiStateMachine extends StateMachine {
                         if (config != null) {
                             // Disable autojoin
                             config.numNoInternetAccessReports += 1;
-                        }
-                    }
-                    return HANDLED;
-                case CMD_NETWORK_STATUS:
-                    if (message.arg1 == NetworkAgent.VALID_NETWORK) {
-                        config = getCurrentWifiConfiguration();
-                        if (config != null) {
-                            // re-enable autojoin
-                            config.numNoInternetAccessReports = 0;
-                            config.validatedInternetAccess = true;
                         }
                     }
                     return HANDLED;
