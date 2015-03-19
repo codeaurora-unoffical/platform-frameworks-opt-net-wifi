@@ -3156,9 +3156,10 @@ public class WifiStateMachine extends StateMachine {
             //              => will use scan offload (i.e. background scan)
             if (!mBackgroundScanSupported) {
                 setScanAlarm(true);
-            } else {
-                mEnableBackgroundScan = true;
             }
+        }
+        if (mBackgroundScanSupported) {
+            mEnableBackgroundScan = (screenOn == false);
         }
         if (DBG) logd("backgroundScan enabled=" + mEnableBackgroundScan
                 + " startBackgroundScanIfNeeded:" + startBackgroundScanIfNeeded);
