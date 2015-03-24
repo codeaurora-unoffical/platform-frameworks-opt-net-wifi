@@ -328,6 +328,9 @@ public class WifiStateMachine extends StateMachine {
     /* Tracks sequence number on a periodic scan message */
     private int mPeriodicScanToken = 0;
 
+  /* Tracks sequence number on a periodic scan message for PNO failure */
+    private int mPnoPeriodicScanToken = 0;
+
     // Wakelock held during wifi start/stop and driver load/unload
     private PowerManager.WakeLock mWakeLock;
 
@@ -2311,11 +2314,11 @@ public class WifiStateMachine extends StateMachine {
         return mWifiNative.getNfcWpsConfigurationToken(netId);
     }
 
-    void enableBackgroundScan(boolean enable) {
+    boolean  enableBackgroundScan(boolean enable) {
         if (enable) {
             mWifiConfigStore.enableAllNetworks();
         }
-        mWifiNative.enableBackgroundScan(enable);
+        return mWifiNative.enableBackgroundScan(enable);
     }
 
     /**
@@ -3172,7 +3175,9 @@ public class WifiStateMachine extends StateMachine {
                 + " startBackgroundScanIfNeeded:" + startBackgroundScanIfNeeded);
         if (startBackgroundScanIfNeeded) {
             // to scan for them in background, we need all networks enabled
-            enableBackgroundScan(mEnableBackgroundScan);
+            if(!enableBackgroundScan(mEnableBackgroundScan)) {
+               handlePnoFailError();
+            }
         }
         if (DBG) log("handleScreenStateChanged Exit: " + screenOn);
     }
@@ -5052,6 +5057,8 @@ public class WifiStateMachine extends StateMachine {
                     break;
                 case CMD_GET_CONNECTION_STATISTICS:
                     replyToMessage(message, message.what, mWifiConnectionStatistics);
+                    break;
+                case CMD_PNO_PERIODIC_SCAN:
                     break;
                 default:
                     loge("Error! unhandled message" + message);
@@ -8083,7 +8090,9 @@ public class WifiStateMachine extends StateMachine {
                      * cleared
                      */
                     if (!mIsScanOngoing) {
-                        enableBackgroundScan(true);
+                        if (!enableBackgroundScan(true)) {
+                            handlePnoFailError();
+                        }
                     }
                 } else {
                     setScanAlarm(true);
@@ -8117,6 +8126,17 @@ public class WifiStateMachine extends StateMachine {
                         startScan(UNKNOWN_SCAN_SOURCE, -1, null, null);
                         sendMessageDelayed(obtainMessage(CMD_NO_NETWORKS_PERIODIC_SCAN,
                                     ++mPeriodicScanToken, 0), mSupplicantScanIntervalMs);
+                    }
+                    break;
+                case CMD_PNO_PERIODIC_SCAN:
+                    if ((message.arg1 == mPnoPeriodicScanToken) &&
+                            mEnableBackgroundScan && (mP2pConnected.get() ||
+                            (mWifiConfigStore.getConfiguredNetworks().size()
+                            != 0))) {
+                        startScan(UNKNOWN_SCAN_SOURCE, -1, null, null);
+                        sendMessageDelayed(obtainMessage(CMD_PNO_PERIODIC_SCAN,
+                            ++mPnoPeriodicScanToken, 0),
+                            mDefaultFrameworkScanIntervalMs);
                     }
                     break;
                 case WifiManager.FORGET_NETWORK:
@@ -8193,7 +8213,9 @@ public class WifiStateMachine extends StateMachine {
                 case WifiMonitor.SCAN_RESULTS_EVENT:
                     /* Re-enable background scan when a pending scan result is received */
                     if (mEnableBackgroundScan && mIsScanOngoing) {
-                        enableBackgroundScan(true);
+                        if (!enableBackgroundScan(true)) {
+                            handlePnoFailError();
+                        }
                     }
                     /* Handled in parent state */
                     ret = NOT_HANDLED;
@@ -8671,6 +8693,15 @@ public class WifiStateMachine extends StateMachine {
             sb.append(String.format("%02x", bytes[from+i]));
         }
         return sb.toString();
+    }
+
+    private void handlePnoFailError() {
+        if (mEnableBackgroundScan && (mP2pConnected.get() ||
+               (mWifiConfigStore.getConfiguredNetworks().size() != 0))) {
+            sendMessageDelayed(obtainMessage(CMD_PNO_PERIODIC_SCAN,
+                               ++mPnoPeriodicScanToken, 0),
+                               mDefaultFrameworkScanIntervalMs);
+        }
     }
 
 
