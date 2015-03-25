@@ -1062,6 +1062,15 @@ public class WifiStateMachine extends StateMachine {
                     }
                 });
 
+        mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
+                Settings.System.WIFI_AUTO_CONNECT_TYPE), false,
+                new ContentObserver(getHandler()) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                           checkAndSetAutoConnection();
+                    }
+                });
+
         mContext.registerReceiver(
                 new BroadcastReceiver() {
                     @Override
@@ -2313,7 +2322,14 @@ public class WifiStateMachine extends StateMachine {
 
     void enableBackgroundScan(boolean enable) {
         if (enable) {
-            mWifiConfigStore.enableAllNetworks();
+            if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                && !mWifiConfigStore.shouldAutoConnect()) {
+                if (DBG) {
+                    logd("No auto connect, skip enable networks during pno");
+                }
+            } else {
+                mWifiConfigStore.enableAllNetworks();
+            }
         }
         mWifiNative.enableBackgroundScan(enable);
     }
@@ -3123,7 +3139,18 @@ public class WifiStateMachine extends StateMachine {
                     + " suppState:" + mSupplicantStateTracker.getSupplicantStateName());
         }
         enableRssiPolling(screenOn);
-        if (screenOn) enableAllNetworks();
+        if (screenOn) {
+            if (!mWifiConfigStore.enableAutoJoinWhenAssociated) {
+                 if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                     if (DBG) {
+                        logd("Don't auto connect skip enable networks if screen on");
+                     }
+                 } else {
+                     enableAllNetworks();
+                }
+            }
+        }
         if (mUserWantsSuspendOpt.get()) {
             if (screenOn) {
                 sendMessage(CMD_SET_SUSPEND_OPT_ENABLED, 0, 0);
@@ -3597,6 +3624,10 @@ public class WifiStateMachine extends StateMachine {
 
         if (mWifiConfigStore.enableAutoJoinWhenAssociated) {
             synchronized(mScanResultCache) {
+                if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                    attemptAutoJoin = false;
+                }
                 // AutoJoincontroller will directly acces the scan result list and update it with
                 // ScanResult status
                 mNumScanResultsKnown = mWifiAutoJoinController.newSupplicantResults(attemptAutoJoin);
@@ -4413,6 +4444,16 @@ public class WifiStateMachine extends StateMachine {
 
 
         clearCurrentConfigBSSID("handleNetworkDisconnect");
+        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                && !mWifiConfigStore.shouldAutoConnect()) {
+            /*
+             * The following logic shall address the requirement for the DUT to
+             * not reconnect to the last connected network when the Auto
+             * Connect is disabled. This asks for the user prompt for any
+             * connection attempt (as per the requirement)
+             */
+            disableLastNetwork();
+        }
 
         stopDhcp();
 
@@ -5170,6 +5211,10 @@ public class WifiStateMachine extends StateMachine {
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
                     mWifiNative.enableSaveConfig();
                     mWifiConfigStore.loadAndEnableAllNetworks();
+                    if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                        mWifiConfigStore.disableAllNetworks();
+                    }
                     if (mWifiConfigStore.enableVerboseLogging > 0) {
                         enableVerboseLogging(mWifiConfigStore.enableVerboseLogging);
                     }
@@ -5680,7 +5725,14 @@ public class WifiStateMachine extends StateMachine {
                         mAlarmManager.cancel(mDriverStopIntent);
                         if (DBG) log("Delayed stop ignored due to start");
                         if (mOperationalMode == CONNECT_MODE) {
-                            mWifiConfigStore.enableAllNetworks();
+                             if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                                    && !mWifiConfigStore.shouldAutoConnect()) {
+                                 if (DBG) {
+                                     logd("Auto connect disabled, skip enable networks");
+                                 }
+                             } else {
+                                 mWifiConfigStore.enableAllNetworks();
+                             }
                         }
                     }
                     break;
@@ -5900,7 +5952,14 @@ public class WifiStateMachine extends StateMachine {
                             mWifiConfigStore.loadAndEnableAllNetworks();
                             mWifiP2pChannel.sendMessage(CMD_ENABLE_P2P);
                         } else {
-                            mWifiConfigStore.enableAllNetworks();
+                            if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                                   && !mWifiConfigStore.shouldAutoConnect()) {
+                                if (DBG) {
+                                    logd("Auto connect disabled, skip enable networks during mode change");
+                                }
+                            } else {
+                                mWifiConfigStore.enableAllNetworks();
+                            }
                         }
 
                         // Try autojoining with recent network already present in the cache
@@ -7768,8 +7827,15 @@ public class WifiStateMachine extends StateMachine {
                         testNetworkDisconnectCounter, 0), 15000);
             }
             if (!mWifiConfigStore.enableAutoJoinWhenAssociated) {
-                // Reenable all networks, allow for hidden networks to be scanned
-                mWifiConfigStore.enableAllNetworks();
+                if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                        && !mWifiConfigStore.shouldAutoConnect()) {
+                    if (DBG) {
+                        logd("Auto connect disabled, skip enable networks");
+                    }
+                } else {
+                    // Reenable all networks, allow for hidden networks to be scanned
+                    mWifiConfigStore.enableAllNetworks();
+                }
             }
 
             mLastDriverRoamAttempt = 0;
@@ -8768,6 +8834,28 @@ public class WifiStateMachine extends StateMachine {
                             Settings.Global.WIFI_SUPPLICANT_SCAN_INTERVAL_WFD_CONNECTED_MS,
                             defaultWfdIntervel);
             mWifiNative.setScanInterval((int) wfdScanIntervalMs / 1000);
+        }
+    }
+
+
+    void disableLastNetwork() {
+        if (getCurrentState() != mSupplicantStoppingState) {
+            mWifiConfigStore.disableNetwork(mLastNetworkId,
+                    WifiConfiguration.DISABLED_UNKNOWN_REASON);
+        }
+    }
+
+    void checkAndSetAutoConnection() {
+        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)) {
+            if (mWifiConfigStore.shouldAutoConnect()){
+                if(!mWifiConfigStore.enableAutoJoinWhenAssociated &&
+                      !mWifiConfigStore.enableAutoJoinScanWhenAssociated) {
+                   mWifiNative.enableAutoConnect(true);
+                   mWifiConfigStore.enableAllNetworks();
+                }
+            } else {
+                mWifiNative.enableAutoConnect(false);
+            }
         }
     }
 }
