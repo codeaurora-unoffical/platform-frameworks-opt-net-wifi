@@ -459,6 +459,7 @@ public class WifiConfigStore extends IpConfigStore {
      * WiFi state machine is the only object that sets this variable.
      */
     private String lastSelectedConfiguration = null;
+    private static final int WIFI_AUTO_CONNECT_TYPE_AUTO = 0;
 
     WifiConfigStore(Context c, WifiNative wn) {
         mContext = c;
@@ -4347,6 +4348,22 @@ public class WifiConfigStore extends IpConfigStore {
                         Credentials.CA_CERTIFICATE + ca, Process.WIFI_UID);
             }
         }
+    }
+
+
+     boolean shouldAutoConnect() {
+        int autoConnectPolicy = Settings.System.getInt(
+                mContext.getContentResolver(),
+                Settings.System.WIFI_AUTO_CONNECT_TYPE,
+                WIFI_AUTO_CONNECT_TYPE_AUTO);
+        if (VDBG) {
+            if (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO) {
+                Log.d(TAG, "Wlan connection type is auto, should auto connect");
+            } else {
+                Log.d(TAG, "Shouldn't auto connect");
+            }
+        }
+        return (autoConnectPolicy == WIFI_AUTO_CONNECT_TYPE_AUTO);
     }
 
 }
