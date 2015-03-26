@@ -624,6 +624,8 @@ public class WifiStateMachine extends StateMachine {
 
     static final int CMD_ASSOCIATED_BSSID                = BASE + 147;
 
+    static final int CMD_NETWORK_STATUS                  = BASE + 149;
+
     /* Wifi state machine modes of operation */
     /* CONNECT_MODE - connect to any 'known' AP when it becomes available */
     public static final int CONNECT_MODE                   = 1;
@@ -5857,6 +5859,9 @@ public class WifiStateMachine extends StateMachine {
             case CMD_UNWANTED_NETWORK:
                 s = "CMD_UNWANTED_NETWORK";
                 break;
+            case CMD_NETWORK_STATUS:
+                s = "CMD_NETWORK_STATUS";
+                break;
             case CMD_GET_LINK_LAYER_STATS:
                 s = "CMD_GET_LINK_LAYER_STATS";
                 break;
@@ -6123,7 +6128,7 @@ public class WifiStateMachine extends StateMachine {
     void setInternetAccessState(boolean enabled) {
         WifiConfiguration config = getCurrentWifiConfiguration();
         if (config != null) {
-            config.noInternetAccess = enabled;
+            config.validatedInternetAccess = enabled;
         }
     }
 
@@ -6716,9 +6721,13 @@ public class WifiStateMachine extends StateMachine {
 
         protected void networkStatus(int status) {
             if (status == NetworkAgent.INVALID_NETWORK) {
-                if (DBG) log("WifiNetworkAgent -> Wifi networkStatus invalid score "
+                if (DBG) log("WifiNetworkAgent -> Wifi networkStatus invalid, score="
                         + Integer.toString(mWifiInfo.score));
                 unwantedNetwork(network_status_unwanted_disable_autojoin);
+            } else if (status == NetworkAgent.VALID_NETWORK) {
+                if (DBG && mWifiInfo != null) log("WifiNetworkAgent -> Wifi networkStatus valid, score= "
+                        + Integer.toString(mWifiInfo.score));
+                doNetworkStatus(status);
             }
         }
     }
@@ -6727,6 +6736,9 @@ public class WifiStateMachine extends StateMachine {
         sendMessage(CMD_UNWANTED_NETWORK, reason);
     }
 
+    void doNetworkStatus(int status) {
+        sendMessage(CMD_NETWORK_STATUS, status);
+    }
 
     boolean startScanForConfiguration(WifiConfiguration config, boolean restrictChannelList) {
         if (config == null)
@@ -7486,11 +7498,21 @@ public class WifiStateMachine extends StateMachine {
                         mWifiConfigStore.handleBadNetworkDisconnectReport(mLastNetworkId, mWifiInfo);
                         mWifiNative.disconnect();
                         transitionTo(mDisconnectingState);
-                    } else if (message.arg1 == network_status_unwanted_disconnect) {
+                    } else if (message.arg1 == network_status_unwanted_disable_autojoin) {
                         config = getCurrentWifiConfiguration();
                         if (config != null) {
                             // Disable autojoin
-                            config.noInternetAccess = true;
+                            config.numNoInternetAccessReports += 1;
+                        }
+                    }
+                    return HANDLED;
+                case CMD_NETWORK_STATUS:
+                    if (message.arg1 == NetworkAgent.VALID_NETWORK) {
+                        config = getCurrentWifiConfiguration();
+                        if (config != null) {
+                            // re-enable autojoin
+                            config.numNoInternetAccessReports = 0;
+                            config.validatedInternetAccess = true;
                         }
                     }
                     return HANDLED;
