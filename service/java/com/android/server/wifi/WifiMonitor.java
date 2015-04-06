@@ -667,7 +667,7 @@ public class WifiMonitor {
                     return false;
                 } else {
                     if (DBG) Log.d(TAG, "Dropping event because (" + iface + ") is stopped");
-                    return true;
+                    return false;
                 }
             } else {
                 if (DBG) Log.d(TAG, "Sending to all monitors because there's no matching iface");
@@ -700,6 +700,11 @@ public class WifiMonitor {
         public void run() {
             //noinspection InfiniteLoopStatement
             for (;;) {
+                if (!mWifiMonitorSingleton.mConnected) {
+                    Log.d(TAG, "MonitorThread exit because mConnected is false");
+                    break;
+                }
+
                 String eventStr = mWifiNative.waitForEvent();
 
                 // Skip logging the common but mostly uninteresting scan-results event
