@@ -4390,6 +4390,34 @@ public class WifiStateMachine extends StateMachine {
         return mNetworkInfo.getDetailedState();
     }
 
+    private boolean needNetworksPeriodicScan() {
+        List<WifiConfiguration> configs = mWifiConfigStore.getConfiguredNetworks();
+        boolean networkAllDisabled = true;
+
+        // no networks saved
+        if (configs == null || configs.size() == 0) {
+            if (DBG) {
+                log("schedule periodicScan - no networks saved");
+            }
+            return true;
+        }
+
+        // all networks are disabled
+        for (WifiConfiguration config : configs) {
+            if (config.status != WifiConfiguration.Status.DISABLED) {
+                networkAllDisabled = false;
+                break;
+            }
+        }
+        if (networkAllDisabled) {
+            if (DBG) {
+                log("schedule periodicScan - all networks disabled");
+            }
+            return true;
+        }
+
+        return false;
+    }
 
     private SupplicantState handleSupplicantStateChange(Message message) {
         StateChangeResult stateChangeResult = (StateChangeResult) message.obj;
@@ -8084,11 +8112,11 @@ public class WifiStateMachine extends StateMachine {
             }
 
             /**
-             * If we have no networks saved, the supplicant stops doing the periodic scan.
+             * If no networks saved or all network disabled, the supplicant stops doing the periodic scan.
              * The scans are useful to notify the user of the presence of an open network.
              * Note that these are not wake up scans.
              */
-            if (!mP2pConnected.get() && mWifiConfigStore.getConfiguredNetworks().size() == 0) {
+            if (!mP2pConnected.get() && needNetworksPeriodicScan()) {
                 sendMessageDelayed(obtainMessage(CMD_NO_NETWORKS_PERIODIC_SCAN,
                         ++mPeriodicScanToken, 0), mSupplicantScanIntervalMs);
             }
@@ -8106,7 +8134,7 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_NO_NETWORKS_PERIODIC_SCAN:
                     if (mP2pConnected.get()) break;
                     if (message.arg1 == mPeriodicScanToken &&
-                            mWifiConfigStore.getConfiguredNetworks().size() == 0) {
+                            needNetworksPeriodicScan()) {
                         startScan(UNKNOWN_SCAN_SOURCE, -1, null, null);
                         sendMessageDelayed(obtainMessage(CMD_NO_NETWORKS_PERIODIC_SCAN,
                                     ++mPeriodicScanToken, 0), mSupplicantScanIntervalMs);
