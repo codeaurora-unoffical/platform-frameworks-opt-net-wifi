@@ -7441,6 +7441,11 @@ public class WifiStateMachine extends StateMachine {
                     if (bssid != null) {
                         sendNetworkStateChangeBroadcast(bssid);
                     }
+                    if (!mWifiConfigStore.enableAutoJoinWhenAssociated &&
+                           mWifiConfigStore.enableLinkDebouncing &&
+                           linkDebouncing) {
+                        linkDebouncing = false;
+                    }
                     break;
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
