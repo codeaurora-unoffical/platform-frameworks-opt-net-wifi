@@ -639,12 +639,17 @@ public class WifiTetherStateMachine extends StateMachine {
 
         String[] wifiRegexs = mCm.getTetherableWifiRegexs();
         String apInterface = mInterfaceName;
+        String sapServerIp = "192.168.43.1";
 
         if (mContext != null) {
             mWifiManager =
                 (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
             if (mWifiManager != null && mWifiManager.getConcurrency()) {
                 apInterface = mSoftApInterfaceName;
+                // In case of concurrency, change server ip to 192.168.50.1 to
+                // avoid ip address conflict when device connects to an
+                // Android SAP.
+                sapServerIp = "192.168.50.1";
             }
         }
 
@@ -656,7 +661,7 @@ public class WifiTetherStateMachine extends StateMachine {
                     if (ifcg != null) {
                         /* IP/netmask: 192.168.43.1/255.255.255.0 */
                         ifcg.setLinkAddress(new LinkAddress(
-                                    NetworkUtils.numericToInetAddress("192.168.43.1"), 24));
+                                    NetworkUtils.numericToInetAddress(sapServerIp), 24));
                         ifcg.setInterfaceUp();
 
                         mNwService.setInterfaceConfig(intf, ifcg);

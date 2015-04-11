@@ -253,7 +253,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
 
     /* Is chosen as a unique address to avoid conflict with
        the ranges defined in Tethering.java */
-    private static final String SERVER_ADDRESS = "192.168.49.1";
+    private static String SERVER_ADDRESS = "192.168.49.1";
 
     /**
      * Error code definition.
@@ -2101,6 +2101,11 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null, null);
 
                 updateThisDevice(WifiP2pDevice.CONNECTED);
+                if (mWifiManager != null && mWifiManager.getConcurrency()) {
+                    // In case of concurrency, change server ip to 192.168.53.1
+                    // to avoid ip address conflict.
+                    SERVER_ADDRESS = "192.168.53.1";
+                }
 
                 //DHCP server has already been started if I am a group owner
                 if (mGroup.isGroupOwner()) {
@@ -2646,6 +2651,11 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     private void startDhcpServer(String intf) {
         InterfaceConfiguration ifcg = null;
         try {
+            if (mWifiManager != null && mWifiManager.getConcurrency()) {
+                // In case of concurrency, change server ip to 192.168.53.1
+                // to avoid ip address conflict.
+                SERVER_ADDRESS = "192.168.53.1";
+            }
             ifcg = mNwService.getInterfaceConfig(intf);
             ifcg.setLinkAddress(new LinkAddress(NetworkUtils.numericToInetAddress(
                         SERVER_ADDRESS), 24));
