@@ -1966,10 +1966,6 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     break;
                      // Nothing much to be done for following DFS events
                      // just wait for GROUP_STARTED event for updating the UI
-                case WifiMonitor.P2P_CSA_FINISHED_EVENT:
-                    if (DBG) logd("Received CSA_FINISHED event in group negotiation state");
-                    handleP2PDfsCSAFinishedEvent(message);
-                    break;
                 case WifiMonitor.P2P_DFS_RADAR_DETECTED_EVENT:
                     if (DBG) logd("Received RADAR_DETECTED event in group negotiation state");
                     handleP2pDfsRadarDetectedEvent();
