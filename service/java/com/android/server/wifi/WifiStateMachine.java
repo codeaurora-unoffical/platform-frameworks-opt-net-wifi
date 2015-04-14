@@ -5642,18 +5642,16 @@ public class WifiStateMachine extends StateMachine {
             }
             else {
                 if (DBG) log("stopping supplicant");
+                String suppState = System.getProperty("init.svc.wpa_supplicant");
+                if (suppState == null) suppState = "unknown";
+                String p2pSuppState = System.getProperty("init.svc.p2p_supplicant");
+                if (p2pSuppState == null) p2pSuppState = "unknown";
+
+                loge("SupplicantStoppingState: stopSupplicant "
+                        + " init.svc.wpa_supplicant=" + suppState
+                        + " init.svc.p2p_supplicant=" + p2pSuppState);
                 mWifiMonitor.stopSupplicant();
             }
-            String suppState = System.getProperty("init.svc.wpa_supplicant");
-            if (suppState == null) suppState = "unknown";
-            String p2pSuppState = System.getProperty("init.svc.p2p_supplicant");
-            if (p2pSuppState == null) p2pSuppState = "unknown";
-
-            loge("SupplicantStoppingState: stopSupplicant "
-                    + " init.svc.wpa_supplicant=" + suppState
-                    + " init.svc.p2p_supplicant=" + p2pSuppState);
-            mWifiMonitor.stopSupplicant();
-
             /* Send ourselves a delayed message to indicate failure after a wait time */
             sendMessageDelayed(obtainMessage(CMD_STOP_SUPPLICANT_FAILED,
                     ++mSupplicantStopFailureToken, 0), SUPPLICANT_RESTART_INTERVAL_MSECS);
