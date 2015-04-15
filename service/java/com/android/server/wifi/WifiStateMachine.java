@@ -3192,9 +3192,10 @@ public class WifiStateMachine extends StateMachine {
             //              => will use scan offload (i.e. background scan)
             if (!mBackgroundScanSupported) {
                 setScanAlarm(true);
-            } else {
-                mEnableBackgroundScan = true;
             }
+        }
+        if (mBackgroundScanSupported) {
+            mEnableBackgroundScan = (screenOn == false);
         }
         if (DBG) logd("backgroundScan enabled=" + mEnableBackgroundScan
                 + " startBackgroundScanIfNeeded:" + startBackgroundScanIfNeeded);
@@ -5669,7 +5670,14 @@ public class WifiStateMachine extends StateMachine {
                     break;
                 case CMD_GET_SIM_INFO:
                      String mSimInfo =  mWifiNative.getSimInfoNative();
-                     WifiEapSimInfo mWifiEapSimInfo = new WifiEapSimInfo(mSimInfo);
+                     WifiEapSimInfo mWifiEapSimInfo = null;
+                     try {
+                         if (mSimInfo != null) {
+                             mWifiEapSimInfo = new WifiEapSimInfo(mSimInfo);
+                         }
+                     } catch (IllegalArgumentException e) {
+                         loge("Exception: EAP-SIM not supported");
+                     }
                      if (mWifiEapSimInfo != null) {
                          replyToMessage(message, message.what ,(WifiEapSimInfo) mWifiEapSimInfo);
                      } else {
@@ -8198,10 +8206,6 @@ public class WifiStateMachine extends StateMachine {
                         messageHandlingStatus = MESSAGE_HANDLING_STATUS_REFUSED;
                         return HANDLED;
                     }
-                    /* Disable background scan temporarily during a regular scan */
-                    if (mEnableBackgroundScan) {
-                        enableBackgroundScan(false);
-                    }
                     if (message.arg1 == SCAN_ALARM_SOURCE) {
                         // Check if the CMD_START_SCAN message is obsolete (and thus if it should
                         // not be processed) and restart the scan
@@ -8220,9 +8224,29 @@ public class WifiStateMachine extends StateMachine {
                                     + " -> obsolete");
                             return HANDLED;
                         }
+                        /*
+                         * Disable background scan temporarily during a
+                         * regular scan.
+                         */
+                        if (mEnableBackgroundScan) {
+                            enableBackgroundScan(false);
+                        }
                         handleScanRequest(WifiNative.SCAN_WITHOUT_CONNECTION_SETUP, message);
                         ret = HANDLED;
                     } else {
+                        /*
+                         * The SCAN request is not handled in this state and
+                         * would eventually might/will get handled in the
+                         * parent's state. The PNO, if already enabled had to
+                         * get disabled before the SCAN trigger. Hence, stop
+                         * the PNO if already enabled in this state, though the
+                         * SCAN request is not handled(PNO disable before the
+                         * SCAN trigger in any other state is not the right
+                         * place to issue).
+                         */
+                        if (mEnableBackgroundScan) {
+                            enableBackgroundScan(false);
+                        }
                         ret = NOT_HANDLED;
                     }
                     break;
