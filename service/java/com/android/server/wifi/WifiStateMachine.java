@@ -5707,6 +5707,9 @@ public class WifiStateMachine extends StateMachine {
                             mWifiNative.disable5GHzFrequencies(false);
                             mDisabled5GhzFrequencies = false;
                         }
+                        if (mEnableBackgroundScan) {
+                            enableBackgroundScan(false);
+                        }
                         // Fetch the latest scan results when frequency band is set
                         startScanNative(WifiNative.SCAN_WITHOUT_CONNECTION_SETUP, null);
 
