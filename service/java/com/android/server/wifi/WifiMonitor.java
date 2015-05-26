@@ -675,7 +675,7 @@ public class WifiMonitor {
                     return false;
                 } else {
                     if (DBG) Log.d(TAG, "Dropping event because (" + iface + ") is stopped");
-                    return true;
+                    return false;
                 }
             } else {
                 if (DBG) Log.d(TAG, "Sending to all monitors because there's no matching iface");
