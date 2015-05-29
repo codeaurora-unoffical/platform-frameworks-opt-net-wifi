@@ -2809,15 +2809,16 @@ public class WifiConfigStore extends IpConfigStore {
                           (config.wepKeys[i] != null) &&
                           (savedConfig.wepKeys[i] != null) &&
                           (savedConfig.wepKeys[i].equals(config.wepKeys[i])))) {
-                       if (config.wepKeys[i] != null && !config.wepKeys[i].equals("*") &&
-                           !mWifiNative.setNetworkVariable(
+                       if (config.wepKeys[i] != null && !config.wepKeys[i].equals("*")) {
+                          if(!mWifiNative.setNetworkVariable(
                                                 netId,
                                                 WifiConfiguration.wepKeyVarNames[i],
                                                 config.wepKeys[i])) {
                             loge("failed to set wep_key" + i + ": " + config.wepKeys[i]);
                             break setVariables;
-                        }
-                        hasSetKey = true;
+                          }
+                            hasSetKey = true;
+                       }
                    }
               }
           }
