@@ -3158,9 +3158,11 @@ public class WifiStateMachine extends StateMachine {
         }
         mScreenBroadcastReceived.set(true);
 
-        getWifiLinkLayerStats(false);
-        mOnTimeScreenStateChange = mOnTime;
-        lastScreenStateChangeTimeStamp = lastLinkLayerStatsUpdate;
+        if (mIsRunning) {
+            getWifiLinkLayerStats(false);
+            mOnTimeScreenStateChange = mOnTime;
+            lastScreenStateChangeTimeStamp = lastLinkLayerStatsUpdate;
+        }
         mEnableBackgroundScan = false;
         cancelDelayedScan();
 
