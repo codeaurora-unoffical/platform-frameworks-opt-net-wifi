@@ -778,13 +778,7 @@ public class WifiConfigStore extends IpConfigStore {
 
         // Reset the priority of each network at start or if it goes too high.
         if (mLastPriority == -1 || mLastPriority > 1000000) {
-            for(WifiConfiguration config : mConfiguredNetworks.values()) {
-                if (config.networkId != INVALID_NETWORK_ID) {
-                    config.priority = 0;
-                    addOrUpdateNetworkNative(config, -1);
-                }
-            }
-            mLastPriority = 0;
+            resetNetworkPriority();
         }
 
         // Set to the highest priority and save the configuration.
@@ -1235,7 +1229,11 @@ public class WifiConfigStore extends IpConfigStore {
      */
     WpsResult startWpsWithPinFromDevice(WpsInfo config) {
         WpsResult result = new WpsResult();
-        result.pin = mWifiNative.startWpsPinDisplay(config.BSSID);
+        if (mLastPriority == -1 || mLastPriority > 1000000) {
+            resetNetworkPriority();
+        }
+        result.pin = mWifiNative.startWpsPinDisplay(config.BSSID,
+                ++mLastPriority);
         /* WPS leaves all networks disabled */
         if (!TextUtils.isEmpty(result.pin)) {
             markAllNetworksDisabled();
@@ -1254,7 +1252,11 @@ public class WifiConfigStore extends IpConfigStore {
      */
     WpsResult startWpsPbc(WpsInfo config) {
         WpsResult result = new WpsResult();
-        if (mWifiNative.startWpsPbc(config.BSSID)) {
+        if (mLastPriority == -1 || mLastPriority > 1000000) {
+            resetNetworkPriority();
+        }
+
+        if (mWifiNative.startWpsPbc(config.BSSID, ++mLastPriority)) {
             /* WPS leaves all networks disabled */
             markAllNetworksDisabled();
             result.status = WpsResult.Status.SUCCESS;
@@ -4131,6 +4133,16 @@ public class WifiConfigStore extends IpConfigStore {
         } catch (CertificateException e2) {
             return false;
         }
+    }
+
+    private void resetNetworkPriority() {
+        for(WifiConfiguration config : mConfiguredNetworks.values()) {
+            if (config.networkId != INVALID_NETWORK_ID) {
+                config.priority = 0;
+                addOrUpdateNetworkNative(config, -1);
+            }
+        }
+        mLastPriority = 0;
     }
 
     void removeKeys(WifiEnterpriseConfig config) {
