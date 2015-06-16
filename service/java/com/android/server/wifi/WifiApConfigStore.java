@@ -19,10 +19,12 @@ package com.android.server.wifi;
 import android.content.Context;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
+import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Messenger;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -157,6 +159,11 @@ class WifiApConfigStore extends StateMachine {
                 return;
             }
             config.SSID = in.readUTF();
+            if (mContext.getResources().getBoolean(
+                    com.android.internal.R.bool
+                    .config_regional_hotspot_show_broadcast_ssid_checkbox)) {
+                config.hiddenSSID = in.readBoolean();
+            }
             int authType = in.readInt();
             config.allowedKeyManagement.set(authType);
             if (authType != KeyMgmt.NONE) {
@@ -186,6 +193,11 @@ class WifiApConfigStore extends StateMachine {
 
             out.writeInt(AP_CONFIG_FILE_VERSION);
             out.writeUTF(config.SSID);
+            if (mContext.getResources().getBoolean(
+                    com.android.internal.R.bool
+                    .config_regional_hotspot_show_broadcast_ssid_checkbox)) {
+                out.writeBoolean(config.hiddenSSID ? true : false);
+            }
             int authType = config.getAuthType();
             out.writeInt(authType);
             if(authType != KeyMgmt.NONE) {
@@ -212,7 +224,13 @@ class WifiApConfigStore extends StateMachine {
         config.SSID = mContext.getResources().getString(
                 R.string.def_wifi_wifihotspot_ssid);
         if (TextUtils.isEmpty(config.SSID)) {
-            config.SSID = mContext.getString(R.string.wifi_tether_configure_ssid_default);
+            if (mContext.getResources().getBoolean(
+                    com.android.internal.R.bool
+                    .config_regional_hotspot_default_ssid_with_imei_enable)) {
+                config.SSID =  getDefSSIDwithIMEI();
+            } else {
+                config.SSID = mContext.getString(R.string.wifi_tether_configure_ssid_default);
+            }
         }
 
         config.allowedKeyManagement.set(mContext.getResources().getBoolean(
@@ -230,4 +248,15 @@ class WifiApConfigStore extends StateMachine {
         sendMessage(WifiStateMachine.CMD_SET_AP_CONFIG, config);
     }
 
+    private String getDefSSIDwithIMEI() {
+        TelephonyManager tm = (TelephonyManager) mContext.getSystemService(
+                Context.TELEPHONY_SERVICE);
+        //Get device IMEI
+        String deviceId = tm.getDeviceId();
+        String SSID = Build.MODEL;
+        if ((deviceId != null) && (deviceId.length() >3)) {
+            SSID = SSID + " " + deviceId.substring(deviceId.length()-4);
+        }
+        return SSID;
+    }
 }
