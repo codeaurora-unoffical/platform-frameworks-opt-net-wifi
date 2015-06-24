@@ -1697,6 +1697,14 @@ public class WifiConfigStore extends IpConfigStore {
                 needUpdate = true;
             }
         }
+        final List<Long> deletedSSIDs = new ArrayList<Long>();
+        for (Long csum : mDeletedSSIDs) {
+            deletedSSIDs.add(new Long(csum));
+        }
+        final List<String> deletedEphemeralSSIDs = new ArrayList<String>();
+        for (String ssid: mDeletedEphemeralSSIDs) {
+            deletedEphemeralSSIDs.add(new String(ssid));
+        }
         if (VDBG) {
             loge(" writeKnownNetworkHistory() num networks:" +
                     mConfiguredNetworks.size() + " needWrite=" + needUpdate);
@@ -1859,15 +1867,15 @@ public class WifiConfigStore extends IpConfigStore {
                     out.writeUTF(SEPARATOR_KEY);
                     out.writeUTF(SEPARATOR_KEY);
                 }
-                if (mDeletedSSIDs != null && mDeletedSSIDs.size() > 0) {
-                    for (Long i : mDeletedSSIDs) {
+                if (deletedSSIDs.size() > 0) {
+                    for (Long i : deletedSSIDs) {
                         out.writeUTF(DELETED_CRC32_KEY);
                         out.writeUTF(String.valueOf(i));
                         out.writeUTF(SEPARATOR_KEY);
                     }
                 }
-                if (mDeletedEphemeralSSIDs != null && mDeletedEphemeralSSIDs.size() > 0) {
-                    for (String ssid : mDeletedEphemeralSSIDs) {
+                if (deletedEphemeralSSIDs.size() > 0) {
+                    for (String ssid : deletedEphemeralSSIDs) {
                         out.writeUTF(DELETED_EPHEMERAL_KEY);
                         out.writeUTF(ssid);
                         out.writeUTF(SEPARATOR_KEY);
@@ -2877,15 +2885,16 @@ public class WifiConfigStore extends IpConfigStore {
                           (config.wepKeys[i] != null) &&
                           (savedConfig.wepKeys[i] != null) &&
                           (savedConfig.wepKeys[i].equals(config.wepKeys[i])))) {
-                       if (config.wepKeys[i] != null && !config.wepKeys[i].equals("*") &&
-                           !mWifiNative.setNetworkVariable(
+                       if (config.wepKeys[i] != null && !config.wepKeys[i].equals("*")) {
+                          if(!mWifiNative.setNetworkVariable(
                                                 netId,
                                                 WifiConfiguration.wepKeyVarNames[i],
                                                 config.wepKeys[i])) {
                             loge("failed to set wep_key" + i + ": " + config.wepKeys[i]);
                             break setVariables;
-                        }
-                        hasSetKey = true;
+                          }
+                            hasSetKey = true;
+                       }
                    }
               }
           }

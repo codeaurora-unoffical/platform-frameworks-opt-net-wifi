@@ -76,6 +76,7 @@ LOCAL_SHARED_LIBRARIES += \
 	libnl \
 	libandroid_runtime \
 	libutils \
+	libhardware_legacy \
 	libdl
 
 LOCAL_STATIC_LIBRARIES += $(LIB_WIFI_HAL)
