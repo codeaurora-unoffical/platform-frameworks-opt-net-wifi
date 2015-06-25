@@ -1974,10 +1974,6 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     if (DBG) logd("Received CAC_STARTED event in group negotiation state");
                     handleP2PDfsCACStartedEvent();
                     break;
-                case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
-                    if (DBG) logd("Received CAC_COMPLETED event in group negotiation state");
-                    handleP2PDfsCACCompletedEvent();
-                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -2398,6 +2394,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     handleP2PDfsCSAFinishedEvent(message);
                     break;
                 case WifiMonitor.P2P_DFS_CAC_STARTED_EVENT:
+                    handleP2PDfsCACStartedEvent();
                     if (DBG) logd("CAC_STARTED event received");
                     break;
                 case WifiMonitor.P2P_DFS_CAC_COMPLETED_EVENT:
@@ -2611,7 +2608,7 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             // have resumed, update the UI accordingly
             sendP2pAutonomousGOStateChangedBroadcast(
                     WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED,
-                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_CSA_FINISHED);
             if (DBG) {
                 logd("Updating UI with p2p-go started event");
             }
@@ -2633,15 +2630,12 @@ public final class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         // The cac complete event implicitely indicates p2p
         // group restart. Indicate the same to UI if mDfsMode
         // is set
-        if (mDfsMode == 1) {
-            mDfsMode = 0;
             sendP2pAutonomousGOStateChangedBroadcast(
                     WifiP2pManager.WIFI_P2P_AUTONOMOUS_GO_STARTED,
-                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_RADAR_DETECTED);
+                    WifiP2pManager.WIFI_P2P_GO_STATE_CHANGE_REASON_CAC_COMPLETED);
             if (DBG) {
                 logd("Updating UI with p2p-go started event");
             }
-        }
     }
 
     private void startDhcpServer(String intf) {
