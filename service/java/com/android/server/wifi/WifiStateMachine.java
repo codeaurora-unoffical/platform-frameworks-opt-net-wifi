@@ -1144,7 +1144,7 @@ public class WifiStateMachine extends StateMachine {
     PendingIntent getPrivateBroadcast(String action, int requestCode) {
         Intent intent = new Intent(action, null);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-        intent.setPackage(this.getClass().getPackage().getName());
+        intent.setPackage(mContext.getPackageName());
         return PendingIntent.getBroadcast(mContext, requestCode, intent, 0);
     }
 
@@ -5759,7 +5759,7 @@ public class WifiStateMachine extends StateMachine {
 
                     /* send regular delayed shut down */
                     Intent driverStopIntent = new Intent(ACTION_DELAYED_DRIVER_STOP, null);
-                    driverStopIntent.setPackage(this.getClass().getPackage().getName());
+                    driverStopIntent.setPackage(mContext.getPackageName());
                     driverStopIntent.putExtra(DELAYED_STOP_COUNTER, mDelayedStopCounter);
                     mDriverStopIntent = PendingIntent.getBroadcast(mContext,
                             DRIVER_STOP_REQUEST, driverStopIntent,
