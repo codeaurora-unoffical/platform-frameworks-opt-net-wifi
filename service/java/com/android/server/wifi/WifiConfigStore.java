@@ -2956,13 +2956,8 @@ public class WifiConfigStore extends IpConfigStore {
                 break setVariables;
           }
 
-          if (!((newNetwork == false) && (savedConfig != null) &&
-                (savedConfig.enterpriseConfig != null) &&
-                (config.enterpriseConfig != null) &&
-                (savedConfig.enterpriseConfig.getEapMethod() ==
-                 config.enterpriseConfig.getEapMethod())) &&
-                 config.enterpriseConfig != null &&
-                    config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE) {
+          if (config.enterpriseConfig != null &&
+                  config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.NONE) {
 
                 WifiEnterpriseConfig enterpriseConfig = config.enterpriseConfig;
 
@@ -2997,13 +2992,23 @@ public class WifiConfigStore extends IpConfigStore {
                 }
 
                 HashMap<String, String> enterpriseFields = enterpriseConfig.getFields();
+                HashMap<String, String> savedEnterpriseFields = null;
+                String savedValue = null;
+                if (savedConfig != null && savedConfig.enterpriseConfig != null) {
+                    savedEnterpriseFields = savedConfig.enterpriseConfig.getFields();
+                }
                 for (String key : enterpriseFields.keySet()) {
                         String value = enterpriseFields.get(key);
+                        if (savedEnterpriseFields != null) {
+                            savedValue = savedEnterpriseFields.get(key);
+                        }
                         if (key.equals("password") && value != null && value.equals("*")) {
                             // No need to try to set an obfuscated password, which will fail
                             continue;
                         }
-                        if (!mWifiNative.setNetworkVariable(
+                        if (!((newNetwork == false) && (savedValue != null) &&
+                               value != null && value.equals(savedValue)) &&
+                               !mWifiNative.setNetworkVariable(
                                     netId,
                                     key,
                                     value)) {
