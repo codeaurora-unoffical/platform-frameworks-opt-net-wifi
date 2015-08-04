@@ -148,7 +148,9 @@ public class WifiNative {
 
     public void closeSupplicantConnection() {
         localLog(mInterfacePrefix + "closeSupplicantConnection");
-        closeSupplicantConnectionNative();
+        synchronized (mLock) {
+            closeSupplicantConnectionNative();
+        }
     }
 
     public String waitForEvent() {
