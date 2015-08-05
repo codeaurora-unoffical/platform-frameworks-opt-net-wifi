@@ -5260,13 +5260,11 @@ public class WifiStateMachine extends StateMachine {
 
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
                     mWifiNative.enableSaveConfig();
+                    enableVerboseLogging(mWifiConfigStore.enableVerboseLogging);
                     mWifiConfigStore.loadAndEnableAllNetworks();
                     if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
                         && !mWifiConfigStore.shouldAutoConnect()) {
                         mWifiConfigStore.disableAllNetworks();
-                    }
-                    if (mWifiConfigStore.enableVerboseLogging > 0) {
-                        enableVerboseLogging(mWifiConfigStore.enableVerboseLogging);
                     }
                     if (mWifiConfigStore.associatedPartialScanPeriodMilli < 0) {
                         mWifiConfigStore.associatedPartialScanPeriodMilli = 0;
