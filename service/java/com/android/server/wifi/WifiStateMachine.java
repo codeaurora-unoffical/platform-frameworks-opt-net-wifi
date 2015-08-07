@@ -112,6 +112,9 @@ import java.io.BufferedReader;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.Inet4Address;
@@ -5344,7 +5347,9 @@ public class WifiStateMachine extends StateMachine {
             logStateAndMessage(message, getClass().getSimpleName());
             switch (message.what) {
                 case CMD_START_SUPPLICANT:
+                    kpiBootMarkers("Driver loading...");
                     if (mWifiNative.loadDriver()) {
+                         kpiBootMarkers("Driver loaded");
                         try {
                             mNwService.wifiFirmwareReload(mInterfaceName, "STA");
                         } catch (Exception e) {
@@ -7038,6 +7043,7 @@ public class WifiStateMachine extends StateMachine {
                     mWifiConnectionStatistics.numWifiManagerJoinAttempt++;
                     boolean updatedExisting = false;
 
+                    kpiBootMarkers("Connecting to Ap");
                     /* Save the network config */
                     if (config != null) {
                         String configKey = config.configKey(true /* allowCached */);
@@ -7256,6 +7262,7 @@ public class WifiStateMachine extends StateMachine {
                     mWifiInfo.setBSSID(mLastBssid);
                     mWifiInfo.setNetworkId(mLastNetworkId);
 
+                    kpiBootMarkers("Connected");
                     sendNetworkStateChangeBroadcast(mLastBssid);
 
                     // Start P2P Group on STA channel
@@ -7299,6 +7306,7 @@ public class WifiStateMachine extends StateMachine {
                     // at the chip etc...
                     if (DBG) log("ConnectModeState: Network connection lost ");
                     handleNetworkDisconnect();
+                    kpiBootMarkers("Connection Lost");
                     transitionTo(mDisconnectedState);
                     break;
                 default:
@@ -7505,12 +7513,14 @@ public class WifiStateMachine extends StateMachine {
                 case CMD_IP_CONFIGURATION_SUCCESSFUL:
                     handleSuccessfulIpConfiguration();
                     sendConnectedState();
+                    kpiBootMarkers("DHCP Success");
                     transitionTo(mConnectedState);
                     break;
                 case CMD_IP_CONFIGURATION_LOST:
                     // Get Link layer stats so as we get fresh tx packet counters
                     getWifiLinkLayerStats(true);
                     handleIpConfigurationLost();
+                    kpiBootMarkers("DHCP Failed");
                     transitionTo(mDisconnectingState);
                     break;
                 case CMD_DISCONNECT:
@@ -9236,4 +9246,20 @@ public class WifiStateMachine extends StateMachine {
                   mStartWithchannel);
         }
     }
+
+  private void kpiBootMarkers(String module) {
+
+        try {
+             File f = new File("/proc/bootkpi/marker_entry");
+             if (f != null && f.exists()) {
+                 FileOutputStream fos = new FileOutputStream(f);
+                 byte[] marker_name = ("WLAN Enable:" + module).getBytes();
+                 fos.write(marker_name);
+                 fos.flush();
+                 fos.close();
+             }
+        } catch (IOException e) {
+               e.printStackTrace();
+        }
+  }
 }
