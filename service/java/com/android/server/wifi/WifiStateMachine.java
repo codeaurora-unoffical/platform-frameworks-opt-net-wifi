@@ -5257,6 +5257,9 @@ public class WifiStateMachine extends StateMachine {
 
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
                     mWifiNative.enableSaveConfig();
+                    if (mWifiConfigStore.enableAutoJoinWhenAssociated) {
+                        mWifiNative.disconnect();
+                    }
                     mWifiConfigStore.loadAndEnableAllNetworks();
                     if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
                         && !mWifiConfigStore.shouldAutoConnect()) {
