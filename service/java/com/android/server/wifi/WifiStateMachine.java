@@ -6017,6 +6017,13 @@ public class WifiStateMachine extends StateMachine {
                             }
                         }
 
+                        // With auto join disabled, Supplicant will select network based on scan results.
+                        // But now supplicant is in disconnected state, so issue a reconnect to clear the
+                        // disconnected flag.
+                        if (!mWifiConfigStore.enableAutoJoinWhenAssociated) {
+                            mWifiNative.reconnect();
+                        }
+
                         // Try autojoining with recent network already present in the cache
                         // If none are found then trigger a scan which will trigger autojoin
                         // upon reception of scan results event
