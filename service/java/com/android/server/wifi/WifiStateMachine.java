@@ -3182,10 +3182,9 @@ public class WifiStateMachine extends StateMachine {
         if (DBG) logd("backgroundScan enabled=" + mEnableBackgroundScan
                 + " startBackgroundScanIfNeeded:" + startBackgroundScanIfNeeded);
         if (startBackgroundScanIfNeeded) {
-            if (mEnableBackgroundScan) {
-                if (!enableBackgroundScan(true)) {
-                    handlePnoFailError();
-                }
+            // to scan for them in background, we need all networks enabled
+            if(!enableBackgroundScan(mEnableBackgroundScan)) {
+               handlePnoFailError();
             }
         }
         if (DBG) log("handleScreenStateChanged Exit: " + screenOn);
