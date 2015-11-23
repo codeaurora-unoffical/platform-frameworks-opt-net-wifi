@@ -7985,6 +7985,25 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                 case CMD_PNO_NETWORK_FOUND:
                     processPnoNetworkFound((ScanResult[])message.obj);
                     break;
+                case WifiMonitor.SUBNET_STATUS_UPDATE_EVENT:
+                    // subnet status change event comes from the supplicant
+                    // after roaming. IP refresh is required if the device
+                    // has roamed into a different IP subnet
+                    loge("Received WifiMonitor.SUBNET_STATUS_UPDATE_EVENT in ConnectModeState");
+                    if (getNetworkDetailedState() == DetailedState.CONNECTED) {
+                        int subnetStatus = message.arg1;
+                        // 0 = unknown, 1 = unchanged, 2 = changed
+                        if (subnetStatus == 2) {
+                            logd("Change in IP subnet, refreshing IP address");
+                            stopDhcp();
+                            // Remove any IP address on the interface. If not, the dhcpcd
+                            // will try to rebind the same interface address
+                            clearIPv4Address(mInterfaceName);
+                            setNetworkDetailedState(DetailedState.OBTAINING_IPADDR);
+                            transitionTo(mObtainingIpState);
+                        }
+                    }
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -9168,6 +9187,25 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                                 WifiManager.ERROR);
                         messageHandlingStatus = MESSAGE_HANDLING_STATUS_FAIL;
                         break;
+                    }
+                    break;
+                case WifiMonitor.SUBNET_STATUS_UPDATE_EVENT:
+                    // subnet status change event comes from the supplicant
+                    // after roaming. IP refresh is required if the device
+                    // has roamed into a different IP subnet
+                    loge("Received WifiMonitor.SUBNET_STATUS_UPDATE_EVENT in ConnectedState");
+                    if (getNetworkDetailedState() == DetailedState.CONNECTED) {
+                        int subnetStatus = message.arg1;
+                        // 0 = unknown, 1 = unchanged, 2 = changed
+                        if (subnetStatus == 2) {
+                            logd("Change in IP subnet, refreshing IP address");
+                            stopDhcp();
+                            // Remove any IP address on the interface. If not, the dhcpcd
+                            // will try to rebind the same interface address
+                            clearIPv4Address(mInterfaceName);
+                            setNetworkDetailedState(DetailedState.OBTAINING_IPADDR);
+                            transitionTo(mObtainingIpState);
+                        }
                     }
                     break;
                 default:

@@ -72,6 +72,7 @@ public class WifiMonitor {
     private static final int BSS_REMOVED  = 13;
     private static final int UNKNOWN      = 14;
     private static final int SCAN_FAILED  = 15;
+    private static final int SUBNET_STATUS_UPDATE = 16;
 
     /** All events coming from the supplicant start with this prefix */
     private static final String EVENT_PREFIX_STR = "CTRL-EVENT-";
@@ -431,6 +432,9 @@ public class WifiMonitor {
     private static final String AP_STA_DISCONNECTED_STR = "AP-STA-DISCONNECTED";
     private static final String ANQP_DONE_STR = "ANQP-QUERY-DONE";
 
+    /* WPA_EVENT_SUBNET_STATUS_UPDATE status=0|1|2 */
+    private static final String SUBNET_STATUS_UPDATE_STR ="SUBNET-STATUS-UPDATE";
+
     /* Supplicant events reported to a state machine */
     private static final int BASE = Protocol.BASE_WIFI_MONITOR;
 
@@ -509,6 +513,9 @@ public class WifiMonitor {
     /* hotspot 2.0 events */
     public static final int HS20_REMEDIATION_EVENT               = BASE + 61;
     public static final int HS20_DEAUTH_EVENT                    = BASE + 62;
+
+    /* subnet status change event */
+    public static final int SUBNET_STATUS_UPDATE_EVENT           = BASE + 63;
 
     /**
      * This indicates a read error on the monitor socket conenction
@@ -896,6 +903,8 @@ public class WifiMonitor {
             event = BSS_ADDED;
         } else if (eventName.equals(BSS_REMOVED_STR)) {
             event = BSS_REMOVED;
+        } else if (eventName.equals(SUBNET_STATUS_UPDATE_STR)) {
+            event = SUBNET_STATUS_UPDATE;
         } else
             event = UNKNOWN;
 
@@ -1031,6 +1040,9 @@ public class WifiMonitor {
 
             case SCAN_FAILED:
                 mStateMachine.sendMessage(SCAN_FAILED_EVENT);
+                break;
+            case SUBNET_STATUS_UPDATE:
+                handleSupplicantVendorDebugEvent(remainder);
                 break;
 
             case UNKNOWN:
@@ -1505,5 +1517,48 @@ public class WifiMonitor {
         mStateMachine.sendMessage(mStateMachine.obtainMessage(SUPPLICANT_STATE_CHANGE_EVENT,
                 eventLogCounter, 0,
                 new StateChangeResult(networkId, wifiSsid, BSSID, newState)));
+    }
+
+    /**
+     * Send subnet change status to state machine
+     */
+    private void notifyIpSubnetStatusChange(int subnetStatus) {
+        /* valid values for subnet status are:
+         * 0 = unknown, 1 = unchanged, 2 = changed
+         */
+        if (subnetStatus < 0 || subnetStatus > 2) {
+            Log.e(TAG, "Invalid IP subnet status: " + subnetStatus);
+            return;
+        }
+
+        mStateMachine.sendMessage(SUBNET_STATUS_UPDATE_EVENT, subnetStatus);
+    }
+
+    /**
+     * Handle vendor specific events from the supplicant
+     */
+    private void handleSupplicantVendorDebugEvent(String eventStr) {
+        int subnetStatus = 0;
+
+        if (DBG) Log.w(TAG, "IP subnet status change event - " + eventStr);
+
+        String[] tokens = eventStr.split(" ");
+        if (tokens.length < 2) {
+            Log.e(TAG, "IP subnet status event: Invalid tokens");
+            return;
+        }
+        String[] nameValue = tokens[1].split("=");
+        if (nameValue.length != 2) {
+            Log.e(TAG, "IP subnet status event: Invalid nameValue");
+            return;
+        }
+
+        try {
+            subnetStatus = Integer.parseInt(nameValue[1]);
+        } catch (NumberFormatException e) {
+             e.printStackTrace();
+        }
+
+        notifyIpSubnetStatusChange(subnetStatus);
     }
 }
