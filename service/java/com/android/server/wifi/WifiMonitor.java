@@ -431,6 +431,28 @@ public class WifiMonitor {
     private static final String AP_STA_DISCONNECTED_STR = "AP-STA-DISCONNECTED";
     private static final String ANQP_DONE_STR = "ANQP-QUERY-DONE";
 
+    /* DFS-RADAR-DETECTED */
+    /* Supplicant event to indicate radar detection */
+    private static final String DFS_RADAR_DETECTED_STR = "DFS-RADAR-DETECTED";
+
+    /* AP-CSA-FINISHED freq=XY dfs=[0 | 1 ]. This event is sent by the
+     * supplicant after successfully changing the channel post radar detection
+     */
+    private static final String AP_CSA_FINISHED_STR = "AP-CSA-FINISHED";
+
+    /* DFS-CAC-START */
+    /* Channel availability check is done after the channel change post radar
+     * detection to listen to potential radars on the new channel. This event
+     * is sent by the supplicant.
+     */
+    private static final String DFS_CAC_STARTED_STR = "DFS-CAC-START";
+
+    /* DFS-CAC-COMPLETED */
+    /* This event sent by the supplicant to indicate the end of channel
+     * availability check and no radar detection
+     */
+     private static final String DFS_CAC_COMPLETED_STR = "DFS-CAC-COMPLETED";
+
     /* Supplicant events reported to a state machine */
     private static final int BASE = Protocol.BASE_WIFI_MONITOR;
 
@@ -509,6 +531,11 @@ public class WifiMonitor {
     /* hotspot 2.0 events */
     public static final int HS20_REMEDIATION_EVENT               = BASE + 61;
     public static final int HS20_DEAUTH_EVENT                    = BASE + 62;
+
+    public static final int P2P_CSA_FINISHED_EVENT               = BASE + 70;
+    public static final int P2P_DFS_RADAR_DETECTED_EVENT         = BASE + 71;
+    public static final int P2P_DFS_CAC_STARTED_EVENT            = BASE + 72;
+    public static final int P2P_DFS_CAC_COMPLETED_EVENT          = BASE + 73;
 
     /**
      * This indicates a read error on the monitor socket conenction
@@ -820,7 +847,11 @@ public class WifiMonitor {
                 mStateMachine.sendMessage(WPS_OVERLAP_EVENT);
             } else if (eventStr.startsWith(WPS_TIMEOUT_STR)) {
                 mStateMachine.sendMessage(WPS_TIMEOUT_EVENT);
-            } else if (eventStr.startsWith(P2P_EVENT_PREFIX_STR)) {
+            } else if (eventStr.startsWith(P2P_EVENT_PREFIX_STR) ||
+                eventStr.contains(AP_CSA_FINISHED_STR) ||
+                eventStr.contains(DFS_RADAR_DETECTED_STR) ||
+                eventStr.contains(DFS_CAC_STARTED_STR) ||
+                eventStr.contains(DFS_CAC_COMPLETED_STR)) {
                 handleP2pEvents(eventStr);
             } else if (eventStr.startsWith(HOST_AP_EVENT_PREFIX_STR)) {
                 handleHostApEvents(eventStr);
@@ -1204,7 +1235,46 @@ public class WifiMonitor {
         } else if (dataString.startsWith(P2P_REMOVE_AND_REFORM_GROUP_STR)) {
             Log.d(TAG, "Received event= " + dataString);
             mStateMachine.sendMessage(P2P_REMOVE_AND_REFORM_GROUP_EVENT);
+        } else if (dataString.startsWith(AP_CSA_FINISHED_STR)) {
+            Log.d(TAG, "Received event= " + dataString);
+            handleP2pDfsCsaFinishedEvent(dataString);
+        } else if (dataString.startsWith(DFS_RADAR_DETECTED_STR)) {
+            Log.d(TAG, "Received event= " + dataString);
+            mStateMachine.sendMessage(P2P_DFS_RADAR_DETECTED_EVENT);
+        } else if (dataString.startsWith(DFS_CAC_STARTED_STR)) {
+            Log.d(TAG, "Received event= " + dataString);
+            mStateMachine.sendMessage(P2P_DFS_CAC_STARTED_EVENT);
+        } else if (dataString.startsWith(DFS_CAC_COMPLETED_STR)) {
+            Log.d(TAG, "Received event= " + dataString);
+            mStateMachine.sendMessage(P2P_DFS_CAC_COMPLETED_EVENT);
+	}
+    }
+
+    /**
+     * Handle dfs channel change event. The event comes with following data
+     * freq = XY dfs = 0|1
+     */
+    private void handleP2pDfsCsaFinishedEvent(String dataString) {
+        String[] tokens = dataString.split(" ");
+        int freq=0, dfs=0;
+
+        for (String token : tokens) {
+            String[] nameValue = token.split("=");
+            if (nameValue.length != 2) {
+                continue;
+            }
+            if (nameValue[0].equals("freq")) {
+                freq = Integer.parseInt(nameValue[1]);
+                continue;
+            }
+            if (nameValue[0].equals("dfs"))  {
+                dfs = Integer.parseInt(nameValue[1]);
+                continue;
+            }
+
+            /* The token values received from the supplicant */
         }
+        mStateMachine.sendMessage(P2P_CSA_FINISHED_EVENT, freq, dfs);
     }
 
     /**
