@@ -6585,30 +6585,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             logd("SupplicantStoppingState: stopSupplicant "
                     + " init.svc.wpa_supplicant=" + suppState
                     + " init.svc.p2p_supplicant=" + p2pSuppState);
-            int wifiApState = 0;
-            if (mWifiTetherStateMachine != null) {
-                wifiApState = mWifiTetherStateMachine.syncGetWifiApState();
-            }
-            if ((wifiApState == WifiManager.WIFI_AP_STATE_ENABLING) ||
-                (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
-                log("Do not stop supplicant, just bring down interface");
-                try {
-                      String Interfaces = mWifiNative.getInterfaceList();
-                      String[] intf = Interfaces.split("\n");
-                      for (String i : intf) {
-                          if (DBG) log("Setting interface down " +i);
-                          mNwService.setInterfaceDown(i);
-                      }
-                } catch (RemoteException re) {
-                      loge("RE: Unable to change interface settings: " + re);
-                } catch (IllegalStateException ie) {
-                      loge("IE: Unable to change interface settings: " + ie);
-                }
-            }
-            else {
-                if (DBG) log("stopping supplicant");
-                mWifiMonitor.stopSupplicant();
-            }
+
+            mWifiMonitor.stopSupplicant();
 
             /* Send ourselves a delayed message to indicate failure after a wait time */
             sendMessageDelayed(obtainMessage(CMD_STOP_SUPPLICANT_FAILED,
