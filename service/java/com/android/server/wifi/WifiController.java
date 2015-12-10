@@ -120,6 +120,9 @@ class WifiController extends StateMachine {
     static final int CMD_USER_PRESENT               = BASE + 12;
     static final int CMD_AP_START_FAILURE           = BASE + 13;
 
+    private static final int WIFI_DISABLED = 0;
+    private static final int WIFI_ENABLED = 1;
+
     private DefaultState mDefaultState = new DefaultState();
     private StaEnabledState mStaEnabledState = new StaEnabledState();
     private ApStaDisabledState mApStaDisabledState = new ApStaDisabledState();
@@ -455,32 +458,13 @@ class WifiController extends StateMachine {
                     break;
                 case CMD_SET_AP:
                     if (msg.arg1 == 1) {
-                        if (mWifiTetherStateMachine != null) {
-                            if (!mApStaExist) {
-                                mWifiTetherStateMachine.setHostApRunning(
-                                        (WifiConfiguration) msg.obj, true);
-                                mApStaExist = true;
-                                if (DBG) {
-                                    Slog.d(TAG, "CMD_SET_AP: SET Host AP True");
-                                }
-                                transitionTo(mApEnabledState);
-                            }
-                        } else {
-                            mWifiStateMachine.setHostApRunning(
-                              (WifiConfiguration) msg.obj, true);
-                            transitionTo(mApEnabledState);
+                        if (msg.arg2 == 0) { // previous wifi state has not been saved yet
+                            Settings.Global.putInt(mContext.getContentResolver(),
+                                    Settings.Global.WIFI_SAVED_STATE, WIFI_DISABLED);
                         }
-                    } else {
-                       if (mWifiTetherStateMachine != null) {
-                            if (mApStaExist) {
-                                if (DBG) {
-                                    Slog.d(TAG, "CMD_SET_AP: SET Host AP False");
-                                }
-                                mWifiTetherStateMachine.setHostApRunning(null,
-                                                                         false);
-                                mApStaExist = false;
-                            }
-                        }
+                        mWifiStateMachine.setHostApRunning((WifiConfiguration) msg.obj,
+                                true);
+                        transitionTo(mApEnabledState);
                     }
                     break;
                 case CMD_DEFERRED_TOGGLE:
@@ -628,13 +612,6 @@ class WifiController extends StateMachine {
                         transitionTo(mApStaDisabledState);
                     }
                     break;
-                case CMD_SET_AP:
-                    // Before starting tethering, turn off supplicant for scan mode
-                    if (msg.arg1 == 1) {
-                        deferMessage(msg);
-                        transitionTo(mApStaDisabledState);
-                    }
-                    break;
                 case CMD_DEFERRED_TOGGLE:
                     if (msg.arg1 != mDeferredEnableSerialNumber) {
                         log("DEFERRED_TOGGLE ignored due to serial mismatch");
@@ -723,17 +700,20 @@ class WifiController extends StateMachine {
                     break;
                 case CMD_SET_AP:
                     if (msg.arg1 == 0) {
-                        if (DBG) {
-                            Slog.d(TAG, "Set Host AP to false");
+                        mWifiStateMachine.setHostApRunning(null, false);
+                        int wifiSavedState = Settings.Global.getInt(mContext.getContentResolver(),
+                                Settings.Global.WIFI_SAVED_STATE, WIFI_DISABLED);
+                        if (wifiSavedState == WIFI_ENABLED) {
+                            transitionTo(mStaEnabledState);
                         }
-                        if (mWifiTetherStateMachine != null) {
-                            mWifiTetherStateMachine.setHostApRunning(null,
-                                                                     false);
-                            mApStaExist = false;
-                        } else {
-                            mWifiStateMachine.setHostApRunning(null, false);
+                        else {
+                            if (mSettingsStore.isScanAlwaysAvailable()) {
+                                transitionTo(mStaDisabledWithScanState);
+                            }
+                            else {
+                                transitionTo(mApStaDisabledState);
+                            }
                         }
-                        transitionTo(mApStaDisabledState);
                     }
                     break;
                 case CMD_AP_START_FAILURE:
