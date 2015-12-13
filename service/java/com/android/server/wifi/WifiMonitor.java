@@ -231,6 +231,10 @@ public class WifiMonitor {
     private static final String BSS_REMOVED_STR = "BSS-REMOVED";
 
     /**
+     * This indicate supplicant encounter RSN PMKID mismatch error
+     */
+    private static final String RSN_PMKID_STR = "RSN: PMKID mismatch";
+    /**
      * Regex pattern for extracting an Ethernet-style MAC address from a string.
      * Matches a strings like the following:<pre>
      * CTRL-EVENT-CONNECTED - Connection to 00:1e:58:ec:d5:6d completed (reauth) [id=1 id_str=]</pre>
@@ -537,6 +541,7 @@ public class WifiMonitor {
     public static final int P2P_DFS_CAC_STARTED_EVENT            = BASE + 72;
     public static final int P2P_DFS_CAC_COMPLETED_EVENT          = BASE + 73;
 
+    public static final int RSN_PMKID_MISMATCH_EVENT             = BASE + 63;
     /**
      * This indicates a read error on the monitor socket conenction
      */
@@ -879,6 +884,8 @@ public class WifiMonitor {
             } else if (eventStr.startsWith(AUTH_EVENT_PREFIX_STR) &&
                     eventStr.endsWith(AUTH_TIMEOUT_STR)) {
                 mStateMachine.sendMessage(AUTHENTICATION_FAILURE_EVENT);
+            } else if (eventStr.startsWith(RSN_PMKID_STR)) {
+                mStateMachine.sendMessage(RSN_PMKID_MISMATCH_EVENT);
             } else {
                 if (DBG) Log.w(TAG, "couldn't identify event type - " + eventStr);
             }
