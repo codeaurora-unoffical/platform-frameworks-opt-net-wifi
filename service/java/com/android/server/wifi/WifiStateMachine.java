@@ -7422,6 +7422,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     mSupplicantStateTracker.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT);
                     break;
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
+                    Intent intent = new Intent(WifiManager.ACTION_AUTH_PASSWORD_WRONG);
+                    mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
                     mWifiLogger.captureBugReportData(WifiLogger.REPORT_REASON_AUTH_FAILURE);
                     mSupplicantStateTracker.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT);
                     if ((mScreenOn == false) && mBackgroundScanSupported) {
