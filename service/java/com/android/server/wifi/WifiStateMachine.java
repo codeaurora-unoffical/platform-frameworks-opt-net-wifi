@@ -7784,7 +7784,6 @@ public class WifiStateMachine extends StateMachine {
         @Override
         public void enter() {
             String address;
-            updateDefaultRouteMacAddress(1000);
             if (DBG) {
                 log("ConnectedState Enter "
                         + " mScreenOn=" + mScreenOn
@@ -7851,6 +7850,7 @@ public class WifiStateMachine extends StateMachine {
                     return HANDLED;
                 case CMD_NETWORK_STATUS:
                     if (message.arg1 == NetworkAgent.VALID_NETWORK) {
+                        updateDefaultRouteMacAddress(1000);
                         config = getCurrentWifiConfiguration();
                         if (config != null) {
                             // re-enable autojoin
