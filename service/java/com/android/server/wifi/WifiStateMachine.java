@@ -7706,6 +7706,14 @@ public class WifiStateMachine extends StateMachine {
                         if (stateChangeResult.BSSID != null) {
                             mTargetRoamBSSID = (String) stateChangeResult.BSSID;
                         }
+
+                        // LinkDebouncing in process, layer2 might be in the middle
+                        // of reconnect. We need ConnectModeState to handle supplicant
+                        // state change event to update the SSID, hence return NOT_HANDLED.
+                        if (mWifiConfigStore.enableLinkDebouncing
+                                && linkDebouncing) {
+                            return NOT_HANDLED;
+                        }
                     }
                     break;
                 case CMD_ROAM_WATCHDOG_TIMER:
