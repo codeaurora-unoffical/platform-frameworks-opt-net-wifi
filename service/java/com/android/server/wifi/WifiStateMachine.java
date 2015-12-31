@@ -218,9 +218,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     private int mNumScanResultsReturned;
 
     private boolean mScreenOn = false;
+    private int mCurrentAssociateNetworkId = -1;
 
     private boolean mIsWiFiIpReachabilityEnabled ;
-    private int mCurrentAssociateNetworkId = -1;
+
     /* Chipset supports background scan */
     private final boolean mBackgroundScanSupported;
     private final boolean mHandleSafeChannelsIntent;
@@ -819,8 +820,6 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     private static final int NETWORK_STATUS_UNWANTED_VALIDATION_FAILED  = 1;
     private static final int NETWORK_STATUS_UNWANTED_DISABLE_AUTOJOIN   = 2;
 
-    static final int CMD_PNO_PERIODIC_SCAN                              = BASE + 160;
-
     static final int CMD_UNWANTED_NETWORK                               = BASE + 144;
 
     static final int CMD_AUTO_ROAM                                      = BASE + 145;
@@ -870,7 +869,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     /* used to indicated RSSI threshold breach in hw */
     static final int CMD_RSSI_THRESHOLD_BREACH                          = BASE + 164;
 
-
+    /* When there are saved networks and PNO fails, we do a periodic scan to notify
+       a saved/open network in suspend mode */
+    static final int CMD_PNO_PERIODIC_SCAN                              = BASE + 165;
 
     /* Wifi state machine modes of operation */
     /* CONNECT_MODE - connect to any 'known' AP when it becomes available */
@@ -4013,6 +4014,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         if (mWifiNative.setBand(band)) {
             mFrequencyBand.set(band);
+            mWifiConfigStore.setConfiguredBand(band);
+            if (mFrequencyBand.get() == WifiManager.WIFI_FREQUENCY_BAND_2GHZ) {
+                mWifiNative.disable5GHzFrequencies(true);
+                mDisabled5GhzFrequencies = true;
+            } else if ((mFrequencyBand.get() != WifiManager.WIFI_FREQUENCY_BAND_2GHZ)
+                && (mDisabled5GhzFrequencies)) {
+                mWifiNative.disable5GHzFrequencies(false);
+                mDisabled5GhzFrequencies = false;
+            }
             if (PDBG) {
                 logd("done set frequency band " + band);
             }
@@ -4114,21 +4124,6 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
     }
-
-    /*
-    void ageOutScanResults(int age) {
-        synchronized(mScanResultCache) {
-            // Trim mScanResults, which prevent WifiStateMachine to return
-            // obsolete scan results to queriers
-            long now = System.CurrentTimeMillis();
-            for (int i = 0; i < mScanResults.size(); i++) {
-                ScanResult result = mScanResults.get(i);
-                if ((result.seen > now || (now - result.seen) > age)) {
-                    mScanResults.remove(i);
-                }
-            }
-        }
-    }*/
 
     /**
      * Allow blacklist by BSSID
@@ -6191,6 +6186,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                 case CMD_STOP_RSSI_MONITORING_OFFLOAD:
                     messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
+                case CMD_PNO_PERIODIC_SCAN:
+	                deferMessage(message);
+                    break;
                 default:
                     loge("Error! unhandled message" + message);
                     break;
@@ -6289,9 +6287,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                             transitionTo(mSupplicantStartingState);
                         } else {
                             loge("Failed to start supplicant!");
+                            setWifiState(WifiManager.WIFI_STATE_FAILED);
                         }
                     } else {
                         loge("Failed to load driver");
+                        setWifiState(WifiManager.WIFI_STATE_FAILED);
                     }
                     break;
                 case CMD_START_AP:
@@ -6862,7 +6862,6 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
                     /* send regular delayed shut down */
                     Intent driverStopIntent = new Intent(ACTION_DELAYED_DRIVER_STOP, null);
-                    driverStopIntent.setPackage(mContext.getPackageName());
                     driverStopIntent.setPackage("android");
                     driverStopIntent.putExtra(DELAYED_STOP_COUNTER, mDelayedStopCounter);
                     mDriverStopIntent = PendingIntent.getBroadcast(mContext,
