@@ -121,6 +121,7 @@ import java.io.BufferedReader;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.util.Iterator;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.Inet4Address;
@@ -129,6 +130,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.HashSet;
+import java.util.TreeSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -350,6 +352,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     private static final String CUSTOMIZED_SCAN_SETTING = "customized_scan_settings";
     private static final String CUSTOMIZED_SCAN_WORKSOURCE = "customized_scan_worksource";
     private static final String SCAN_REQUEST_TIME = "scan_request_time";
+    private int mNumSelectiveChannelScan = 0;
+    private int mMaxInitialSavedChannelScan;
+    private int mInitialSavedChannelScanInterval;
+    private TreeSet<String> savedChannels;
 
     /* Tracks if state machine has received any screen state change broadcast yet.
      * We can miss one of these at boot.
@@ -1213,6 +1219,12 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         mRevertCountryCodeOnCellularLoss = mContext.getResources().getBoolean(
                 R.bool.config_wifi_revert_country_code_on_cellular_loss);
 
+        mMaxInitialSavedChannelScan = mContext.getResources().getInteger(
+                R.integer.config_max_initial_scans_on_selective_channels);
+
+        mInitialSavedChannelScanInterval = mContext.getResources().getInteger(
+                R.integer.config_initial_saved_channel_scan_interval);
+
         mDefaultCountryCode = SystemProperties.get(BOOT_DEFAULT_WIFI_COUNTRY_CODE);
         if (TextUtils.isEmpty(mDefaultCountryCode) == false) {
             mDefaultCountryCode = mDefaultCountryCode.toUpperCase(Locale.ROOT);
@@ -2030,8 +2042,25 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             freqs = sb.toString();
         }
 
+        if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan) {
+            StringBuilder sb = new StringBuilder();
+            boolean first = true;
+            Iterator iter = savedChannels.iterator();
+            while(iter.hasNext()) {
+                 if(!first) {
+                    sb.append(',');
+                 } else {
+                    first  = false;
+                 }
+                 sb.append(iter.next());
+            }
+            if (sb.length() > 0) {
+                freqs = sb.toString();
+            }
+        }
         // call wifi native to start the scan
         if (startScanNative(type, freqs)) {
+            mNumSelectiveChannelScan++;
             // only count battery consumption if scan request is accepted
             noteScanStart(message.arg1, workSource);
             // a full scan covers everything, clearing scan request buffer
@@ -6125,6 +6154,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     if (mWifiConfigStore.enableVerboseLogging.get() > 0) {
                         enableVerboseLogging(mWifiConfigStore.enableVerboseLogging.get());
                     }
+                    savedChannels = mWifiConfigStore.getConfiguredChannelList();
                     if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
                         && !shouldAutoConnect()) {
                         mWifiConfigStore.disableAllNetworks();
@@ -6225,7 +6255,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     maybeRegisterNetworkFactory(); // Make sure our NetworkFactory is registered
                     noteScanEnd();
                     setScanResults();
-                    if (mIsFullScanOngoing || mSendScanResultsBroadcast) {
+                    if (mIsFullScanOngoing || mSendScanResultsBroadcast
+                            || (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan)) {
                         /* Just updated results from full scan, let apps know about this */
                         boolean scanSucceeded = message.what == WifiMonitor.SCAN_RESULTS_EVENT;
                         sendScanResultsAvailableBroadcast(scanSucceeded);
@@ -6461,6 +6492,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             mInDelayedStop = false;
             mDelayedStopCounter++;
             updateBatteryWorkSource(null);
+            mNumSelectiveChannelScan = 0;
             /**
              * Enable bluetooth coexistence scan mode when bluetooth connection is active.
              * When this mode is on, some of the low-level scan parameters used by the
@@ -9684,6 +9716,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                         // Check if the CMD_START_SCAN message is obsolete (and thus if it should
                         // not be processed) and restart the scan
                         int period =  mWifiConfigStore.wifiDisconnectedShortScanIntervalMilli.get();
+                        if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan) {
+                            period = mInitialSavedChannelScanInterval;
+                        }
                         if (mP2pConnected.get()) {
                            period = (int)Settings.Global.getLong(mContext.getContentResolver(),
                                     Settings.Global.WIFI_SCAN_INTERVAL_WHEN_P2P_CONNECTED_MS,
@@ -9821,9 +9856,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                         if (useHalBasedAutoJoinOffload()) {
                             startGScanDisconnectedModeOffload("p2pRestart");
                         } else {
-                            startDelayedScan(
-                                    mWifiConfigStore.wifiDisconnectedShortScanIntervalMilli.get(),
-                                    null, null);
+                            int period = mWifiConfigStore.wifiDisconnectedShortScanIntervalMilli.get();
+                            if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan) {
+                                period = mInitialSavedChannelScanInterval;
+                            }
+                            startDelayedScan(period, null, null);
                         }
                     }
                     break;
