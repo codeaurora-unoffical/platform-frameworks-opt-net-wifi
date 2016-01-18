@@ -5966,6 +5966,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         public void enter() {
             WifiNative.stopHal();
             mWifiNative.unloadDriver();
+            lastConnectAttemptTimestamp = 0;
             if (mWifiP2pChannel == null) {
                 mWifiP2pChannel = new AsyncChannel();
                 mWifiP2pChannel.connect(mContext, getHandler(),
@@ -6040,9 +6041,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                             transitionTo(mSupplicantStartingState);
                         } else {
                             loge("Failed to start supplicant!");
+                            setWifiState(WifiManager.WIFI_STATE_FAILED);
                         }
                     } else {
                         loge("Failed to load driver");
+                        setWifiState(WifiManager.WIFI_STATE_FAILED);
                     }
                     break;
                 case CMD_START_AP:
@@ -7421,6 +7424,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     mSupplicantStateTracker.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT);
                     break;
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
+                    Intent intent = new Intent(WifiManager.ACTION_AUTH_PASSWORD_WRONG);
+                    mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
                     mWifiLogger.captureBugReportData(WifiLogger.REPORT_REASON_AUTH_FAILURE);
                     mSupplicantStateTracker.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT);
                     if ((mScreenOn == false) && mBackgroundScanSupported) {
