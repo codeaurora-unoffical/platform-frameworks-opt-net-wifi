@@ -373,6 +373,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     private int mStartWithchannel = 0;
     private int mStartSafeChannel = 0;
     private int mEndSafeChannel = 0;
+    private int mConfiguredAPChannel = 0;
 
     /**
      * Interval in milliseconds between polling for RSSI
@@ -1484,7 +1485,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                  }
 
                  if (state == WIFI_AP_STATE_ENABLED) {
-                     int currentChannel = getSapOperatingChannel();
+                     int currentChannel = mConfiguredAPChannel;
                      if (DBG) {
                          Log.d(TAG, "SAP Operating channel = " + currentChannel);
                          Log.d(TAG, "STA channel = " + staOperatingChannel);
@@ -1508,46 +1509,14 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                              "SAP operating on interfering channel, restart");
                          }
                          if (mStartSafeChannel > 0) {
-                             int[] channels = new int[14];
-                             int count = 0;
-
-                             // Check if we have social channels
-                             // in safe channel list
-                             if (mStartSafeChannel == 1 &&
-                                 mEndSafeChannel >= 1) {
-                                 channels[count++] = 1;
-                             }
-                             if (mStartSafeChannel <= 6 &&
-                                 mEndSafeChannel >= 6) {
-                                 channels[count++] = 6;
-                             }
-                             if (mStartSafeChannel <= 11 &&
-                                 mEndSafeChannel >= 11) {
-                                 channels[count++] = 11;
-                             }
-
-                             if (count == 0) {
-                                 int i;
-                                 // No social channels in safe channel list
-                                 // extract available channels from the list
-                                 for (i = 1; i <= 14; i++) {
-                                      if (i >= mStartSafeChannel &&
-                                          i <= mEndSafeChannel) {
-                                          channels[count++] = i;
-                                      }
-                                 }
-                             }
-
-                             if (count > 0) {
-                                 Random rand = new Random();
-                                 mStartWithchannel =
-                                                 channels[rand.nextInt(count)];
-                                 if (DBG) {
+                              mStartWithchannel = getSapSafeChannel();
+                              if (mStartWithchannel > 0) {
+                                  if (DBG) {
                                      Log.d(TAG, "start with channel = " +
-                                                 mStartWithchannel);
-                                 }
-                                 restartSoftApIfOn();
-                             }
+                                               mStartWithchannel);
+                                  }
+                                  restartSoftApIfOn();
+                              }
                          }
                      }
                  }
@@ -5768,12 +5737,45 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             config.apBand = 0;
             config.apChannel = 6;
         }
+        mConfiguredAPChannel = config.apChannel;
         // Start hostapd on a separate thread
         new Thread(new Runnable() {
             public void run() {
                 try {
-                    config.channel = mChannel;
-                    mNwService.startAccessPoint(config, mInterfaceName);
+                    Log.d(TAG, "LTCO: tSafeChannel= " + mStartSafeChannel +
+                               " mEndSafeChannel= " + mEndSafeChannel +
+                               " mEnableConcurrency= " + mEnableConcurrency +
+                               " mHandleSafeChannelsIntent= " +
+                               mHandleSafeChannelsIntent);
+                    if (mStartSafeChannel == 0 && mEndSafeChannel == 0) {
+                        config.apChannel = mChannel;
+                    } else {
+                        int staOperatingChannel = 0;
+                        if (getCurrentState() == mObtainingIpState ||
+                            getCurrentState() == mL2ConnectedState ||
+                            getCurrentState() == mConnectedState) {
+                            staOperatingChannel = mWifiNative.fetchChannelNative();
+                        }
+                        if (config.apChannel < 1 ||
+                            config.apChannel > 14 ||
+                            config.apChannel == staOperatingChannel) {
+                            return;
+                        }
+                        if (config.apChannel < mStartSafeChannel ||
+                            config.apChannel > mEndSafeChannel) {
+                            if (DBG) {
+                                Log.d(TAG,
+                                        "SAP operating on interfering channel, restart");
+                            }
+                            if (mStartSafeChannel > 0) {
+                                config.apChannel = getSapSafeChannel();
+                                if (DBG) {
+                                    Log.d(TAG, "start with channel = " +  config.apChannel);
+                                }
+                            }
+                        }
+                   }
+                   mNwService.startAccessPoint(config, mInterfaceName);
                 } catch (Exception e) {
                     loge("Exception in softap start " + e);
                     try {
@@ -5790,6 +5792,43 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             }
         }).start();
     }
+
+    private int  getSapSafeChannel() {
+        int[] channels = new int[14];
+        int count = 0;
+        // Check if we have social channels
+        // in safe channel list
+        if (mStartSafeChannel == 1 &&
+            mEndSafeChannel >= 1) {
+            channels[count++] = 1;
+        }
+        if (mStartSafeChannel <= 6 &&
+            mEndSafeChannel >= 6) {
+            channels[count++] = 6;
+        }
+        if (mStartSafeChannel <= 11 &&
+            mEndSafeChannel >= 11) {
+            channels[count++] = 11;
+        }
+        if (count == 0) {
+            int i;
+              // No social channels in safe channel list
+              // extract available channels from the list
+              for (i = 1; i <= 14; i++) {
+                  if (i >= mStartSafeChannel &&
+                      i <= mEndSafeChannel) {
+                      channels[count++] = i;
+                  }
+              }
+        }
+        if (count > 0) {
+            Random rand = new Random();
+            mStartWithchannel =
+                              channels[rand.nextInt(count)];
+        }
+        return mStartWithchannel;
+    }
+
 
     private byte[] macAddressFromString(String macString) {
         String[] macBytes = macString.split(":");
