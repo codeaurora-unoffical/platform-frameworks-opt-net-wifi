@@ -99,6 +99,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -729,6 +730,22 @@ public class WifiConfigStore extends IpConfigStore {
         if (DBG) log("Loading config and enabling all networks ");
         loadConfiguredNetworks();
         enableAllNetworks();
+    }
+
+    public TreeSet<String> getConfiguredChannelList() {
+        /* Hashset will avoid any duplicate frequency to be added in hashmap */
+        HashSet<String> freqs = new HashSet<String>();
+        for(WifiConfiguration config : mConfiguredNetworks.values()) {
+            if (getScanDetailCache(config) != null) {
+                for(ScanDetail scanDetail : getScanDetailCache(config).values()) {
+                    ScanResult result = scanDetail.getScanResult();
+                    freqs.add(Integer.toString(result.frequency));
+                }
+            }
+        }
+        TreeSet<String> tfreqs = new TreeSet();
+        tfreqs.addAll(freqs);
+        return tfreqs;
     }
 
     int getConfiguredNetworksSize() {
