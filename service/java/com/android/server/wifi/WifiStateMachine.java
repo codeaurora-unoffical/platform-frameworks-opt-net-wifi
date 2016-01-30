@@ -2044,15 +2044,25 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan) {
             StringBuilder sb = new StringBuilder();
-            boolean first = true;
+            boolean mSeparator = false;
             Iterator iter = savedChannels.iterator();
             while(iter.hasNext()) {
-                 if(!first) {
-                    sb.append(',');
+                 String sfreq = (String)iter.next();
+                 int ifreq = Integer.parseInt(sfreq);
+                 if ((mFrequencyBand.get() == WifiManager.WIFI_FREQUENCY_BAND_AUTO)
+                        || ((mFrequencyBand.get() == WifiManager.WIFI_FREQUENCY_BAND_2GHZ)
+                            && (!ScanResult.is5GHz(ifreq)))
+                        || ((mFrequencyBand.get() == WifiManager.WIFI_FREQUENCY_BAND_5GHZ)
+                                && (!ScanResult.is24GHz(ifreq)))) {
+                     if (mSeparator) {
+                         sb.append(',');
+                     } else {
+                         mSeparator  = true;
+                     }
+                     sb.append(sfreq);
                  } else {
-                    first  = false;
+                     mSeparator = false;
                  }
-                 sb.append(iter.next());
             }
             if (sb.length() > 0) {
                 freqs = sb.toString();
