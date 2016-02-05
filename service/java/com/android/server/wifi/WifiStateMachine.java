@@ -203,6 +203,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     public WifiTetherStateMachine mWifiTetherStateMachine = null;
 
     private final boolean mP2pSupported;
+    private boolean mWarmBootEnable;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
     private final String mPrimaryDeviceType;
@@ -261,6 +262,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             }
         }
         sendMessage(CMD_PNO_NETWORK_FOUND, results.length, 0, results);
+    }
+
+    public void setWarmBootEnable(boolean enable) {
+        mWarmBootEnable = enable;
     }
 
     public void processPnoNetworkFound(ScanResult results[]) {
@@ -4423,6 +4428,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                         && !shouldAutoConnect()) {
                     attemptAutoJoin = false;
                 }
+                if (mWarmBootEnable)
+                    attemptAutoJoin = false;
                 // AutoJoincontroller will directly acces the scan result list and update it with
                 // ScanResult status
                 mNumScanResultsKnown = mWifiAutoJoinController.newSupplicantResults(attemptAutoJoin);

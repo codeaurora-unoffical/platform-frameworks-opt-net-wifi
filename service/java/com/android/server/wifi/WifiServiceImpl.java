@@ -31,6 +31,7 @@ import android.net.ConnectivityManager;
 import android.net.DhcpInfo;
 import android.net.DhcpResults;
 import android.net.Network;
+import android.net.NetworkInfo;
 import android.net.NetworkScorerAppManager;
 import android.net.NetworkUtils;
 import android.net.Uri;
@@ -128,6 +129,8 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
     private static final String TAG = "WifiService";
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
+    private boolean isWarmBootEnabled = true;
+    private boolean isWifiConnected = false;
 
     final WifiStateMachine mWifiStateMachine;
     final WifiTetherStateMachine mWifiTetherStateMachine;
@@ -1451,10 +1454,32 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
             if (action.equals(Intent.ACTION_SCREEN_ON)) {
+                if (isWarmBootEnabled) {
+                    int savedApState = Settings.Global.getInt(mContext.getContentResolver(),
+                        Settings.Global.WIFI_AP_WARM_BOOT_SAVED_STATE, 0);
+                    if (savedApState == 1) {
+                        mWifiController.obtainMessage(CMD_SET_AP, 1, 0, null).sendToTarget();
+                        Settings.Global.putInt(mContext.getContentResolver(), Settings.Global.WIFI_AP_WARM_BOOT_SAVED_STATE, 0);
+                   }
+                   mWifiStateMachine.setWarmBootEnable(false);
+                }
+
                 mWifiController.sendMessage(CMD_SCREEN_ON);
             } else if (action.equals(Intent.ACTION_USER_PRESENT)) {
                 mWifiController.sendMessage(CMD_USER_PRESENT);
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
+                if (isWarmBootEnabled) {
+                    int apState = getWifiApEnabledState();
+                    if ((apState == WifiManager.WIFI_AP_STATE_ENABLING) ||
+                            (apState == WifiManager.WIFI_AP_STATE_ENABLED)) {
+                        mWifiController.obtainMessage(CMD_SET_AP, 0, 0, null).sendToTarget();
+                        Settings.Global.putInt(mContext.getContentResolver(), Settings.Global.WIFI_AP_WARM_BOOT_SAVED_STATE, 1);
+                    }
+                   mWifiStateMachine.setWarmBootEnable(true);
+                   if (isWifiConnected) {
+                       disconnect();
+                   }
+                }
                 mWifiController.sendMessage(CMD_SCREEN_OFF);
             } else if (action.equals(Intent.ACTION_BATTERY_CHANGED)) {
                 int pluggedType = intent.getIntExtra("plugged", 0);
@@ -1486,6 +1511,10 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
                 if (wifiApState == WifiManager.WIFI_AP_STATE_FAILED) {
                     setWifiApEnabled(null, false);
                 }
+            } else if (action.equals(WifiManager.NETWORK_STATE_CHANGED_ACTION)) {
+                   NetworkInfo info = (NetworkInfo) intent.getParcelableExtra(
+                       WifiManager.EXTRA_NETWORK_INFO);
+                   isWifiConnected = info.isConnected();
             } else if (action.equals(WifiManager.WIFI_STATE_CHANGED_ACTION)) {
                 int wifiState = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE,
                         WifiManager.WIFI_STATE_UNKNOWN);
