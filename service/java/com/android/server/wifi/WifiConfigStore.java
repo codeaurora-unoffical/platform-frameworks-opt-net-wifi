@@ -2239,8 +2239,9 @@ public class WifiConfigStore extends IpConfigStore {
                         out.writeUTF(DEFAULT_GW_KEY + SEPARATOR + macAddress + NL);
                     }
 
-                    if (getScanDetailCacheIfExist(config) != null) {
-                        for (ScanDetail scanDetail : getScanDetailCacheIfExist(config).values()) {
+                    ScanDetailCache cache = getScanDetailCacheIfExist(config);
+                    if (cache != null) {
+                        for (ScanDetail scanDetail : cache.values()) {
                             ScanResult result = scanDetail.getScanResult();
                             out.writeUTF(BSSID_KEY + SEPARATOR +
                                     result.BSSID + NL);
@@ -3000,7 +3001,9 @@ public class WifiConfigStore extends IpConfigStore {
                                         break setVariables;
                                   }
                              } else {
-                                  if (!mWifiNative.setNetworkVariable(
+                                  if (!((newNetwork == false) && (savedValue != null) &&
+                                      (value != null) && value.equals(savedValue)) &&
+                                      !mWifiNative.setNetworkVariable(
                                            netId,
                                            key,
                                            value)) {
@@ -3025,7 +3028,9 @@ public class WifiConfigStore extends IpConfigStore {
                                         break setVariables;
                                   }
                              } else {
-                                  if (!mWifiNative.setNetworkVariable(
+                                  if (!((newNetwork == false) && (savedValue != null) &&
+                                      (value != null) && value.equals(savedValue)) &&
+                                      !mWifiNative.setNetworkVariable(
                                            netId,
                                            key,
                                            value)) {
