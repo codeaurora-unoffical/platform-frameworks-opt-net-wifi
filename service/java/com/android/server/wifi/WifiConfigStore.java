@@ -99,6 +99,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -673,9 +674,12 @@ public class WifiConfigStore extends IpConfigStore {
         }
 
         boolean hs2on = mContext.getResources().getBoolean(R.bool.config_wifi_hotspot2_enabled);
-        Log.d(Utils.hs2LogTag(getClass()), "Passpoint is " + (hs2on ? "enabled" : "disabled"));
+        boolean hs2onSet = (Settings.Global.getInt(mContext.getContentResolver(),
+                                Settings.Global.WIFI_HOTSPOT2_ENABLED, 0) == 1);
+        Log.d(Utils.hs2LogTag(getClass()), "Passpoint is " +
+            (hs2on ? "enabled" : "disabled") + ", " + hs2onSet);
 
-        mMOManager = new MOManager(new File(PPS_FILE), hs2on);
+        mMOManager = new MOManager(new File(PPS_FILE), (hs2on & hs2onSet));
         mAnqpCache = new AnqpCache();
         mSupplicantBridge = new SupplicantBridge(mWifiNative, this);
         mScanDetailCaches = new HashMap<>();
@@ -726,6 +730,22 @@ public class WifiConfigStore extends IpConfigStore {
         if (DBG) log("Loading config and enabling all networks ");
         loadConfiguredNetworks();
         enableAllNetworks();
+    }
+
+    public TreeSet<String> getConfiguredChannelList() {
+        /* Hashset will avoid any duplicate frequency to be added in hashmap */
+        HashSet<String> freqs = new HashSet<String>();
+        for(WifiConfiguration config : mConfiguredNetworks.values()) {
+            if (getScanDetailCache(config) != null) {
+                for(ScanDetail scanDetail : getScanDetailCache(config).values()) {
+                    ScanResult result = scanDetail.getScanResult();
+                    freqs.add(Integer.toString(result.frequency));
+                }
+            }
+        }
+        TreeSet<String> tfreqs = new TreeSet();
+        tfreqs.addAll(freqs);
+        return tfreqs;
     }
 
     int getConfiguredNetworksSize() {
@@ -1135,6 +1155,24 @@ public class WifiConfigStore extends IpConfigStore {
             }
         }
     }
+
+    void unblackListDriverRoamedBSSID(String bssid) {
+          for (WifiConfiguration config : mConfiguredNetworks.values()) {
+               ScanDetailCache cache = getScanDetailCache(config);
+               if (cache != null) {
+                   ScanResult result = cache.get(bssid);
+                   if (result != null) {
+                       if (result.autoJoinStatus == (ScanResult.AUTO_ROAM_DISABLED + 1)) {
+                           if (DBG) {
+                               Log.d(TAG,"unblacklisted driver roamed BSSID = "+result.BSSID);
+                           }
+                           result.setAutoJoinStatus(ScanResult.ENABLED);
+                       }
+                   }
+               }
+          }
+    }
+
 
     void noteRoamingFailure(WifiConfiguration config, int reason) {
         if (config == null) return;
@@ -2219,8 +2257,9 @@ public class WifiConfigStore extends IpConfigStore {
                         out.writeUTF(DEFAULT_GW_KEY + SEPARATOR + macAddress + NL);
                     }
 
-                    if (getScanDetailCacheIfExist(config) != null) {
-                        for (ScanDetail scanDetail : getScanDetailCacheIfExist(config).values()) {
+                    ScanDetailCache cache = getScanDetailCacheIfExist(config);
+                    if (cache != null) {
+                        for (ScanDetail scanDetail : cache.values()) {
                             ScanResult result = scanDetail.getScanResult();
                             out.writeUTF(BSSID_KEY + SEPARATOR +
                                     result.BSSID + NL);
@@ -2980,7 +3019,9 @@ public class WifiConfigStore extends IpConfigStore {
                                         break setVariables;
                                   }
                              } else {
-                                  if (!mWifiNative.setNetworkVariable(
+                                  if (!((newNetwork == false) && (savedValue != null) &&
+                                      (value != null) && value.equals(savedValue)) &&
+                                      !mWifiNative.setNetworkVariable(
                                            netId,
                                            key,
                                            value)) {
@@ -3005,7 +3046,9 @@ public class WifiConfigStore extends IpConfigStore {
                                         break setVariables;
                                   }
                              } else {
-                                  if (!mWifiNative.setNetworkVariable(
+                                  if (!((newNetwork == false) && (savedValue != null) &&
+                                      (value != null) && value.equals(savedValue)) &&
+                                      !mWifiNative.setNetworkVariable(
                                            netId,
                                            key,
                                            value)) {
