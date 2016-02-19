@@ -5754,9 +5754,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                                " mEnableConcurrency= " + mEnableConcurrency +
                                " mHandleSafeChannelsIntent= " +
                                mHandleSafeChannelsIntent);
-                    if (mStartSafeChannel == 0 && mEndSafeChannel == 0) {
-                        config.apChannel = mChannel;
-                    } else {
+                   if (mStartSafeChannel != 0 && mEndSafeChannel != 0) {
                         int staOperatingChannel = 0;
                         if (getCurrentState() == mObtainingIpState ||
                             getCurrentState() == mL2ConnectedState ||
