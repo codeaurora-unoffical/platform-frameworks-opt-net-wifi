@@ -1718,9 +1718,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         if (enabled) {
             /* Set RTC_WAKEUP alarms if PNO is not supported - because no one is */
             /* going to wake up the host processor to look for access points */
-            mAlarmManager.set(AlarmManager.RTC_WAKEUP,
+            mAlarmManager.setRepeating(AlarmManager.RTC_WAKEUP,
                     System.currentTimeMillis() + mDefaultFrameworkScanIntervalMs,
-                    mScanIntent);
+                    mDefaultFrameworkScanIntervalMs, mScanIntent);
             mAlarmEnabled = true;
         } else {
             mAlarmManager.cancel(mScanIntent);
