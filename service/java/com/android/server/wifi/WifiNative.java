@@ -141,14 +141,15 @@ public class WifiNative {
     }
 
     public boolean connectToSupplicant() {
-        // No synchronization necessary .. it is implemented in WifiMonitor
-        localLog(mInterfacePrefix + "connectToSupplicant");
-        return connectToSupplicantNative();
+        synchronized(mLock) {
+            localLog(mInterfacePrefix + "connectToSupplicant");
+            return connectToSupplicantNative();
+        }
     }
 
     public void closeSupplicantConnection() {
-        localLog(mInterfacePrefix + "closeSupplicantConnection");
         synchronized (mLock) {
+            localLog(mInterfacePrefix + "closeSupplicantConnection");
             closeSupplicantConnectionNative();
         }
     }
