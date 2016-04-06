@@ -1813,6 +1813,7 @@ public class WifiConfigStore extends IpConfigStore {
         mLastPriority = 0;
 
         mConfiguredNetworks.clear();
+        mScanDetailCaches.clear();
         List<WifiConfiguration> configTlsResetList = new ArrayList<WifiConfiguration>();
         int last_id = -1;
         boolean done = false;
