@@ -223,7 +223,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
     private final String mInterfaceName;
     /* The interface for dhcp to act on */
-    private final String mDataInterfaceName;
+    private String mDataInterfaceName;
     /* Tethering interface could be separate from wlan interface */
     private String mTetherInterfaceName;
 
@@ -1131,12 +1131,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         super("WifiStateMachine");
         mContext = context;
         mInterfaceName = wlanInterface;
-        if (SystemProperties.getInt("persist.fst.rate.upgrade.en", 0) == 1) {
-            log("fst enabled");
-            mDataInterfaceName = "bond0";
-        } else {
-            mDataInterfaceName = wlanInterface;
-        }
+        updateDataInterface();
 
         mNetworkInfo = new NetworkInfo(ConnectivityManager.TYPE_WIFI, 0, NETWORKTYPE, "");
         mBatteryStats = IBatteryStats.Stub.asInterface(ServiceManager.getService(
@@ -1569,6 +1564,49 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     public boolean getEnableAutoJoinWhenAssociated() {
         return mWifiConfigStore.enableAutoJoinWhenAssociated.get();
     }
+
+    private void updateDataInterface() {
+        String defaultRateUpgradeInterfaceName = "bond0"; // interface used for fst
+        int fstEnabled = SystemProperties.getInt("persist.fst.rate.upgrade.en", 0);
+        String prevDataInterfaceName = mDataInterfaceName;
+        String rateUpgradeDataInterfaceName = SystemProperties.get("persist.fst.data.interface",
+                defaultRateUpgradeInterfaceName);
+
+        // When fst is not enabled, data interface is the same as the wlan interface
+        mDataInterfaceName = (fstEnabled == 1) ? rateUpgradeDataInterfaceName : mInterfaceName;
+
+        // as long as we did not change from fst enabled to disabled state
+        // and vise-versa data interface does not change
+        if (mDataInterfaceName.equals(prevDataInterfaceName)) {
+            return;
+        }
+
+        logd("fst " + ((fstEnabled == 1) ? "enabled" : "disabled"));
+
+        if (mNetlinkTracker != null) {
+            try {
+                mNwService.unregisterObserver(mNetlinkTracker);
+            } catch (RemoteException e) {
+                loge("Couldn't unregister netlink tracker: " + e.toString());
+            }
+
+            mNetlinkTracker = new NetlinkTracker(mDataInterfaceName,
+                        new NetlinkTracker.Callback() {
+                public void update() {
+                    sendMessage(CMD_UPDATE_LINKPROPERTIES);
+                }
+            });
+            try {
+                mNwService.registerObserver(mNetlinkTracker);
+            } catch (RemoteException e) {
+                loge("Couldn't register netlink tracker: " + e.toString());
+            }
+        }
+        if (mDhcpStateMachine != null) {
+            mDhcpStateMachine.doQuit();
+        }
+    }
+
     /*
      *
      * Framework scan control
@@ -6061,6 +6099,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                             /* starting HAL is optional */
                             loge("Failed to start HAL");
                         }
+
+                        updateDataInterface();
 
                         if (mWifiNative.startSupplicant(mP2pSupported)) {
                             setWifiState(WIFI_STATE_ENABLING);
