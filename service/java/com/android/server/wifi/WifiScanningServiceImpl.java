@@ -1873,7 +1873,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     }
 
     private static ChannelSpec[] getChannelsForBand(int band) {
-        initChannels();
+        if (initChannels() == false)
+            return new ChannelSpec[0];
 
         if (band < WifiScanner.WIFI_BAND_24_GHZ || band > WifiScanner.WIFI_BAND_BOTH_WITH_DFS)
             /* invalid value for band */
