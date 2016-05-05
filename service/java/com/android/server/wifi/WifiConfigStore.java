@@ -99,6 +99,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -729,6 +730,22 @@ public class WifiConfigStore extends IpConfigStore {
         if (DBG) log("Loading config and enabling all networks ");
         loadConfiguredNetworks();
         enableAllNetworks();
+    }
+
+    public TreeSet<String> getConfiguredChannelList() {
+        /* Hashset will avoid any duplicate frequency to be added in hashmap */
+        HashSet<String> freqs = new HashSet<String>();
+        for(WifiConfiguration config : mConfiguredNetworks.values()) {
+            if (getScanDetailCache(config) != null) {
+                for(ScanDetail scanDetail : getScanDetailCache(config).values()) {
+                    ScanResult result = scanDetail.getScanResult();
+                    freqs.add(Integer.toString(result.frequency));
+                }
+            }
+        }
+        TreeSet<String> tfreqs = new TreeSet();
+        tfreqs.addAll(freqs);
+        return tfreqs;
     }
 
     int getConfiguredNetworksSize() {
@@ -1796,6 +1813,7 @@ public class WifiConfigStore extends IpConfigStore {
         mLastPriority = 0;
 
         mConfiguredNetworks.clear();
+        mScanDetailCaches.clear();
         List<WifiConfiguration> configTlsResetList = new ArrayList<WifiConfiguration>();
         int last_id = -1;
         boolean done = false;
@@ -2318,6 +2336,8 @@ public class WifiConfigStore extends IpConfigStore {
 
             String bssid = null;
             String ssid = null;
+            String key = null;
+            String value = null;
 
             int freq = 0;
             int status = 0;
@@ -2332,12 +2352,17 @@ public class WifiConfigStore extends IpConfigStore {
                     break;
                 }
                 int colon = line.indexOf(':');
-                if (colon < 0) {
+                char slash = line.charAt(0);
+                if ((colon < 0)&& (slash != '/')) {
                     continue;
                 }
 
-                String key = line.substring(0, colon).trim();
-                String value = line.substring(colon + 1).trim();
+                if (slash == '/') {
+                    key = line.trim();
+                } else {
+                    key = line.substring(0, colon).trim();
+                    value = line.substring(colon + 1).trim();
+                }
 
                 if (key.equals(CONFIG_KEY)) {
 
@@ -2483,8 +2508,15 @@ public class WifiConfigStore extends IpConfigStore {
                             break;
                         case BSSID_KEY:
                             status = 0;
-                            ssid = null;
-                            bssid = null;
+                            /**
+                             * The intention here is to put the scanDetail in to
+                             * the scanDetailCache per config , as done in
+                             * BSSID_KEY_END . Thus store bssid value and
+                             * comment ssid = null to ensure the code in the if
+                             * loop is executed for the case BSSID_KEY_END.
+                             */
+                            //ssid = null;
+                            bssid = value;
                             freq = 0;
                             seen = 0;
                             rssi = WifiConfiguration.INVALID_RSSI;
