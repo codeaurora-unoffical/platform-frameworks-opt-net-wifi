@@ -2042,7 +2042,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             freqs = sb.toString();
         }
 
-        if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan) {
+        if (mNumSelectiveChannelScan < mMaxInitialSavedChannelScan
+                && message.arg1 == SCAN_ALARM_SOURCE) {
             StringBuilder sb = new StringBuilder();
             boolean first = true;
             Iterator iter = savedChannels.iterator();
@@ -2060,7 +2061,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         // call wifi native to start the scan
         if (startScanNative(type, freqs)) {
-            mNumSelectiveChannelScan++;
+            if (freqs != null)
+                mNumSelectiveChannelScan++;
             // only count battery consumption if scan request is accepted
             noteScanStart(message.arg1, workSource);
             // a full scan covers everything, clearing scan request buffer
