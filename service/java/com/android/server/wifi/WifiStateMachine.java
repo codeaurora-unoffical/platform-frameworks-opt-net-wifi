@@ -2737,13 +2737,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
      * ******************************************************
      */
 
-    private void logStateAndMessage(Message message, String state) {
+    private void logStateAndMessage(Message message, State state) {
         messageHandlingStatus = 0;
         if (mLogMessages) {
-            //long now = SystemClock.elapsedRealtimeNanos();
-            //String ts = String.format("[%,d us]", now/1000);
-
-            logd(" " + state + " " + getLogRecString(message));
+            logd(" " + state.getClass().getSimpleName() + " " + getLogRecString(message));
         }
     }
 
@@ -5739,7 +5736,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class DefaultState extends State {
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED: {
@@ -6029,7 +6026,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
             switch (message.what) {
                 case CMD_START_SUPPLICANT:
                     if (mWifiNative.loadDriver()) {
@@ -6142,7 +6139,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case WifiMonitor.SUP_CONNECTION_EVENT:
@@ -6242,7 +6239,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_STOP_SUPPLICANT:   /* Supplicant stopped by user */
@@ -6382,7 +6379,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case WifiMonitor.SUP_CONNECTION_EVENT:
@@ -6431,7 +6428,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
@@ -6592,7 +6589,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_START_SCAN:
@@ -6787,7 +6784,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case WifiStateMachine.CMD_DISABLE_P2P_RSP:
@@ -6823,7 +6820,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class DriverStoppingState extends State {
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
@@ -6856,7 +6853,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class DriverStoppedState extends State {
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
             switch (message.what) {
                 case WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT:
                     StateChangeResult stateChangeResult = (StateChangeResult) message.obj;
@@ -6888,7 +6885,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_SET_OPERATIONAL_MODE:
@@ -7446,7 +7443,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             String bssid;
             String ssid;
             NetworkUpdateResult result;
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case WifiMonitor.ASSOCIATION_REJECTION_EVENT:
@@ -7610,6 +7607,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                     if (config == null) {
                         loge("No network with id = " + netId);
                         messageHandlingStatus = MESSAGE_HANDLING_STATUS_FAIL;
+                        replyToMessage(message, message.what, FAILURE);
                         break;
                     }
 
@@ -8541,7 +8539,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
               case DhcpStateMachine.CMD_PRE_DHCP_ACTION:
@@ -8952,7 +8950,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
       @Override
       public boolean processMessage(Message message) {
-          logStateAndMessage(message, getClass().getSimpleName());
+          logStateAndMessage(message, this);
 
           switch(message.what) {
               case CMD_STATIC_IP_SUCCESS:
@@ -9011,7 +9009,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case WifiWatchdogStateMachine.POOR_LINK_DETECTED:
@@ -9075,7 +9073,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
             WifiConfiguration config;
             switch (message.what) {
                 case CMD_IP_CONFIGURATION_LOST:
@@ -9260,7 +9258,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         @Override
         public boolean processMessage(Message message) {
             WifiConfiguration config = null;
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case CMD_RESTART_AUTOJOIN_OFFLOAD:
@@ -9559,7 +9557,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
 
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
             switch (message.what) {
                 case CMD_SET_OPERATIONAL_MODE:
                     if (message.arg1 != CONNECT_MODE) {
@@ -9663,7 +9661,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         public boolean processMessage(Message message) {
             boolean ret = HANDLED;
 
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case CMD_NO_NETWORKS_PERIODIC_SCAN:
@@ -9938,7 +9936,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch (message.what) {
                 case WifiMonitor.WPS_SUCCESS_EVENT:
@@ -10062,7 +10060,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_START_SUPPLICANT:
@@ -10106,7 +10104,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class SoftApStartedState extends State {
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_STOP_AP:
@@ -10150,7 +10148,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_TETHER_STATE_CHANGE:
@@ -10191,7 +10189,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
     class TetheredState extends State {
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_TETHER_STATE_CHANGE:
@@ -10227,7 +10225,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
         }
         @Override
         public boolean processMessage(Message message) {
-            logStateAndMessage(message, getClass().getSimpleName());
+            logStateAndMessage(message, this);
 
             switch(message.what) {
                 case CMD_TETHER_STATE_CHANGE:
