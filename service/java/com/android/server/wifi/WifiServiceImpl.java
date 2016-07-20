@@ -117,6 +117,7 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
     private static final String TAG = "WifiService";
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
+    private boolean mIsFactoryResetOn = false;
 
     final WifiStateMachine mWifiStateMachine;
 
@@ -1439,6 +1440,12 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
                     Slog.e(TAG, "Wi-Fi state is failed");
                     setWifiEnabled(false);
                 }
+                if (wifiState  == WifiManager.WIFI_STATE_ENABLED) {
+                    if (mIsFactoryResetOn) {
+                        resetWifiNetworks();
+                        mIsFactoryResetOn = false;
+                    }
+                }
             }
         }
     };
@@ -2002,6 +2009,17 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         }
     }
 
+    private void resetWifiNetworks() {
+        // Delete all Wifi SSIDs
+        List<WifiConfiguration> networks = getConfiguredNetworks();
+        if (networks != null) {
+            for (WifiConfiguration config : networks) {
+                 removeNetwork(config.networkId);
+            }
+            saveConfiguration();
+        }
+    }
+
     public void factoryReset() {
         enforceConnectivityInternalPermission();
 
@@ -2015,15 +2033,12 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         }
 
         if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_WIFI)) {
-            // Enable wifi
-            setWifiEnabled(true);
-            // Delete all Wifi SSIDs
-            List<WifiConfiguration> networks = getConfiguredNetworks();
-            if (networks != null) {
-                for (WifiConfiguration config : networks) {
-                    removeNetwork(config.networkId);
-                }
-                saveConfiguration();
+            if (getWifiEnabledState() == WifiManager.WIFI_STATE_ENABLED) {
+                resetWifiNetworks();
+            } else {
+                mIsFactoryResetOn = true;
+                // Enable wifi
+                setWifiEnabled(true);
             }
         }
     }
