@@ -627,9 +627,7 @@ public class WifiQualifiedNetworkSelector {
                     mWifiConfigManager.getWifiConfiguration(mWifiInfo.getNetworkId());
         }
 
-        if (mCurrentBssid == null) {
-            mCurrentBssid = mWifiInfo.getBSSID();
-        }
+        mCurrentBssid = mWifiInfo.getBSSID();
 
         if (!forceSelectNetwork && !needQualifiedNetworkSelection(isLinkDebouncing, isConnected,
                 isDisconnected, isSupplicantTransient)) {
