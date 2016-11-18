@@ -23,6 +23,7 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Messenger;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -53,6 +54,9 @@ class WifiApConfigStore extends StateMachine {
     private static final String AP_CONFIG_FILE = Environment.getDataDirectory() +
         "/misc/wifi/softap.conf";
 
+    private static final String EoGRE_AP_CONFIG_FILE = Environment.getDataDirectory() +
+        "/misc/wifi/EoGRE_softap.conf";
+
     private static final int AP_CONFIG_FILE_VERSION = 2;
 
     private State mDefaultState = new DefaultState();
@@ -60,7 +64,11 @@ class WifiApConfigStore extends StateMachine {
     private State mActiveState = new ActiveState();
 
     private WifiConfiguration mWifiApConfig = null;
+    private WifiConfiguration mEogreWifiApConfig = null;
     private AsyncChannel mReplyChannel = new AsyncChannel();
+
+    private boolean isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
+
     public ArrayList <Integer> allowed2GChannel = null;
 
     WifiApConfigStore(Context context, Handler target) {
@@ -99,8 +107,16 @@ class WifiApConfigStore extends StateMachine {
                     Log.e(TAG, "Unexpected message: " + message);
                     break;
                 case WifiStateMachine.CMD_REQUEST_AP_CONFIG:
-                    mReplyChannel.replyToMessage(message,
+                    isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
+                    if (mEogreWifiApConfig == null || mWifiApConfig == null)
+                        loadApConfiguration();
+                    if (isEoGREDisabled) {
+                        mReplyChannel.replyToMessage(message,
                             WifiStateMachine.CMD_RESPONSE_AP_CONFIG, mWifiApConfig);
+                    } else {
+                        mReplyChannel.replyToMessage(message,
+                            WifiStateMachine.CMD_RESPONSE_AP_CONFIG, mEogreWifiApConfig);
+                    }
                     break;
                 default:
                     Log.e(TAG, "Failed to handle " + message);
@@ -116,7 +132,10 @@ class WifiApConfigStore extends StateMachine {
                 case WifiStateMachine.CMD_SET_AP_CONFIG:
                      WifiConfiguration config = (WifiConfiguration)message.obj;
                     if (config.SSID != null) {
-                        mWifiApConfig = config;
+                        if (isEoGREDisabled)
+                            mWifiApConfig = config;
+                        else
+                            mEogreWifiApConfig = config;
                         transitionTo(mActiveState);
                     } else {
                         Log.e(TAG, "Try to setup AP config without SSID: " + message);
@@ -133,7 +152,11 @@ class WifiApConfigStore extends StateMachine {
         public void enter() {
             new Thread(new Runnable() {
                 public void run() {
-                    writeApConfiguration(mWifiApConfig);
+                    if (isEoGREDisabled)
+                        writeApConfiguration(mWifiApConfig);
+                    else
+                        writeApConfiguration(mEogreWifiApConfig);
+
                     sendMessage(WifiStateMachine.CMD_SET_AP_CONFIG_COMPLETED);
                 }
             }).start();
@@ -159,9 +182,14 @@ class WifiApConfigStore extends StateMachine {
     void loadApConfiguration() {
         DataInputStream in = null;
         try {
+            isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
             WifiConfiguration config = new WifiConfiguration();
-            in = new DataInputStream(new BufferedInputStream(new FileInputStream(
+            if (isEoGREDisabled)
+                in = new DataInputStream(new BufferedInputStream(new FileInputStream(
                             AP_CONFIG_FILE)));
+            else
+                in = new DataInputStream(new BufferedInputStream(new FileInputStream(
+                            EoGRE_AP_CONFIG_FILE)));
 
             int version = in.readInt();
             if ((version != 1) && (version != 2)) {
@@ -186,8 +214,10 @@ class WifiApConfigStore extends StateMachine {
             if (authType != KeyMgmt.NONE) {
                 config.preSharedKey = in.readUTF();
             }
-
-            mWifiApConfig = config;
+            if (isEoGREDisabled)
+                 mWifiApConfig = config;
+            else
+                 mEogreWifiApConfig = config;
         } catch (IOException ignore) {
             setDefaultApConfiguration();
         } finally {
@@ -206,8 +236,12 @@ class WifiApConfigStore extends StateMachine {
     private void writeApConfiguration(final WifiConfiguration config) {
         DataOutputStream out = null;
         try {
-            out = new DataOutputStream(new BufferedOutputStream(
+            if (isEoGREDisabled)
+                out = new DataOutputStream(new BufferedOutputStream(
                         new FileOutputStream(AP_CONFIG_FILE)));
+            else
+                out = new DataOutputStream(new BufferedOutputStream(
+                        new FileOutputStream(EoGRE_AP_CONFIG_FILE)));
 
             out.writeInt(AP_CONFIG_FILE_VERSION);
             out.writeUTF(config.SSID);
@@ -240,10 +274,21 @@ class WifiApConfigStore extends StateMachine {
        will keep the device secure after the update */
     private void setDefaultApConfiguration() {
         WifiConfiguration config = new WifiConfiguration();
-        config.SSID = mContext.getString(R.string.wifi_tether_configure_ssid_default);
+        WifiConfiguration eogre_config = new WifiConfiguration();
+        isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
+
+        if (isEoGREDisabled)
+            config.SSID = mContext.getString(R.string.wifi_tether_configure_ssid_default);
+        else
+            eogre_config.SSID = mContext.getString(R.string.wifi_tether_configure_eogre_ssid_default);
+
         int wifiApSecurityType = mContext.getResources().getInteger(
                 R.integer.wifi_hotspot_security_type);
-        config.allowedKeyManagement.set(wifiApSecurityType);
+         if (isEoGREDisabled)
+            config.allowedKeyManagement.set(wifiApSecurityType);
+        else
+            eogre_config.allowedKeyManagement.set(KeyMgmt.NONE);
+
         config.preSharedKey = mContext.getResources().getString(
                 R.string.def_wifi_wifihotspot_pass);
         if (TextUtils.isEmpty(config.preSharedKey)) {
@@ -251,6 +296,12 @@ class WifiApConfigStore extends StateMachine {
             //first 12 chars from xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
             config.preSharedKey = randomUUID.substring(0, 8) + randomUUID.substring(9,13);
         }
-        sendMessage(WifiStateMachine.CMD_SET_AP_CONFIG, config);
+        if (isEoGREDisabled) {
+           mWifiApConfig = config;
+           sendMessage(WifiStateMachine.CMD_SET_AP_CONFIG, config);
+        } else {
+           mEogreWifiApConfig = eogre_config;
+           sendMessage(WifiStateMachine.CMD_SET_AP_CONFIG, eogre_config);
+        }
     }
 }
