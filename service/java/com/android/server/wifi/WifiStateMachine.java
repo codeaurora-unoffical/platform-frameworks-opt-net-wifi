@@ -9324,8 +9324,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                                 WifiLogger.REPORT_REASON_UNEXPECTED_DISCONNECT);
                     }
                     config = getCurrentWifiConfiguration();
-                    if (mScreenOn
-                            && !linkDebouncing
+                    if (!linkDebouncing
                             && config != null
                             && config.autoJoinStatus == WifiConfiguration.AUTO_JOIN_ENABLED
                             && !mWifiConfigStore.isLastSelectedConfiguration(config)
