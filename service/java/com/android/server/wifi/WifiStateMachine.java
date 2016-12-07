@@ -7909,6 +7909,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                             mWifiConfigStore.
                                  setLastSelectedConfiguration(WifiConfiguration.INVALID_NETWORK_ID);
                         }
+                        /* The state tracker handles enabling networks upon completion/failure */
+                        mSupplicantStateTracker.sendMessage(WifiStateMachine.CMD_AUTO_CONNECT);
                         mAutoRoaming = roam;
                         if (isRoaming() || linkDebouncing) {
                             transitionTo(mRoamingState);
