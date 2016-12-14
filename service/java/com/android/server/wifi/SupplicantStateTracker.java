@@ -247,6 +247,7 @@ class SupplicantStateTracker extends StateMachine {
                     transitionTo(mUninitializedState);
                     break;
                 case WifiManager.CONNECT_NETWORK:
+                case WifiStateMachine.CMD_AUTO_CONNECT:
                     mNetworksDisabledDuringConnect = true;
                     mAssociationRejectCount = 0;
                     break;
