@@ -20,8 +20,6 @@ import android.Manifest;
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
 import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothPan;
-import android.bluetooth.BluetoothProfile;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -98,7 +96,6 @@ import java.security.cert.PKIXParameters;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.List;
 
 import static com.android.server.wifi.WifiController.CMD_AIRPLANE_TOGGLED;
@@ -162,10 +159,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
      * Asynchronous channel to WifiStateMachine
      */
     private AsyncChannel mWifiStateMachineChannel;
-
-    private AtomicReference<BluetoothPan> mBluetoothPan = new AtomicReference<BluetoothPan>();
-
-    private boolean isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
 
     /**
      * Handles client connections
@@ -345,13 +338,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         mClientHandler = new ClientHandler(wifiThread.getLooper());
         mWifiStateMachineHandler = new WifiStateMachineHandler(wifiThread.getLooper());
         mWifiController = new WifiController(mContext, this, wifiThread.getLooper());
-
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter != null) {
-            adapter.getProfileProxy(mContext, mProfileServiceListener,
-                   BluetoothProfile.PAN);
-        }
-
     }
 
 
@@ -647,16 +633,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
         return mWifiStateMachine.syncGetWifiState();
     }
 
-    private BluetoothProfile.ServiceListener mProfileServiceListener =
-        new BluetoothProfile.ServiceListener() {
-        public void onServiceConnected(int profile, BluetoothProfile proxy) {
-            mBluetoothPan.set((BluetoothPan) proxy);
-        }
-        public void onServiceDisconnected(int profile) {
-            mBluetoothPan.set(null);
-        }
-    };
-
     /**
      * see {@link android.net.wifi.WifiManager#setWifiApEnabled(WifiConfiguration, boolean)}
      * @param wifiConfig SSID, security and channel details as
@@ -665,16 +641,6 @@ public final class WifiServiceImpl extends IWifiManager.Stub {
      */
     public void setWifiApEnabled(WifiConfiguration wifiConfig, boolean enabled) {
         enforceChangePermission();
-        ConnectivityManager cm =
-            (ConnectivityManager)mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-        isEoGREDisabled = SystemProperties.getBoolean("persist.sys.disable_eogre", true);
-        //Disable USB and BT
-        if(enabled && isEoGREDisabled == false) {
-            cm.setUsbTethering(false);
-            BluetoothPan bluetoothPan = mBluetoothPan.get();
-            if (bluetoothPan != null) bluetoothPan.setBluetoothTethering(false);
-         }
-
         ConnectivityManager.enforceTetherChangePermission(mContext);
         if (mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_TETHERING)) {
             throw new SecurityException("DISALLOW_CONFIG_TETHERING is enabled for this user.");
