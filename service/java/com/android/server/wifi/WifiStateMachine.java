@@ -6864,11 +6864,18 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
                             }
                         }
 
-                        // Try autojoining with recent network already present in the cache
-                        // If none are found then trigger a scan which will trigger autojoin
-                        // upon reception of scan results event
-                        if (!mWifiAutoJoinController.attemptAutoJoin()) {
-                            startScan(ENABLE_WIFI, 0, null, null);
+                        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+                               && !shouldAutoConnect()) {
+                            if (DBG) {
+                                logd("No auto, skip auto join on mode change");
+                            }
+                        } else {
+                            // Try autojoining with recent network already present in the cache
+                            // If none are found then trigger a scan which will trigger autojoin
+                            // upon reception of scan results event
+                            if (!mWifiAutoJoinController.attemptAutoJoin()) {
+                                startScan(ENABLE_WIFI, 0, null, null);
+                            }
                         }
 
                         // Loose last selection choice since user toggled WiFi
