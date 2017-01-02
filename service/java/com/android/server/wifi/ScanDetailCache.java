@@ -112,6 +112,27 @@ class ScanDetailCache {
         }
     }
 
+    public void trimByAge(int milliSec) {
+        int currentSize = mMap.size();
+        if (currentSize == 0) {
+            return; // Nothing to trim
+        }
+
+        ArrayList<ScanDetail> list = new ArrayList<ScanDetail>(mMap.values());
+        for (int i = 0; i < currentSize ; i++) {
+            // Remove results which are older than milliSec from scan cache
+            ScanDetail result = list.get(i);
+            if (System.currentTimeMillis() - result.getSeen() > milliSec){
+                if (DBG) {
+                    Log.e("ScanDetailCache", "Remove bssid: " +result.getBSSIDString()
+                                        + " older than " + milliSec);
+                }
+                mMap.remove(result.getBSSIDString());
+                mPasspointMatches.remove(result.getBSSIDString());
+            }
+        }
+    }
+
     /* @hide */
     private ArrayList<ScanDetail> sort() {
         ArrayList<ScanDetail> list = new ArrayList<ScanDetail>(mMap.values());

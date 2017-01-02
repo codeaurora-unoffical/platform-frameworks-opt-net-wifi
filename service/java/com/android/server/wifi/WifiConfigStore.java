@@ -1035,6 +1035,7 @@ public class WifiConfigStore extends IpConfigStore {
         if (config.isPasspoint()) {
             /* need to slap on the SSID of selected bssid to work */
             if (getScanDetailCache(config).size() != 0) {
+                getScanDetailCache(config).trimByAge(30000);
                 ScanDetail result = getScanDetailCache(config).getFirst();
                 if (result == null) {
                     loge("Could not find scan result for " + config.BSSID);
