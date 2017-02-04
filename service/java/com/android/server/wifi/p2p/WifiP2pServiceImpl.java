@@ -2525,6 +2525,9 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             .setCancelable(false)
             .create();
         dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+	WindowManager.LayoutParams attrs = dialog.getWindow().getAttributes();
+        attrs.privateFlags = WindowManager.LayoutParams.PRIVATE_FLAG_SHOW_FOR_ALL_USERS;
+        dialog.getWindow().setAttributes(attrs);
         dialog.show();
     }
 

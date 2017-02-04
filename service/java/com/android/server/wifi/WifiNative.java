@@ -696,6 +696,11 @@ public class WifiNative {
                 } else if (line.startsWith(BSS_DELIMITER_STR) || line.startsWith(BSS_END_STR)) {
                     if (bssid != null) {
                         try {
+                            if (flags.contains("MESH")) {
+                                Log.d(TAG, "Skipping MESH enabled network with bssid="+bssid);
+                                continue;
+                            }
+
                             if (infoElementsStr == null) {
                                 throw new IllegalArgumentException("Null information element data");
                             }

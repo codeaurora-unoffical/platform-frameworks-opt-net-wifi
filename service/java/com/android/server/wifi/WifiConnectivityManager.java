@@ -782,7 +782,17 @@ public class WifiConnectivityManager {
         if (mStateMachine.getScanCount()  < mStateMachine.getMaxConfiguredScanCount()) {
             isFullBandScan = false;
         }
-        startSingleScan(isFullBandScan);
+        if (mWifiState == WIFI_STATE_CONNECTED
+                && (mWifiInfo.txSuccessRate
+                            > mConfigManager.MAX_TX_PACKET_FOR_PARTIAL_SCANS
+                    || mWifiInfo.rxSuccessRate
+                            > mConfigManager.MAX_RX_PACKET_FOR_PARTIAL_SCANS)) {
+            localLog("Ignore scan due to heavy traffic, txSuccessRate="
+                        + mWifiInfo.txSuccessRate + " rxSuccessRate="
+                        + mWifiInfo.rxSuccessRate);
+        } else {
+            startSingleScan(isFullBandScan);
+        }
         schedulePeriodicScanTimer(mPeriodicSingleScanInterval);
 
         // Set up the next scan interval in an exponential backoff fashion.
