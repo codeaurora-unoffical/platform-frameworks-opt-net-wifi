@@ -7509,7 +7509,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                             + mSupplicantStateTracker.getSupplicantStateName()
                             + " my state " + getCurrentState().getName()
                             + " nid=" + Integer.toString(netId)
-                            + " config " + config.configKey()
+                            + " config =" + ((config == null) ? "null " :  config.configKey())
                             + " targetRoamBSSID " + mTargetRoamBSSID);
 
                     /* Determine if this is a regular roam (between BSSIDs sharing the same SSID),
