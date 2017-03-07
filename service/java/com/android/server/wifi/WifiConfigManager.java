@@ -2012,6 +2012,7 @@ public class WifiConfigManager {
                 currentConfig.peerWifiConfiguration = config.peerWifiConfiguration;
                 currentConfig.FQDN = config.FQDN;
                 currentConfig.providerFriendlyName = config.providerFriendlyName;
+                currentConfig.enterpriseConfig.setPlmn(config.enterpriseConfig.getPlmn());
                 currentConfig.roamingConsortiumIds = config.roamingConsortiumIds;
                 currentConfig.validatedInternetAccess = config.validatedInternetAccess;
                 currentConfig.numNoInternetAccessReports = config.numNoInternetAccessReports;
