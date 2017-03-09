@@ -2027,6 +2027,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     }
 
     /**
+     * TODO: doc
+     */
+    public int getOperationalMode() {
+        return mOperationalMode;
+    }
+
+    /**
      * Allow tests to confirm the operational mode for WSM.
      */
     @VisibleForTesting
