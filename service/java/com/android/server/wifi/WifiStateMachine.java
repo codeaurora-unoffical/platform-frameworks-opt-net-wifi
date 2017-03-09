@@ -2095,10 +2095,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
             if (sb.length() > 0) {
                 freqs = sb.toString();
             }
+            mNumSelectiveChannelScan++;
         }
         // call wifi native to start the scan
         if (startScanNative(type, freqs)) {
-            mNumSelectiveChannelScan++;
             // only count battery consumption if scan request is accepted
             noteScanStart(message.arg1, workSource);
             // a full scan covers everything, clearing scan request buffer
