@@ -1681,7 +1681,6 @@ public class WifiConfigManager {
         // 2) mConfiguredNetworks caches a Passpoint network's FQDN the moment the network is added.
         //    Thus, we had to load the FQDNs first.
         mConfiguredNetworks.clear();
-        mScanDetailCaches.clear();
         for (Map.Entry<String, WifiConfiguration> entry : configs.entrySet()) {
             final String configKey = entry.getKey();
             final WifiConfiguration config = entry.getValue();
