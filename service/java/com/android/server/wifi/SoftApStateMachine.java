@@ -246,6 +246,20 @@ public class SoftApStateMachine extends StateMachine {
             Log.e(TAG, "Failed to note battery stats in wifi");
         }
 
+        if ((wifiApState == WIFI_AP_STATE_DISABLED)
+               || (wifiApState == WIFI_AP_STATE_FAILED)) {
+            boolean skipUnload = false;
+            int wifiState = mWifiStateMachine.syncGetWifiState();
+            if ((wifiState ==  WifiManager.WIFI_STATE_ENABLING) ||
+                    (wifiState == WifiManager.WIFI_STATE_ENABLED)) {
+                Log.d(TAG, "Avoid unload driver, WIFI_STATE is enabled/enabling");
+                skipUnload = true;
+            }
+            if (!skipUnload) {
+                mWifiNative.stopHal();
+                mWifiNative.unloadDriver();
+            }
+        }
         // Update state
         mWifiApState.set(wifiApState);
 
@@ -321,19 +335,6 @@ public class SoftApStateMachine extends StateMachine {
     class InitialState extends State {
         @Override
         public void enter() {
-            boolean skipUnload = false;
-            if (mWifiStateMachine != null) {
-                int wifiState = mWifiStateMachine.syncGetWifiState();
-                if ((wifiState ==  WifiManager.WIFI_STATE_ENABLING) ||
-                    (wifiState == WifiManager.WIFI_STATE_ENABLED)) {
-                     Log.d(TAG, "Avoid unload driver, WIFI_STATE is enabled/enabling");
-                     skipUnload = true;
-                }
-            }
-            if (!skipUnload) {
-                mWifiNative.stopHal();
-                mWifiNative.unloadDriver();
-            }
             if (mWifiApConfigStore == null) {
                 mWifiApConfigStore =
                         mFacade.makeApConfigStore(mContext, mBackupManagerProxy);
