@@ -33,6 +33,7 @@ import com.android.server.wifi.ScanDetail;
 import com.android.server.wifi.WifiMonitor;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
+import android.net.wifi.WifiManager;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -115,6 +116,7 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
      * complete, but timeout just in case it does not.
      */
     private static final long SCAN_TIMEOUT_MS = 15000;
+    private final WifiManager mWifiManager;
 
     AlarmManager.OnAlarmListener mScanPeriodListener = new AlarmManager.OnAlarmListener() {
             public void onAlarm() {
@@ -138,6 +140,7 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
         mWifiNative = wifiNative;
         mChannelHelper = channelHelper;
         mAlarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        mWifiManager = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
         mEventHandler = new Handler(looper, this);
         mClock = clock;
         mHwPnoDebouncer = new HwPnoDebouncer(mWifiNative, mAlarmManager, mEventHandler, mClock);
@@ -343,6 +346,11 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
             if (mLastScanSettings != null && !mLastScanSettings.hwPnoScanActive) {
                 return;
             }
+            if ((mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLING)
+                   || (mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLED)) {
+                Log.e(TAG, "Wifi in turn OFF state, skip process pending SCANs");
+                return;
+            }
 
             ChannelCollection allFreqs = mChannelHelper.createChannelCollection();
             Set<Integer> hiddenNetworkIdSet = new HashSet<Integer>();
@@ -545,6 +553,12 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
         synchronized (mSettingsLock) {
             if (mLastScanSettings == null) {
                  // got a scan before we started scanning or after scan was canceled
+                return;
+            }
+
+            if ((mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLING)
+                   || (mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLED)) {
+                Log.e(TAG, "Wifi in turn OFF state, skip reading SCAN results");
                 return;
             }
 
