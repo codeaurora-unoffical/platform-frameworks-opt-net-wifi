@@ -914,6 +914,11 @@ public class WifiNative {
     public void setP2pDisable() {
         doBooleanCommand("SET p2p_disabled 1");
     }
+
+    public void setPnoScanPlans() {
+        doBooleanCommand("SET sched_scan_plans 10:6 60");
+    }
+
     public boolean saveConfig() {
         return doBooleanCommand("SAVE_CONFIG");
     }
