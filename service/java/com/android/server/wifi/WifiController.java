@@ -1213,16 +1213,21 @@ public class WifiController extends StateMachine {
                 case CMD_AIRPLANE_TOGGLED:
                     if (mSettingsStore.isAirplaneModeOn() &&
                             ! mSettingsStore.isWifiToggleEnabled()) {
-                        transitionTo(mApStaDisabledState);
+                        if (mStaAndApConcurrency) {
+                            transitionTo(mStaDisablingState);
+                        } else {
+                            transitionTo(mApStaDisabledState);
+                        }
                     }
                     break;
                 case CMD_SCAN_ALWAYS_MODE_CHANGED:
                     if (! mSettingsStore.isScanAlwaysAvailable()) {
                         if (mStaAndApConcurrency) {
                             mWifiStateMachine.setOperationalMode(WifiStateMachine.CONNECT_MODE);
-                            mWifiStateMachine.setSupplicantRunning(false);
+                            transitionTo(mStaDisablingState);
+                        } else {
+                            transitionTo(mApStaDisabledState);
                         }
-                        transitionTo(mApStaDisabledState);
                     }
                     break;
                 case CMD_SET_AP:
@@ -1454,6 +1459,9 @@ public class WifiController extends StateMachine {
                 } else if (mSettingsStore.isScanAlwaysAvailable()) {
                     transitionTo(mStaDisabledWithScanState);
                 } else {
+                    // For STA + SAP concurrency, supplicant already stopped
+                    // in EcmState.enter(), hence no need to transition to
+                    // mStaDisablingState.
                     transitionTo(mApStaDisabledState);
                 }
             }
