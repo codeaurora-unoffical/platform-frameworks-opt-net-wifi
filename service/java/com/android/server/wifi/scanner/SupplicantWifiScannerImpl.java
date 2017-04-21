@@ -313,6 +313,19 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
         }
     }
 
+    private boolean isScanAllowed() {
+        if (mWifiManager.isScanAlwaysAvailable()) {
+            return true;
+        }
+
+        int wifiState = mWifiManager.getWifiState();
+        if (wifiState == WifiManager.WIFI_STATE_DISABLING
+            || wifiState == WifiManager.WIFI_STATE_DISABLED) {
+            return false;
+        }
+        return true;
+    }
+
     private void unscheduleScansLocked() {
         mAlarmManager.cancel(mScanPeriodListener);
         if (mLastScanSettings != null) {
@@ -346,9 +359,8 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
             if (mLastScanSettings != null && !mLastScanSettings.hwPnoScanActive) {
                 return;
             }
-            if ((mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLING)
-                   || (mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLED)) {
-                Log.e(TAG, "Wifi in turn OFF state, skip process pending SCANs");
+            if (!isScanAllowed()) {
+                Log.e(TAG, "Scan is not allowed - skip process pending SCANs");
                 return;
             }
 
@@ -556,9 +568,8 @@ public class SupplicantWifiScannerImpl extends WifiScannerImpl implements Handle
                 return;
             }
 
-            if ((mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLING)
-                   || (mWifiManager.getWifiState() == WifiManager.WIFI_STATE_DISABLED)) {
-                Log.e(TAG, "Wifi in turn OFF state, skip reading SCAN results");
+            if (!isScanAllowed()) {
+                Log.e(TAG, "Scan is not allowed - skip reading SCAN results");
                 return;
             }
 
