@@ -359,6 +359,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mWifiStateMachine = new WifiStateMachine(mContext, mFacade,
             wifiStateMachineThread.getLooper(), mUserManager, mWifiInjector,
             new BackupManagerProxy(), mCountryCode);
+        mWifiStateMachine.setTrafficPoller(mTrafficPoller);
         mSettingsStore = new WifiSettingsStore(mContext);
         mWifiStateMachine.enableRssiPolling(true);
         mBatteryStats = BatteryStatsService.getService();

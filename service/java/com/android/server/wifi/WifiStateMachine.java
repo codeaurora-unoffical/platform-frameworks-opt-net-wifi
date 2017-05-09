@@ -196,6 +196,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private ConnectivityManager mCm;
     private BaseWifiLogger mWifiLogger;
     private WifiApConfigStore mWifiApConfigStore;
+    private WifiTrafficPoller mTrafficPoller = null;
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
     private boolean mTemporarilyDisconnectWifi = false;
@@ -1351,6 +1352,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mIpManager.stop();
     }
 
+    public void setTrafficPoller(WifiTrafficPoller trafficPoller) {
+        mTrafficPoller = trafficPoller;
+        if (mTrafficPoller != null) {
+            mTrafficPoller.setInterface(mDataInterfaceName);
+        }
+    }
+
     PendingIntent getPrivateBroadcast(String action, int requestCode) {
         Intent intent = new Intent(action, null);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
@@ -1489,6 +1497,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             mIpManager = mFacade.makeIpManager(mContext, mDataInterfaceName,
                                                new IpManagerCallback());
             mIpManager.setMulticastFilter(true);
+        }
+
+        if (mTrafficPoller != null) {
+            mTrafficPoller.setInterface(mDataInterfaceName);
         }
     }
 
