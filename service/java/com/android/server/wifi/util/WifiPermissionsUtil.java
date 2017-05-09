@@ -21,6 +21,7 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
+import android.net.ConnectivityManager;
 import android.net.NetworkScoreManager;
 import android.os.RemoteException;
 import android.os.UserManager;
@@ -71,6 +72,27 @@ public class WifiPermissionsUtil {
         } catch (RemoteException e) {
             mLog.err("Error checking for permission: %").r(e.getMessage()).flush();
             return false;
+        }
+    }
+
+    /**
+     * Check and enforce tether change permission.
+     *
+     * @param context Context object of the caller.
+     */
+    public void enforceTetherChangePermission(Context context) {
+        ConnectivityManager.enforceTetherChangePermission(context);
+    }
+
+    /**
+     * Check and enforce Location permission.
+     *
+     * @param pkgName PackageName of the application requesting access
+     * @param uid The uid of the package
+     */
+    public void enforceLocationPermission(String pkgName, int uid) {
+        if (!checkCallersLocationPermission(pkgName, uid)) {
+            throw new SecurityException("UID " + uid + " does not have Location permission");
         }
     }
 
