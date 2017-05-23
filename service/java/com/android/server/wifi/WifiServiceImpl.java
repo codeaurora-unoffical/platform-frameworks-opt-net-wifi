@@ -87,6 +87,7 @@ import android.util.ArraySet;
 import android.util.Log;
 import android.util.Slog;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.PhoneConstants;
@@ -113,6 +114,7 @@ import java.security.cert.PKIXParameters;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -159,6 +161,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     // Debug counter tracking scan requests sent by WifiManager
     private int scanRequestCounter = 0;
 
+    /* Tracks the open wi-fi network notification */
+    private WifiNotificationController mNotificationController;
     /* Polls traffic stats and notifies clients */
     private WifiTrafficPoller mTrafficPoller;
     /* Tracks the persisted states for wi-fi & airplane mode */
@@ -189,6 +193,27 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private WifiPermissionsUtil mWifiPermissionsUtil;
 
     private final ConcurrentHashMap<String, Integer> mIfaceIpModes;
+
+    @GuardedBy("mLocalOnlyHotspotRequests")
+    private final HashMap<Integer, LocalOnlyHotspotRequestInfo> mLocalOnlyHotspotRequests;
+    @GuardedBy("mLocalOnlyHotspotRequests")
+    private WifiConfiguration mLocalOnlyHotspotConfig = null;
+
+    /**
+     * Callback for use with LocalOnlyHotspot to unregister requesting applications upon death.
+     *
+     * @hide
+     */
+    public final class LocalOnlyRequestorCallback
+            implements LocalOnlyHotspotRequestInfo.RequestingApplicationDeathCallback {
+        /**
+         * Called with requesting app has died.
+         */
+        @Override
+        public void onLocalOnlyHotspotRequestorDeath(LocalOnlyHotspotRequestInfo requestor) {
+            unregisterCallingAppAndStopLocalOnlyHotspot(requestor);
+        };
+    }
 
     /**
      * Handles client connections
@@ -363,6 +388,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mAppOps = (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE);
         mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
         mCertManager = mWifiInjector.getWifiCertManager();
+        mNotificationController = mWifiInjector.getWifiNotificationController();
         mWifiLockManager = mWifiInjector.getWifiLockManager();
         mWifiMulticastLockManager = mWifiInjector.getWifiMulticastLockManager();
         HandlerThread wifiServiceHandlerThread = mWifiInjector.getWifiServiceHandlerThread();
@@ -381,6 +407,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         updateBackgroundThrottleInterval();
         updateBackgroundThrottlingWhitelist();
         mIfaceIpModes = new ConcurrentHashMap<>();
+        mLocalOnlyHotspotRequests = new HashMap<>();
         enableVerboseLoggingInternal(getVerboseLoggingLevel());
     }
 
@@ -822,6 +849,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         return startSoftApInternal(wifiConfig, STATE_TETHERED);
     }
 
+    /**
+     * Internal method to start softap mode. Callers of this method should have already checked
+     * proper permissions beyond the NetworkStack permission.
+     */
     private boolean startSoftApInternal(WifiConfiguration wifiConfig, int mode) {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
@@ -861,6 +892,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private boolean stopSoftApInternal() {
         mLog.trace("stopSoftApInternal uid=%").c(Binder.getCallingUid()).flush();
 
+        // we have an allowed caller - clear local only hotspot if it was enabled
+        synchronized (mLocalOnlyHotspotRequests) {
+            mLocalOnlyHotspotRequests.clear();
+            mLocalOnlyHotspotConfig = null;
+        }
         mWifiController.sendMessage(CMD_SET_AP, 0, 0);
         return true;
     }
@@ -933,6 +969,31 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mLog.trace("stopLocalOnlyHotspot uid=%").c(uid).flush();
 
         throw new UnsupportedOperationException("LocalOnlyHotspot is still in development");
+    }
+
+    /**
+     * Helper method to unregister LocalOnlyHotspot requestors and stop the hotspot if needed.
+     */
+    private void unregisterCallingAppAndStopLocalOnlyHotspot(LocalOnlyHotspotRequestInfo request) {
+        mLog.trace("unregisterCallingAppAndStopLocalOnlyHotspot uid=%").c(request.getUid()).flush();
+
+        synchronized (mLocalOnlyHotspotRequests) {
+            if (mLocalOnlyHotspotRequests.remove(request.getUid()) == null) {
+                mLog.trace("LocalOnlyHotspotRequestInfo not found to remove");
+                return;
+            }
+
+            if (mLocalOnlyHotspotRequests.isEmpty()) {
+                mLocalOnlyHotspotConfig = null;
+                // if that was the last caller, then call stopSoftAp as WifiService
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    stopSoftApInternal();
+                } finally {
+                    Binder.restoreCallingIdentity(identity);
+                }
+            }
+        }
     }
 
     /**
@@ -1867,16 +1928,17 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                     + ", uid=" + Binder.getCallingUid());
             return;
         }
-        if (args.length > 0 && WifiMetrics.PROTO_DUMP_ARG.equals(args[0])) {
+        if (args != null && args.length > 0 && WifiMetrics.PROTO_DUMP_ARG.equals(args[0])) {
             // WifiMetrics proto bytes were requested. Dump only these.
             mWifiStateMachine.updateWifiMetrics();
             mWifiMetrics.dump(fd, pw, args);
-        } else if (args.length > 0 && IpManager.DUMP_ARG.equals(args[0])) {
+        } else if (args != null && args.length > 0 && IpManager.DUMP_ARG.equals(args[0])) {
             // IpManager dump was requested. Pass it along and take no further action.
             String[] ipManagerArgs = new String[args.length - 1];
             System.arraycopy(args, 1, ipManagerArgs, 0, ipManagerArgs.length);
             mWifiStateMachine.dumpIpManager(fd, pw, ipManagerArgs);
-        } else if (args.length > 0 && DUMP_ARG_SET_IPREACH_DISCONNECT.equals(args[0])) {
+        } else if (args != null && args.length > 0
+                && DUMP_ARG_SET_IPREACH_DISCONNECT.equals(args[0])) {
             if (args.length > 1) {
                 if (DUMP_ARG_SET_IPREACH_DISCONNECT_ENABLED.equals(args[1])) {
                     mWifiStateMachine.setIpReachabilityDisconnectEnabled(true);
@@ -1890,12 +1952,13 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         } else {
             pw.println("Wi-Fi is " + mWifiStateMachine.syncGetWifiStateByName());
             pw.println("Stay-awake conditions: " +
-                    Settings.Global.getInt(mContext.getContentResolver(),
-                                           Settings.Global.STAY_ON_WHILE_PLUGGED_IN, 0));
+                    mFacade.getIntegerSetting(mContext,
+                            Settings.Global.STAY_ON_WHILE_PLUGGED_IN, 0));
             pw.println("mInIdleMode " + mInIdleMode);
             pw.println("mScanPending " + mScanPending);
             mWifiController.dump(fd, pw, args);
             mSettingsStore.dump(fd, pw, args);
+            mNotificationController.dump(fd, pw, args);
             mTrafficPoller.dump(fd, pw, args);
             pw.println();
             pw.println("Locks held:");

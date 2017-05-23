@@ -514,6 +514,10 @@ public class SupplicantStaIfaceHal {
                 }
             }
         }
+        // Reset current network info.  Probably not needed once we add support to remove/reset
+        // current network on receiving disconnection event from supplicant (b/32898136).
+        mFrameworkNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
+        mCurrentNetwork = null;
         return true;
     }
 
@@ -536,6 +540,16 @@ public class SupplicantStaIfaceHal {
     public String getCurrentNetworkWpsNfcConfigurationToken() {
         if (mCurrentNetwork == null) return null;
         return mCurrentNetwork.getWpsNfcConfigurationToken();
+    }
+
+    /**
+     * Get the eap anonymous identity for the currently configured network.
+     *
+     * @return anonymous identity string if succeeds, null otherwise.
+     */
+    public String getCurrentNetworkEapAnonymousIdentity() {
+        if (mCurrentNetwork == null) return null;
+        return mCurrentNetwork.fetchEapAnonymousIdentity();
     }
 
     /**
