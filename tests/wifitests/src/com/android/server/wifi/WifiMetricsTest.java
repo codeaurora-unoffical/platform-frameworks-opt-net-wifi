@@ -41,7 +41,9 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
@@ -229,6 +231,10 @@ public class WifiMetricsTest {
     private static final int NUM_SOFTAP_START_SUCCESS = 3;
     private static final int NUM_SOFTAP_FAILED_GENERAL_ERROR = 2;
     private static final int NUM_SOFTAP_FAILED_NO_CHANNEL = 1;
+    private static final int NUM_HAL_CRASHES = 11;
+    private static final int NUM_WIFICOND_CRASHES = 12;
+    private static final int NUM_WIFI_ON_FAILURE_DUE_TO_HAL = 13;
+    private static final int NUM_WIFI_ON_FAILURE_DUE_TO_WIFICOND = 14;
 
     private ScanDetail buildMockScanDetail(boolean hidden, NetworkDetail.HSRelease hSRelease,
             String capabilities) {
@@ -401,6 +407,18 @@ public class WifiMetricsTest {
             mWifiMetrics.incrementSoftApStartResult(false,
                     WifiManager.SAP_START_FAILURE_NO_CHANNEL);
         }
+        for (int i = 0; i < NUM_HAL_CRASHES; i++) {
+            mWifiMetrics.incrementNumHalCrashes();
+        }
+        for (int i = 0; i < NUM_WIFICOND_CRASHES; i++) {
+            mWifiMetrics.incrementNumWificondCrashes();
+        }
+        for (int i = 0; i < NUM_WIFI_ON_FAILURE_DUE_TO_HAL; i++) {
+            mWifiMetrics.incrementNumWifiOnFailureDueToHal();
+        }
+        for (int i = 0; i < NUM_WIFI_ON_FAILURE_DUE_TO_WIFICOND; i++) {
+            mWifiMetrics.incrementNumWifiOnFailureDueToWificond();
+        }
     }
 
     /**
@@ -537,6 +555,12 @@ public class WifiMetricsTest {
                      mDeserializedWifiMetrics.softApReturnCode[2].startResult);
         assertEquals(NUM_SOFTAP_FAILED_NO_CHANNEL,
                      mDeserializedWifiMetrics.softApReturnCode[2].count);
+        assertEquals(NUM_HAL_CRASHES, mDeserializedWifiMetrics.numHalCrashes);
+        assertEquals(NUM_WIFICOND_CRASHES, mDeserializedWifiMetrics.numWificondCrashes);
+        assertEquals(NUM_WIFI_ON_FAILURE_DUE_TO_HAL,
+                mDeserializedWifiMetrics.numWifiOnFailureDueToHal);
+        assertEquals(NUM_WIFI_ON_FAILURE_DUE_TO_WIFICOND,
+                mDeserializedWifiMetrics.numWifiOnFailureDueToWificond);
     }
 
     /**
@@ -1006,6 +1030,15 @@ public class WifiMetricsTest {
         dumpProtoAndDeserialize();
         assertEquals(WifiMetrics.MAX_STA_EVENTS, mDeserializedWifiMetrics.staEventList.length);
     }
+
+    /**
+     * Ensure WifiMetrics doesn't cause a null pointer exception when called with null args
+     */
+    @Test
+    public void testDumpNullArg() {
+        mWifiMetrics.dump(new FileDescriptor(), new PrintWriter(new StringWriter()), null);
+    }
+
     /**
      * Generate an RSSI delta event by creating a connection event and an RSSI poll within
      * 'interArrivalTime' milliseconds of each other.

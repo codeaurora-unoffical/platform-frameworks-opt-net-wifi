@@ -148,7 +148,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
 
     public WificondScannerImpl(Context context, WifiNative wifiNative,
                                      WifiMonitor wifiMonitor, Looper looper, Clock clock) {
-        // TODO figure out how to get channel information from supplicant
+        // TODO get channel information from wificond.
         this(context, wifiNative, wifiMonitor, new NoBandChannelHelper(), looper, clock);
     }
 
@@ -422,7 +422,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             if ((newScanSettings.backgroundScanActive || newScanSettings.singleScanActive)
                     && !allFreqs.isEmpty()) {
                 pauseHwPnoScan();
-                Set<Integer> freqs = allFreqs.getSupplicantScanFreqs();
+                Set<Integer> freqs = allFreqs.getScanFreqs();
                 boolean success = mWifiNative.scan(freqs, hiddenNetworkSSIDSet);
                 if (success) {
                     // TODO handle scan timeout
@@ -488,7 +488,6 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                 processPendingScans();
                 break;
             case WifiMonitor.PNO_SCAN_RESULTS_EVENT:
-                mAlarmManager.cancel(mScanTimeoutListener);
                 pollLatestScanDataForPno();
                 processPendingScans();
                 break;
@@ -894,6 +893,8 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                 return false;
             }
             mLastPnoChangeTimeStamp = mClock.getElapsedSinceBootMillis();
+            Log.d(TAG, "Remove all networks from supplicant before starting PNO scan");
+            mWifiNative.removeAllNetworks();
             if (mWifiNative.startPnoScan(mPnoSettings)) {
                 Log.d(TAG, "Changed PNO state from " + mCurrentPnoState + " to enable");
                 mCurrentPnoState = true;

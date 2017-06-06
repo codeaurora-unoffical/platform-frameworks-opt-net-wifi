@@ -636,6 +636,15 @@ public class WifiConfigManager {
             return true;
         }
 
+        // EAP-SIM/AKA/AKA' network needs framework to update the anonymous identity provided
+        // by authenticator back to the WifiConfiguration object.
+        // Since it is "owned" by us, so always allow us to modify them.
+        if (config.enterpriseConfig != null
+                && uid == Process.WIFI_UID
+                && TelephonyUtil.isSimEapMethod(config.enterpriseConfig.getEapMethod())) {
+            return true;
+        }
+
         final DevicePolicyManagerInternal dpmi = LocalServices.getService(
                 DevicePolicyManagerInternal.class);
 
@@ -711,7 +720,7 @@ public class WifiConfigManager {
             internalConfig.SSID = externalConfig.SSID;
         }
         if (externalConfig.BSSID != null) {
-            internalConfig.BSSID = externalConfig.BSSID;
+            internalConfig.BSSID = externalConfig.BSSID.toLowerCase();
         }
         internalConfig.hiddenSSID = externalConfig.hiddenSSID;
         if (externalConfig.preSharedKey != null
@@ -2334,7 +2343,9 @@ public class WifiConfigManager {
                 String currentIdentity = TelephonyUtil.getSimIdentity(mTelephonyManager, config);
                 // Update the loaded config
                 config.enterpriseConfig.setIdentity(currentIdentity);
-                config.enterpriseConfig.setAnonymousIdentity("");
+                if (config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.PEAP) {
+                    config.enterpriseConfig.setAnonymousIdentity("");
+                }
             }
         }
     }

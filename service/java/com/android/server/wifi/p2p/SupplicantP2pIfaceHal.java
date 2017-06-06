@@ -62,6 +62,7 @@ public class SupplicantP2pIfaceHal {
     private static final String TAG = "SupplicantP2pIfaceHal";
     private static final int RESULT_NOT_VALID = -1;
     private static final int DEFAULT_GROUP_OWNER_INTENT = 6;
+    private static final int DEFAULT_OPERATING_CLASS = 81;
     /**
      * Regex pattern for extracting the wps device type bytes.
      * Matches a strings like the following: "<categ>-<OUI>-<subcateg>";
@@ -668,6 +669,7 @@ public class SupplicantP2pIfaceHal {
                 if (groupOwnerIntent < 0 || groupOwnerIntent > 15) {
                     groupOwnerIntent = DEFAULT_GROUP_OWNER_INTENT;
                 }
+                goIntent = groupOwnerIntent;
             }
 
             SupplicantResult<String> result = new SupplicantResult(
@@ -728,9 +730,16 @@ public class SupplicantP2pIfaceHal {
             if (!checkSupplicantP2pIfaceAndLogFailure("provisionDiscovery")) return false;
 
             int targetMethod = wpsInfoToConfigMethod(config.wps.setup);
-            if (targetMethod == -1) {
+            if (targetMethod == RESULT_NOT_VALID) {
                 Log.e(TAG, "Unrecognized WPS configuration method: " + config.wps.setup);
                 return false;
+            }
+            if (targetMethod == ISupplicantP2pIface.WpsProvisionMethod.DISPLAY) {
+                // We are doing display, so provision discovery is keypad.
+                targetMethod = ISupplicantP2pIface.WpsProvisionMethod.KEYPAD;
+            } else if (targetMethod == ISupplicantP2pIface.WpsProvisionMethod.KEYPAD) {
+                // We are doing keypad, so provision discovery is display.
+                targetMethod = ISupplicantP2pIface.WpsProvisionMethod.DISPLAY;
             }
 
             if (config.deviceAddress == null) {
@@ -1147,39 +1156,60 @@ public class SupplicantP2pIfaceHal {
 
 
     /**
-     * Set P2P Listen channel.
+     * Set P2P Listen channel and operating chanel.
      *
-     * When specifying a social channel on the 2.4 GHz band (1/6/11) there is no
-     * need to specify the operating class since it defaults to 81. When
-     * specifying a social channel on the 60 GHz band (2), specify the 60 GHz
-     * operating class (180).
-     *
-     * @param channel Wifi channel. eg, 1, 6, 11.
-     * @param operatingClass Operating Class indicates the channel set of the AP
-     *        indicated by this BSSID
+     * @param listenChannel Wifi channel. eg, 1, 6, 11.
+     * @param operatingChannel Wifi channel. eg, 1, 6, 11.
      *
      * @return true, if operation was successful.
      */
-    public boolean setListenChannel(int channel, int operatingClass) {
+    public boolean setListenChannel(int listenChannel, int operatingChannel) {
         synchronized (mLock) {
             if (!checkSupplicantP2pIfaceAndLogFailure("setListenChannel")) return false;
-            // Verify that the integers are not negative. Leave actual parameter validation to
-            // supplicant.
-            if (channel < 0 || operatingClass < 0) {
-                Log.e(TAG, "Invalid values supplied to setListenChannel: " + channel + ", "
-                        + operatingClass);
+
+            if (listenChannel >= 1 && listenChannel <= 11) {
+                SupplicantResult<Void> result = new SupplicantResult(
+                        "setListenChannel(" + listenChannel + ", " + DEFAULT_OPERATING_CLASS + ")");
+                try {
+                    result.setResult(mISupplicantP2pIface.setListenChannel(
+                            listenChannel, DEFAULT_OPERATING_CLASS));
+                } catch (RemoteException e) {
+                    Log.e(TAG, "ISupplicantP2pIface exception: " + e);
+                    supplicantServiceDiedHandler();
+                }
+                if (!result.isSuccess()) {
+                    return false;
+                }
+            } else if (listenChannel != 0) {
+                // listenChannel == 0 does not set any listen channel.
                 return false;
             }
 
-            SupplicantResult<Void> result = new SupplicantResult(
-                    "setListenChannel(" + channel + ", " + operatingClass + ")");
-            try {
-                result.setResult(mISupplicantP2pIface.setListenChannel(channel, operatingClass));
-            } catch (RemoteException e) {
-                Log.e(TAG, "ISupplicantP2pIface exception: " + e);
-                supplicantServiceDiedHandler();
+            if (operatingChannel >= 0 && operatingChannel <= 165) {
+                ArrayList<ISupplicantP2pIface.FreqRange> ranges = new ArrayList<>();
+                // operatingChannel == 0 enables all freqs.
+                if (operatingChannel >= 1 && operatingChannel <= 165) {
+                    int freq = (operatingChannel <= 14 ? 2407 : 5000) + operatingChannel * 5;
+                    ISupplicantP2pIface.FreqRange range1 =  new ISupplicantP2pIface.FreqRange();
+                    range1.min = 1000;
+                    range1.max = freq - 5;
+                    ISupplicantP2pIface.FreqRange range2 =  new ISupplicantP2pIface.FreqRange();
+                    range2.min = freq + 5;
+                    range2.max = 6000;
+                    ranges.add(range1);
+                    ranges.add(range2);
+                }
+                SupplicantResult<Void> result = new SupplicantResult(
+                        "setDisallowedFrequencies(" + ranges + ")");
+                try {
+                    result.setResult(mISupplicantP2pIface.setDisallowedFrequencies(ranges));
+                } catch (RemoteException e) {
+                    Log.e(TAG, "ISupplicantP2pIface exception: " + e);
+                    supplicantServiceDiedHandler();
+                }
+                return result.isSuccess();
             }
-            return result.isSuccess();
+            return false;
         }
     }
 
@@ -1217,7 +1247,7 @@ public class SupplicantP2pIfaceHal {
                     if ("upnp".equals(data[0])) {
                         int version = 0;
                         try {
-                            version = Integer.parseInt(data[1]);
+                            version = Integer.parseInt(data[1], 16);
                         } catch (NumberFormatException e) {
                             Log.e(TAG, "UPnP Service specification invalid: " + s, e);
                             return false;
@@ -1293,7 +1323,7 @@ public class SupplicantP2pIfaceHal {
                     if ("upnp".equals(data[0])) {
                         int version = 0;
                         try {
-                            version = Integer.parseInt(data[1]);
+                            version = Integer.parseInt(data[1], 16);
                         } catch (NumberFormatException e) {
                             Log.e(TAG, "UPnP Service specification invalid: " + s, e);
                             return false;
@@ -1404,9 +1434,9 @@ public class SupplicantP2pIfaceHal {
                 return false;
             }
 
-            int id = 0;
+            long id = 0;
             try {
-                id = Integer.parseInt(identifier);
+                id = Long.parseLong(identifier);
             } catch (NumberFormatException e) {
                 Log.e(TAG, "Service discovery identifier invalid: " + identifier, e);
                 return false;
@@ -1471,23 +1501,19 @@ public class SupplicantP2pIfaceHal {
      * @return true, if operation was successful.
      */
     public boolean startWpsPbc(String groupIfName, String bssid) {
-        if (TextUtils.isEmpty(groupIfName)) return false;
+        if (TextUtils.isEmpty(groupIfName)) {
+            Log.e(TAG, "Group name required when requesting WPS PBC. Got (" + groupIfName + ")");
+            return false;
+        }
         synchronized (mLock) {
             if (!checkSupplicantP2pIfaceAndLogFailure("startWpsPbc")) return false;
-            if (groupIfName == null) {
-                Log.e(TAG, "Group name required when requesting WPS PBC.");
-                return false;
-            }
-
             // Null values should be fine, since bssid can be empty.
             byte[] macAddress = null;
-            if (bssid != null) {
-                try {
-                    macAddress = NativeUtil.macAddressToByteArray(bssid);
-                } catch (Exception e) {
-                    Log.e(TAG, "Could not parse BSSID.", e);
-                    return false;
-                }
+            try {
+                macAddress = NativeUtil.macAddressToByteArray(bssid);
+            } catch (Exception e) {
+                Log.e(TAG, "Could not parse BSSID.", e);
+                return false;
             }
 
             SupplicantResult<Void> result = new SupplicantResult(
@@ -1556,13 +1582,11 @@ public class SupplicantP2pIfaceHal {
 
             // Null values should be fine, since bssid can be empty.
             byte[] macAddress = null;
-            if (bssid != null) {
-                try {
-                    macAddress = NativeUtil.macAddressToByteArray(bssid);
-                } catch (Exception e) {
-                    Log.e(TAG, "Could not parse BSSID.", e);
-                    return null;
-                }
+            try {
+                macAddress = NativeUtil.macAddressToByteArray(bssid);
+            } catch (Exception e) {
+                Log.e(TAG, "Could not parse BSSID.", e);
+                return null;
             }
 
             SupplicantResult<String> result = new SupplicantResult(
@@ -1746,8 +1770,9 @@ public class SupplicantP2pIfaceHal {
     }
 
     /**
-     * Populate list of available networks or update existing list.
+     * Get the persistent group list from wpa_supplicant's p2p mgmt interface
      *
+     * @param groups WifiP2pGroupList to store persistent groups in
      * @return true, if list has been modified.
      */
     public boolean loadGroups(WifiP2pGroupList groups) {
@@ -1774,8 +1799,10 @@ public class SupplicantP2pIfaceHal {
                     Log.e(TAG, "ISupplicantP2pIface exception: " + e);
                     supplicantServiceDiedHandler();
                 }
-                if (!resultIsCurrent.isSuccess() || !resultIsCurrent.getResult()) {
-                    Log.i(TAG, "Skipping non current network");
+                /** Skip the current network, if we're somehow getting networks from the p2p GO
+                    interface, instead of p2p mgmt interface*/
+                if (!resultIsCurrent.isSuccess() || resultIsCurrent.getResult()) {
+                    Log.i(TAG, "Skipping current network");
                     continue;
                 }
 
@@ -1796,7 +1823,8 @@ public class SupplicantP2pIfaceHal {
                 }
                 if (resultSsid.isSuccess() && resultSsid.getResult() != null
                         && !resultSsid.getResult().isEmpty()) {
-                    group.setNetworkName(NativeUtil.encodeSsid(resultSsid.getResult()));
+                    group.setNetworkName(NativeUtil.removeEnclosingQuotes(
+                            NativeUtil.encodeSsid(resultSsid.getResult())));
                 }
 
                 SupplicantResult<byte[]> resultBssid =

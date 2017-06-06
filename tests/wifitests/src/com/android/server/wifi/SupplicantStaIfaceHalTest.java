@@ -590,6 +590,28 @@ public class SupplicantStaIfaceHalTest {
     }
 
     /**
+     * Remove all networks while connected, verify that the current network info is resetted.
+     */
+    @Test
+    public void testRemoveAllNetworksWhileConnected() throws Exception {
+        String testBssid = "11:22:33:44:55:66";
+        when(mSupplicantStaNetworkMock.setBssid(eq(testBssid))).thenReturn(true);
+
+        executeAndValidateInitializationSequence();
+
+        // Connect to a network and verify current network is set.
+        executeAndValidateConnectSequence(4, false);
+        assertTrue(mDut.setCurrentNetworkBssid(testBssid));
+        verify(mSupplicantStaNetworkMock).setBssid(eq(testBssid));
+        reset(mSupplicantStaNetworkMock);
+
+        // Remove all networks and verify current network info is resetted.
+        assertTrue(mDut.removeAllNetworks());
+        assertFalse(mDut.setCurrentNetworkBssid(testBssid));
+        verify(mSupplicantStaNetworkMock, never()).setBssid(eq(testBssid));
+    }
+
+    /**
      * Tests roaming failure because of unable to reassociate.
      */
     @Test
@@ -661,6 +683,23 @@ public class SupplicantStaIfaceHalTest {
         executeAndValidateConnectSequence(4, false);
         assertTrue(mDut.sendCurrentNetworkEapIdentityResponse(identity));
         verify(mSupplicantStaNetworkMock).sendNetworkEapIdentityResponse(eq(identity));
+    }
+
+    /**
+     * Tests the getting of anonymous identity for the current network.
+     */
+    @Test
+    public void testGetCurrentNetworkEapAnonymousIdentity() throws Exception {
+        String anonymousIdentity = "aaa@bbb.ccc";
+        when(mSupplicantStaNetworkMock.fetchEapAnonymousIdentity())
+                .thenReturn(anonymousIdentity);
+        executeAndValidateInitializationSequence();
+
+        // Return null when not connected to the network.
+        assertEquals(null, mDut.getCurrentNetworkEapAnonymousIdentity());
+        executeAndValidateConnectSequence(4, false);
+        // Return anonymous identity for the current network.
+        assertEquals(anonymousIdentity, mDut.getCurrentNetworkEapAnonymousIdentity());
     }
 
     /**

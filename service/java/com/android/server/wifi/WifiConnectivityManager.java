@@ -124,7 +124,7 @@ public class WifiConnectivityManager {
     // Saved network evaluator priority
     private static final int SAVED_NETWORK_EVALUATOR_PRIORITY = 1;
     private static final int PASSPOINT_NETWORK_EVALUATOR_PRIORITY = 2;
-    private static final int RECOMMENDED_NETWORK_EVALUATOR_PRIORITY = 3;
+    private static final int SCORED_NETWORK_EVALUATOR_PRIORITY = 3;
 
     // Log tag for this class
     private static final String TAG = "WifiConnectivityManager";
@@ -287,7 +287,6 @@ public class WifiConnectivityManager {
 
         @Override
         public void onSuccess() {
-            localLog("registerScanListener onSuccess");
         }
 
         @Override
@@ -368,7 +367,6 @@ public class WifiConnectivityManager {
 
         @Override
         public void onSuccess() {
-            localLog("SingleScanListener onSuccess");
         }
 
         @Override
@@ -425,7 +423,6 @@ public class WifiConnectivityManager {
 
         @Override
         public void onSuccess() {
-            localLog("PnoScanListener onSuccess");
         }
 
         @Override
@@ -462,8 +459,6 @@ public class WifiConnectivityManager {
 
         @Override
         public void onPnoNetworkFound(ScanResult[] results) {
-            localLog("PnoScanListener: onPnoNetworkFound: results len = " + results.length);
-
             for (ScanResult result: results) {
                 mScanDetails.add(ScanResultUtil.toScanDetail(result));
             }
@@ -512,7 +507,7 @@ public class WifiConnectivityManager {
             Looper looper, Clock clock, LocalLog localLog, boolean enable,
             FrameworkFacade frameworkFacade,
             SavedNetworkEvaluator savedNetworkEvaluator,
-            RecommendedNetworkEvaluator recommendedNetworkEvaluator,
+            ScoredNetworkEvaluator scoredNetworkEvaluator,
             PasspointNetworkEvaluator passpointNetworkEvaluator) {
         mStateMachine = stateMachine;
         mScanner = scanner;
@@ -569,8 +564,8 @@ public class WifiConnectivityManager {
             mNetworkSelector.registerNetworkEvaluator(passpointNetworkEvaluator,
                     PASSPOINT_NETWORK_EVALUATOR_PRIORITY);
         }
-        mNetworkSelector.registerNetworkEvaluator(recommendedNetworkEvaluator,
-                RECOMMENDED_NETWORK_EVALUATOR_PRIORITY);
+        mNetworkSelector.registerNetworkEvaluator(scoredNetworkEvaluator,
+                SCORED_NETWORK_EVALUATOR_PRIORITY);
 
         // Register for all single scan results
         mScanner.registerScanListener(mAllSingleScanListener);
@@ -748,8 +743,6 @@ public class WifiConnectivityManager {
 
     // Watchdog timer handler
     private void watchdogHandler() {
-        localLog("watchdogHandler");
-
         // Schedule the next timer and start a single scan if we are in disconnected state.
         // Otherwise, the watchdog timer will be scheduled when entering disconnected
         // state.
@@ -781,9 +774,7 @@ public class WifiConnectivityManager {
         if (mWifiState == WIFI_STATE_CONNECTED
                 && (mWifiInfo.txSuccessRate > MAX_TX_PACKET_FOR_FULL_SCANS
                     || mWifiInfo.rxSuccessRate > MAX_RX_PACKET_FOR_FULL_SCANS)) {
-            localLog("No full band scan due to heavy traffic, txSuccessRate="
-                    + mWifiInfo.txSuccessRate + " rxSuccessRate="
-                    + mWifiInfo.rxSuccessRate);
+            localLog("No full band scan due to ongoing traffic");
             isFullBandScan = false;
         }
 
@@ -962,7 +953,7 @@ public class WifiConnectivityManager {
     // the current screen state and WiFi state.
     private void startConnectivityScan(boolean scanImmediately) {
         localLog("startConnectivityScan: screenOn=" + mScreenOn
-                + " wifiState=" + mWifiState
+                + " wifiState=" + stateToString(mWifiState)
                 + " scanImmediately=" + scanImmediately
                 + " wifiEnabled=" + mWifiEnabled
                 + " wifiConnectivityManagerEnabled="
@@ -1012,10 +1003,26 @@ public class WifiConnectivityManager {
     }
 
     /**
+     * Helper function that converts the WIFI_STATE_XXX constants to string
+     */
+    private static String stateToString(int state) {
+        switch (state) {
+            case WIFI_STATE_CONNECTED:
+                return "connected";
+            case WIFI_STATE_DISCONNECTED:
+                return "disconnected";
+            case WIFI_STATE_TRANSITIONING:
+                return "transitioning";
+            default:
+                return "unknown";
+        }
+    }
+
+    /**
      * Handler for WiFi state (connected/disconnected) changes
      */
     public void handleConnectionStateChanged(int state) {
-        localLog("handleConnectionStateChanged: state=" + state);
+        localLog("handleConnectionStateChanged: state=" + stateToString(state));
 
         mWifiState = state;
 

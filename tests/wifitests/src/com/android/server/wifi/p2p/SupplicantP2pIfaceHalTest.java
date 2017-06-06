@@ -116,8 +116,8 @@ public class SupplicantP2pIfaceHalTest {
     final String mInvalidBonjourService2 = "bonjour 123456";
     final String mInvalidBonjourService3 = "bonjour invalid_hex 123456";
     final String mInvalidBonjourService4 = "bonjour 123456 invalid_hex";
-    final String mValidUpnpService = "upnp 1 serviceName";
-    final int mValidUpnpServiceVersion = 1;
+    final String mValidUpnpService = "upnp 10 serviceName";
+    final int mValidUpnpServiceVersion = 16;
     final String mValidUpnpServiceName = "serviceName";
     final String mValidBonjourService = "bonjour 30313233 34353637";
     final ArrayList<Byte> mValidBonjourServiceRequest = new ArrayList<Byte>() {{
@@ -1381,12 +1381,45 @@ public class SupplicantP2pIfaceHalTest {
      */
     @Test
     public void testSetListenChannel_success() throws Exception {
-        when(mISupplicantP2pIfaceMock.setListenChannel(eq(123), eq(456)))
+        int lc = 4;
+        int oc = 163;
+        ISupplicantP2pIface.FreqRange range1 = new ISupplicantP2pIface.FreqRange();
+        range1.min = 1000;
+        range1.max = 5810;
+        ISupplicantP2pIface.FreqRange range2 = new ISupplicantP2pIface.FreqRange();
+        range2.min = 5820;
+        range2.max = 6000;
+        ArrayList<ISupplicantP2pIface.FreqRange> ranges = new ArrayList<>();
+        ranges.add(range1);
+        ranges.add(range2);
+
+        when(mISupplicantP2pIfaceMock.setListenChannel(eq(lc),  anyInt()))
+                .thenReturn(mStatusSuccess);
+        when(mISupplicantP2pIfaceMock.setDisallowedFrequencies(eq(ranges)))
                 .thenReturn(mStatusSuccess);
         // Default value when service is not initialized.
-        assertFalse(mDut.setListenChannel(123, 456));
+        assertFalse(mDut.setListenChannel(lc, oc));
         executeAndValidateInitializationSequence(false, false, false);
-        assertTrue(mDut.setListenChannel(123, 456));
+        assertTrue(mDut.setListenChannel(lc, oc));
+    }
+
+    /**
+     * Sunny day scenario for setListenChannel()
+     */
+    @Test
+    public void testSetListenChannel_successResetDisallowedFreq() throws Exception {
+        int lc = 2;
+        int oc = 0;
+        ArrayList<ISupplicantP2pIface.FreqRange> ranges = new ArrayList<>();
+
+        when(mISupplicantP2pIfaceMock.setListenChannel(eq(lc),  anyInt()))
+                .thenReturn(mStatusSuccess);
+        when(mISupplicantP2pIfaceMock.setDisallowedFrequencies(eq(ranges)))
+                .thenReturn(mStatusSuccess);
+        // Default value when service is not initialized.
+        assertFalse(mDut.setListenChannel(lc, oc));
+        executeAndValidateInitializationSequence(false, false, false);
+        assertTrue(mDut.setListenChannel(lc, oc));
     }
 
     /**
@@ -1396,6 +1429,8 @@ public class SupplicantP2pIfaceHalTest {
     public void testSetListenChannel_invalidArguments() throws Exception {
         executeAndValidateInitializationSequence(false, false, false);
         when(mISupplicantP2pIfaceMock.setListenChannel(anyInt(), anyInt()))
+                .thenReturn(mStatusSuccess);
+        when(mISupplicantP2pIfaceMock.setDisallowedFrequencies(any(ArrayList.class)))
                 .thenReturn(mStatusSuccess);
         assertFalse(mDut.setListenChannel(-1, 1));
         assertFalse(mDut.setListenChannel(1, -1));
@@ -1409,6 +1444,8 @@ public class SupplicantP2pIfaceHalTest {
         executeAndValidateInitializationSequence(false, false, false);
         when(mISupplicantP2pIfaceMock.setListenChannel(anyInt(), anyInt()))
                 .thenReturn(mStatusFailure);
+        when(mISupplicantP2pIfaceMock.setDisallowedFrequencies(any(ArrayList.class)))
+                .thenReturn(mStatusSuccess);
         assertFalse(mDut.setListenChannel(1, 1));
         // Check that service is still alive.
         assertTrue(mDut.isInitializationComplete());
@@ -1740,18 +1777,21 @@ public class SupplicantP2pIfaceHalTest {
         assertFalse(mDut.isInitializationComplete());
     }
 
+    // Test constant used in cancelServiceDiscovery tests
+    static final String SERVICE_IDENTIFIER_STR = "521918410304";
+    static final long SERVICE_IDENTIFIER_LONG = 521918410304L;
 
     /**
      * Sunny day scenario for cancelServiceDiscovery()
      */
     @Test
     public void testCancelServiceDiscovery_success() throws Exception {
-        when(mISupplicantP2pIfaceMock.cancelServiceDiscovery(1234))
+        when(mISupplicantP2pIfaceMock.cancelServiceDiscovery(SERVICE_IDENTIFIER_LONG))
                 .thenReturn(mStatusSuccess);
         // Default value when service is not initialized.
-        assertFalse(mDut.cancelServiceDiscovery("1234"));
+        assertFalse(mDut.cancelServiceDiscovery(SERVICE_IDENTIFIER_STR));
         executeAndValidateInitializationSequence(false, false, false);
-        assertTrue(mDut.cancelServiceDiscovery("1234"));
+        assertTrue(mDut.cancelServiceDiscovery(SERVICE_IDENTIFIER_STR));
     }
 
     /**
@@ -1774,7 +1814,7 @@ public class SupplicantP2pIfaceHalTest {
         executeAndValidateInitializationSequence(false, false, false);
         when(mISupplicantP2pIfaceMock.cancelServiceDiscovery(anyLong()))
                 .thenReturn(mStatusFailure);
-        assertFalse(mDut.cancelServiceDiscovery("1234"));
+        assertFalse(mDut.cancelServiceDiscovery(SERVICE_IDENTIFIER_STR));
         // Check that service is still alive.
         assertTrue(mDut.isInitializationComplete());
     }
@@ -1787,7 +1827,7 @@ public class SupplicantP2pIfaceHalTest {
         executeAndValidateInitializationSequence(false, false, false);
         when(mISupplicantP2pIfaceMock.cancelServiceDiscovery(anyLong()))
                 .thenThrow(mRemoteException);
-        assertFalse(mDut.cancelServiceDiscovery("1234"));
+        assertFalse(mDut.cancelServiceDiscovery(SERVICE_IDENTIFIER_STR));
         // Check service is dead.
         assertFalse(mDut.isInitializationComplete());
     }
@@ -2186,6 +2226,8 @@ public class SupplicantP2pIfaceHalTest {
 
     /**
      * Verify the loading of group info.
+     * Specifically, all groups returned by listNetworks are added as a persistent group, so long as
+     * they are NOT current.
      */
     @Test
     public void testLoadGroups() throws Exception {
@@ -2193,11 +2235,11 @@ public class SupplicantP2pIfaceHalTest {
 
         // Class to hold the P2p group info returned from the HIDL interface.
         class P2pGroupInfo {
-            public ArrayList<Byte> ssid;
+            public String ssid;
             public byte[] bssid;
             public boolean isGo;
             public boolean isCurrent;
-            P2pGroupInfo(ArrayList<Byte> ssid, byte[] bssid, boolean isGo, boolean isCurrent) {
+            P2pGroupInfo(String ssid, byte[] bssid, boolean isGo, boolean isCurrent) {
                 this.ssid = ssid;
                 this.bssid = bssid;
                 this.isGo = isGo;
@@ -2207,16 +2249,20 @@ public class SupplicantP2pIfaceHalTest {
 
         Map<Integer, P2pGroupInfo> groups = new HashMap<>();
         groups.put(0, new P2pGroupInfo(
-                NativeUtil.decodeSsid("\"test_34\""),
+                "test_34",
                 NativeUtil.macAddressToByteArray("56:34:ab:12:12:34"),
                 false, false));
         groups.put(1, new P2pGroupInfo(
-                NativeUtil.decodeSsid("\"test_1234\""),
+                "test_1234",
                 NativeUtil.macAddressToByteArray("16:ed:ab:12:45:34"),
-                true, true));
+                true, false));
         groups.put(2, new P2pGroupInfo(
-                NativeUtil.decodeSsid("\"test_4545\""),
+                "test_4545",
                 NativeUtil.macAddressToByteArray("32:89:23:56:45:34"),
+                true, false));
+        groups.put(3, new P2pGroupInfo(
+                "iShouldntBeHere",
+                NativeUtil.macAddressToByteArray("aa:bb:cc:56:45:34"),
                 true, true));
 
         doAnswer(new AnswerWithArguments() {
@@ -2231,7 +2277,8 @@ public class SupplicantP2pIfaceHalTest {
                 try {
                     doAnswer(new AnswerWithArguments() {
                         public void answer(ISupplicantP2pNetwork.getSsidCallback cb) {
-                            cb.onValues(mStatusSuccess, groups.get(networkId).ssid);
+                            cb.onValues(mStatusSuccess,
+                                    NativeUtil.stringToByteArrayList(groups.get(networkId).ssid));
                             return;
                         }
                     }).when(mISupplicantP2pNetworkMock)
@@ -2268,10 +2315,10 @@ public class SupplicantP2pIfaceHalTest {
         WifiP2pGroupList p2pGroups = new WifiP2pGroupList();
         assertTrue(mDut.loadGroups(p2pGroups));
 
-        assertEquals(2, p2pGroups.getGroupList().size());
+        assertEquals(3, p2pGroups.getGroupList().size());
         for (WifiP2pGroup group : p2pGroups.getGroupList()) {
             int networkId = group.getNetworkId();
-            assertEquals(NativeUtil.encodeSsid(groups.get(networkId).ssid), group.getNetworkName());
+            assertEquals(groups.get(networkId).ssid, group.getNetworkName());
             assertEquals(
                     NativeUtil.macAddressFromByteArray(groups.get(networkId).bssid),
                     group.getOwner().deviceAddress);

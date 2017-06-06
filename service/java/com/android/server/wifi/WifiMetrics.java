@@ -986,6 +986,43 @@ public class WifiMetrics {
         }
     }
 
+    /**
+     * Increment number of times the HAL crashed.
+     */
+    public void incrementNumHalCrashes() {
+        synchronized (mLock) {
+            mWifiLogProto.numHalCrashes++;
+        }
+    }
+
+    /**
+     * Increment number of times the Wificond crashed.
+     */
+    public void incrementNumWificondCrashes() {
+        synchronized (mLock) {
+            mWifiLogProto.numWificondCrashes++;
+        }
+    }
+
+    /**
+     * Increment number of times the wifi on failed due to an error in HAL.
+     */
+    public void incrementNumWifiOnFailureDueToHal() {
+        synchronized (mLock) {
+            mWifiLogProto.numWifiOnFailureDueToHal++;
+        }
+    }
+
+    /**
+     * Increment number of times the wifi on failed due to an error in wificond.
+     */
+    public void incrementNumWifiOnFailureDueToWificond() {
+        synchronized (mLock) {
+            mWifiLogProto.numWifiOnFailureDueToWificond++;
+        }
+    }
+
+
     public static final String PROTO_DUMP_ARG = "wifiMetricsProto";
     public static final String CLEAN_DUMP_ARG = "clean";
 
@@ -999,7 +1036,7 @@ public class WifiMetrics {
      */
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
         synchronized (mLock) {
-            if (args.length > 0 && PROTO_DUMP_ARG.equals(args[0])) {
+            if (args != null && args.length > 0 && PROTO_DUMP_ARG.equals(args[0])) {
                 // Dump serialized WifiLog proto
                 consolidateProto(true);
                 for (ConnectionEvent event : mConnectionEventList) {
@@ -1175,6 +1212,14 @@ public class WifiMetrics {
                 pw.println("  FAILED_NO_CHANNEL: " + mSoftApManagerReturnCodeCounts.get(
                         WifiMetricsProto.SoftApReturnCodeCount.SOFT_AP_FAILED_NO_CHANNEL));
                 pw.print("\n");
+                pw.println("mWifiLogProto.numHalCrashes="
+                        + mWifiLogProto.numHalCrashes);
+                pw.println("mWifiLogProto.numWificondCrashes="
+                        + mWifiLogProto.numWificondCrashes);
+                pw.println("mWifiLogProto.numWifiOnFailureDueToHal="
+                        + mWifiLogProto.numWifiOnFailureDueToHal);
+                pw.println("mWifiLogProto.numWifiOnFailureDueToWificond="
+                        + mWifiLogProto.numWifiOnFailureDueToWificond);
                 pw.println("StaEventList:");
                 for (StaEvent event : mStaEventList) {
                     pw.println(staEventToString(event));
