@@ -56,12 +56,15 @@ import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.net.IpConfiguration;
 import android.net.wifi.ScanSettings;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.LocalOnlyHotspotCallback;
+import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -110,7 +113,6 @@ public class WifiServiceImplTest {
     private static final long WIFI_BACKGROUND_SCAN_INTERVAL = 10000;
     private static final String ANDROID_SYSTEM_PACKAGE = "android";
     private static final String TEST_PACKAGE_NAME = "TestPackage";
-    private static final String SETTINGS_PACKAGE_NAME = "com.android.settings";
     private static final String SYSUI_PACKAGE_NAME = "com.android.systemui";
     private static final int TEST_PID = 6789;
     private static final int TEST_PID2 = 9876;
@@ -363,23 +365,16 @@ public class WifiServiceImplTest {
     }
 
     /**
-     * Verify that a call from Settings can enable wifi if we are in softap mode.
+     * Verify that a call from an app with the NETWORK_SETTINGS permission can enable wifi if we
+     * are in softap mode.
      */
     @Test
-    public void testSetWifiEnabledFromSettingsWhenApEnabled() throws Exception {
+    public void testSetWifiEnabledFromNetworkSettingsHolderWhenApEnabled() throws Exception {
         when(mWifiStateMachine.syncGetWifiApState()).thenReturn(WifiManager.WIFI_AP_STATE_ENABLED);
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        assertTrue(mWifiServiceImpl.setWifiEnabled(SETTINGS_PACKAGE_NAME, true));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that a call from SysUI can enable wifi if we are in softap mode.
-     */
-    @Test
-    public void testSetWifiEnabledFromSysUiWhenApEnabled() throws Exception {
-        when(mWifiStateMachine.syncGetWifiApState()).thenReturn(WifiManager.WIFI_AP_STATE_ENABLED);
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
+        when(mContext.checkCallingOrSelfPermission(
+                eq(android.Manifest.permission.NETWORK_SETTINGS)))
+                        .thenReturn(PackageManager.PERMISSION_GRANTED);
         assertTrue(mWifiServiceImpl.setWifiEnabled(SYSUI_PACKAGE_NAME, true));
         verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
     }
@@ -390,6 +385,9 @@ public class WifiServiceImplTest {
     @Test
     public void testSetWifiEnabledFromAppFailsWhenApEnabled() throws Exception {
         when(mWifiStateMachine.syncGetWifiApState()).thenReturn(WifiManager.WIFI_AP_STATE_ENABLED);
+        when(mContext.checkCallingOrSelfPermission(
+                eq(android.Manifest.permission.NETWORK_SETTINGS)))
+                        .thenReturn(PackageManager.PERMISSION_DENIED);
         assertFalse(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
         verify(mSettingsStore, never()).handleWifiToggled(anyBoolean());
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
@@ -751,7 +749,8 @@ public class WifiServiceImplTest {
                 .thenReturn(LOCATION_MODE_HIGH_ACCURACY);
         when(mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_TETHERING))
                 .thenReturn(false);
-        int result = mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        int result = mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder,
+                TEST_PACKAGE_NAME);
         assertEquals(LocalOnlyHotspotCallback.REQUEST_REGISTERED, result);
     }
 
@@ -773,7 +772,7 @@ public class WifiServiceImplTest {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.CHANGE_WIFI_STATE),
                                                 eq("WifiService"));
-        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
     }
 
     /**
@@ -786,7 +785,7 @@ public class WifiServiceImplTest {
         doThrow(new SecurityException())
                 .when(mWifiPermissionsUtil).enforceLocationPermission(eq(TEST_PACKAGE_NAME),
                                                                       anyInt());
-        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
     }
 
     /**
@@ -796,7 +795,7 @@ public class WifiServiceImplTest {
     @Test(expected = SecurityException.class)
     public void testStartLocalOnlyHotspotThrowsSecurityExceptionWithoutLocationEnabled() {
         when(mSettingsStore.getLocationModeSetting(mContext)).thenReturn(LOCATION_MODE_OFF);
-        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
     }
 
     /**
@@ -808,7 +807,8 @@ public class WifiServiceImplTest {
                             .thenReturn(LOCATION_MODE_HIGH_ACCURACY);
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_TETHERED);
         mLooper.dispatchAll();
-        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(
+                mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
         assertEquals(ERROR_INCOMPATIBLE_MODE, returnCode);
     }
 
@@ -821,7 +821,8 @@ public class WifiServiceImplTest {
                 .thenReturn(LOCATION_MODE_HIGH_ACCURACY);
         when(mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_TETHERING))
                 .thenReturn(true);
-        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        int returnCode = mWifiServiceImpl.startLocalOnlyHotspot(
+                mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
         assertEquals(ERROR_TETHERING_DISALLOWED, returnCode);
     }
 
@@ -833,7 +834,7 @@ public class WifiServiceImplTest {
         registerLOHSRequestFull();
 
         // now do the second request that will fail
-        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder);
+        mWifiServiceImpl.startLocalOnlyHotspot(mAppMessenger, mAppBinder, TEST_PACKAGE_NAME);
     }
 
     /**
@@ -1395,7 +1396,7 @@ public class WifiServiceImplTest {
         Messenger messenger2 = new Messenger(mHandler);
         IBinder binder2 = mock(IBinder.class);
 
-        int result = mWifiServiceImpl.startLocalOnlyHotspot(messenger2, binder2);
+        int result = mWifiServiceImpl.startLocalOnlyHotspot(messenger2, binder2, TEST_PACKAGE_NAME);
         assertEquals(LocalOnlyHotspotCallback.REQUEST_REGISTERED, result);
         mLooper.dispatchAll();
 
@@ -1446,5 +1447,30 @@ public class WifiServiceImplTest {
     @Test(expected = UnsupportedOperationException.class)
     public void testStopWatchLocalOnlyHotspotNotSupported() {
         mWifiServiceImpl.stopWatchLocalOnlyHotspot();
+    }
+
+    /**
+     * Verify that the call to addOrUpdateNetwork for installing Passpoint profile is redirected
+     * to the Passpoint specific API addOrUpdatePasspointConfiguration.
+     */
+    @Test
+    public void testAddPasspointProfileViaAddNetwork() throws Exception {
+        WifiConfiguration config = WifiConfigurationTestUtil.createPasspointNetwork();
+        config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.TLS);
+        when(mResources.getBoolean(com.android.internal.R.bool.config_wifi_hotspot2_enabled))
+                .thenReturn(true);
+
+        when(mWifiStateMachine.syncAddOrUpdatePasspointConfig(any(),
+                any(PasspointConfiguration.class), anyInt())).thenReturn(true);
+        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config));
+        verify(mWifiStateMachine).syncAddOrUpdatePasspointConfig(any(),
+                any(PasspointConfiguration.class), anyInt());
+        reset(mWifiStateMachine);
+
+        when(mWifiStateMachine.syncAddOrUpdatePasspointConfig(any(),
+                any(PasspointConfiguration.class), anyInt())).thenReturn(false);
+        assertEquals(-1, mWifiServiceImpl.addOrUpdateNetwork(config));
+        verify(mWifiStateMachine).syncAddOrUpdatePasspointConfig(any(),
+                any(PasspointConfiguration.class), anyInt());
     }
 }

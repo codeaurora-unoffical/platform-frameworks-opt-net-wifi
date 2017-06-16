@@ -68,7 +68,6 @@ import android.net.wifi.ScanSettings;
 import android.net.wifi.WifiActivityEnergyInfo;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConnectionStatistics;
-import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiLinkLayerStats;
 import android.net.wifi.WifiManager;
@@ -89,11 +88,11 @@ import android.os.PowerManager;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ResultReceiver;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.WorkSource;
 import android.provider.Settings;
-import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Log;
@@ -105,6 +104,7 @@ import com.android.internal.telephony.IccCardConstants;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.util.AsyncChannel;
+import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.util.WifiHandler;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
@@ -120,7 +120,6 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.cert.CertPath;
 import java.security.cert.CertPathValidator;
-import java.security.cert.CertPathValidatorException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.PKIXParameters;
 import java.security.cert.X509Certificate;
@@ -140,10 +139,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private static final String TAG = "WifiService";
     private static final boolean DBG = true;
     private static final boolean VDBG = false;
-
-    // Package names for Settings, QuickSettings and QuickQuickSettings
-    private static final String SYSUI_PACKAGE_NAME = "com.android.systemui";
-    private static final String SETTINGS_PACKAGE_NAME = "com.android.settings";
 
     // Dumpsys argument to enable/disable disconnect on IP reachability failures.
     private static final String DUMP_ARG_SET_IPREACH_DISCONNECT = "set-ipreach-disconnect";
@@ -713,6 +708,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                 "WifiService");
     }
 
+    private boolean isStrictOpEnable() {
+        return SystemProperties.getBoolean("persist.vendor.strict_op_enable", false);
+    }
+
     private void enforceConnectivityInternalPermission() {
         mContext.enforceCallingOrSelfPermission(
                 android.Manifest.permission.CONNECTIVITY_INTERNAL,
@@ -721,6 +720,12 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     private void enforceLocationPermission(String pkgName, int uid) {
         mWifiPermissionsUtil.enforceLocationPermission(pkgName, uid);
+    }
+
+    private boolean checkNetworkSettingsPermission() {
+        int result = mContext.checkCallingOrSelfPermission(
+                android.Manifest.permission.NETWORK_SETTINGS);
+        return result == PackageManager.PERMISSION_GRANTED;
     }
 
     /**
@@ -741,13 +746,24 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         // If SoftAp is enabled, only Settings is allowed to toggle wifi
         boolean apEnabled =
                 mWifiStateMachine.syncGetWifiApState() != WifiManager.WIFI_AP_STATE_DISABLED;
-        boolean isFromSettings =
-                packageName.equals(SYSUI_PACKAGE_NAME) || packageName.equals(SETTINGS_PACKAGE_NAME);
+        boolean isFromSettings = checkNetworkSettingsPermission();
         if (apEnabled && !isFromSettings) {
             mLog.trace("setWifiEnabled SoftAp not disabled: only Settings can enable wifi").flush();
             return false;
         }
-
+        if(isStrictOpEnable()){
+            String callPackage = mContext.getPackageManager().getNameForUid(Binder.getCallingUid());
+            if (enable && (Binder.getCallingUid() >= Process.FIRST_APPLICATION_UID)
+                    && !callPackage.startsWith("android.uid.systemui:")
+                    && !callPackage.startsWith("android.uid.system:")) {
+                AppOpsManager mAppOpsManager = mContext.getSystemService(AppOpsManager.class);
+                int result = mAppOpsManager.noteOp(AppOpsManager.OP_CHANGE_WIFI_STATE,
+                        Binder.getCallingUid(), callPackage);
+                if (result == AppOpsManager.MODE_IGNORED) {
+                    return false;
+                }
+            }
+        }
         /*
         * Caller might not have WRITE_SECURE_SETTINGS,
         * only CHANGE_WIFI_STATE is enforced
@@ -1117,6 +1133,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      *
      * @param messenger Messenger to send messages to the corresponding WifiManager.
      * @param binder IBinder instance to allow cleanup if the app dies
+     * @param packageName String name of the calling package
      *
      * @return int return code for attempt to start LocalOnlyHotspot.
      *
@@ -1126,15 +1143,14 @@ public class WifiServiceImpl extends IWifiManager.Stub {
      * have an outstanding request.
      */
     @Override
-    public int startLocalOnlyHotspot(Messenger messenger, IBinder binder) {
+    public int startLocalOnlyHotspot(Messenger messenger, IBinder binder, String packageName) {
         // first check if the caller has permission to start a local only hotspot
         // need to check for WIFI_STATE_CHANGE and location permission
         final int uid = Binder.getCallingUid();
         final int pid = Binder.getCallingPid();
-        final String pkgName = mContext.getOpPackageName();
 
         enforceChangePermission();
-        enforceLocationPermission(pkgName, uid);
+        enforceLocationPermission(packageName, uid);
         // also need to verify that Locations services are enabled.
         if (mSettingsStore.getLocationModeSetting(mContext) == Settings.Secure.LOCATION_MODE_OFF) {
             throw new SecurityException("Location mode is not enabled.");
@@ -1520,33 +1536,32 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     public int addOrUpdateNetwork(WifiConfiguration config) {
         enforceChangePermission();
         mLog.trace("addOrUpdateNetwork uid=%").c(Binder.getCallingUid()).flush();
-        if (isValid(config) && isValidPasspoint(config)) {
 
-            WifiEnterpriseConfig enterpriseConfig = config.enterpriseConfig;
-
-            if (config.isPasspoint() &&
-                    (enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.TLS ||
-                            enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.TTLS)) {
-                if (config.updateIdentifier != null) {
-                    enforceAccessPermission();
-                }
-                else {
-                    try {
-                        verifyCert(enterpriseConfig.getCaCertificate());
-                    } catch (CertPathValidatorException cpve) {
-                        Slog.e(TAG, "CA Cert " +
-                                enterpriseConfig.getCaCertificate().getSubjectX500Principal() +
-                                " untrusted: " + cpve.getMessage());
-                        return -1;
-                    } catch (GeneralSecurityException | IOException e) {
-                        Slog.e(TAG, "Failed to verify certificate" +
-                                enterpriseConfig.getCaCertificate().getSubjectX500Principal() +
-                                ": " + e);
-                        return -1;
-                    }
-                }
+        // Previously, this API is overloaded for installing Passpoint profiles.  Now
+        // that we have a dedicated API for doing it, redirect the call to the dedicated API.
+        if (config.isPasspoint()) {
+            PasspointConfiguration passpointConfig =
+                    PasspointProvider.convertFromWifiConfig(config);
+            if (passpointConfig.getCredential() == null) {
+                Slog.e(TAG, "Missing credential for Passpoint profile");
+                return -1;
             }
+            // Copy over certificates and keys.
+            passpointConfig.getCredential().setCaCertificate(
+                    config.enterpriseConfig.getCaCertificate());
+            passpointConfig.getCredential().setClientCertificateChain(
+                    config.enterpriseConfig.getClientCertificateChain());
+            passpointConfig.getCredential().setClientPrivateKey(
+                    config.enterpriseConfig.getClientPrivateKey());
+            if (!addOrUpdatePasspointConfiguration(passpointConfig)) {
+                Slog.e(TAG, "Failed to add Passpoint profile");
+                return -1;
+            }
+            // There is no network ID associated with a Passpoint profile.
+            return 0;
+        }
 
+        if (isValid(config)) {
             //TODO: pass the Uid the WifiStateMachine as a message parameter
             Slog.i("addOrUpdateNetwork", " uid = " + Integer.toString(Binder.getCallingUid())
                     + " SSID " + config.SSID
@@ -2421,11 +2436,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         return validity == null || logAndReturnFalse(validity);
     }
 
-    public static boolean isValidPasspoint(WifiConfiguration config) {
-        String validity = checkPasspointValidity(config);
-        return validity == null || logAndReturnFalse(validity);
-    }
-
     public static String checkValidity(WifiConfiguration config) {
         if (config.allowedKeyManagement == null)
             return "allowed kmgmt";
@@ -2449,33 +2459,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             }
             if (staticIpConf.ipAddress == null) {
                 return "null static ip Address";
-            }
-        }
-        return null;
-    }
-
-    public static String checkPasspointValidity(WifiConfiguration config) {
-        if (!TextUtils.isEmpty(config.FQDN)) {
-            /* this is passpoint configuration; it must not have an SSID */
-            if (!TextUtils.isEmpty(config.SSID)) {
-                return "SSID not expected for Passpoint: '" + config.SSID +
-                        "' FQDN " + toHexString(config.FQDN);
-            }
-            /* this is passpoint configuration; it must have a providerFriendlyName */
-            if (TextUtils.isEmpty(config.providerFriendlyName)) {
-                return "no provider friendly name";
-            }
-            WifiEnterpriseConfig enterpriseConfig = config.enterpriseConfig;
-            /* this is passpoint configuration; it must have enterprise config */
-            if (enterpriseConfig == null
-                    || enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.NONE ) {
-                return "no enterprise config";
-            }
-            if ((enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.TLS ||
-                    enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.TTLS ||
-                    enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.PEAP) &&
-                    enterpriseConfig.getCaCertificate() == null) {
-                return "no CA certificate";
             }
         }
         return null;
