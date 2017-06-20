@@ -102,9 +102,9 @@ public class WifiNative {
     * Returns null on failure.
     */
     public IClientInterface setupForClientMode() {
-        if (!startHal(true)) {
-            // TODO(b/34859006): Handle failures.
+        if (!startHalIfNecessary(true)) {
             Log.e(mTAG, "Failed to start HAL for client mode");
+            return null;
         }
         return mWificondControl.setupDriverForClientMode();
     }
@@ -119,9 +119,9 @@ public class WifiNative {
      * Returns null on failure.
      */
     public IApInterface setupForSoftApMode() {
-        if (!startHal(false)) {
-            // TODO(b/34859006): Handle failures.
+        if (!startHalIfNecessary(false)) {
             Log.e(mTAG, "Failed to start HAL for AP mode");
+            return null;
         }
         return mWificondControl.setupDriverForSoftApMode();
     }
@@ -140,7 +140,7 @@ public class WifiNative {
             Log.e(mTAG, "Failed to teardown interfaces from Wificond");
             return false;
         }
-        stopHal();
+        stopHalIfNecessary();
         return true;
     }
 
@@ -678,16 +678,19 @@ public class WifiNative {
     /**
      * Add the provided network configuration to wpa_supplicant and initiate connection to it.
      * This method does the following:
-     * 1. Remove any existing network in wpa_supplicant(This implicitly triggers disconnect).
-     * 2. Add a new network to wpa_supplicant.
-     * 3. Save the provided configuration to wpa_supplicant.
-     * 4. Select the new network in wpa_supplicant.
-     * 5. Triggers reconnect command to wpa_supplicant.
+     * 1. Abort any ongoing scan to unblock the connection request.
+     * 2. Remove any existing network in wpa_supplicant(This implicitly triggers disconnect).
+     * 3. Add a new network to wpa_supplicant.
+     * 4. Save the provided configuration to wpa_supplicant.
+     * 5. Select the new network in wpa_supplicant.
+     * 6. Triggers reconnect command to wpa_supplicant.
      *
      * @param configuration WifiConfiguration parameters for the provided network.
      * @return {@code true} if it succeeds, {@code false} otherwise
      */
     public boolean connectToNetwork(WifiConfiguration configuration) {
+        // Abort ongoing scan before connect() to unblock connection request.
+        mWificondControl.abortScan();
         return mSupplicantStaIfaceHal.connectToNetwork(configuration);
     }
 
@@ -695,15 +698,18 @@ public class WifiNative {
      * Initiates roaming to the already configured network in wpa_supplicant. If the network
      * configuration provided does not match the already configured network, then this triggers
      * a new connection attempt (instead of roam).
-     * 1. First check if we're attempting to connect to the same network as we currently have
+     * 1. Abort any ongoing scan to unblock the roam request.
+     * 2. First check if we're attempting to connect to the same network as we currently have
      * configured.
-     * 2. Set the new bssid for the network in wpa_supplicant.
-     * 3. Triggers reassociate command to wpa_supplicant.
+     * 3. Set the new bssid for the network in wpa_supplicant.
+     * 4. Triggers reassociate command to wpa_supplicant.
      *
      * @param configuration WifiConfiguration parameters for the provided network.
      * @return {@code true} if it succeeds, {@code false} otherwise
      */
     public boolean roamToNetwork(WifiConfiguration configuration) {
+        // Abort ongoing scan before connect() to unblock roaming request.
+        mWificondControl.abortScan();
         return mSupplicantStaIfaceHal.roamToNetwork(configuration);
     }
 
@@ -781,6 +787,16 @@ public class WifiNative {
     public String getCurrentNetworkWpsNfcConfigurationToken() {
         return mSupplicantStaIfaceHal.getCurrentNetworkWpsNfcConfigurationToken();
     }
+
+    /** Remove the request |networkId| from supplicant if it's the current network,
+     * if the current configured network matches |networkId|.
+     *
+     * @param networkId network id of the network to be removed from supplicant.
+     */
+    public void removeNetworkIfCurrent(int networkId) {
+        mSupplicantStaIfaceHal.removeNetworkIfCurrent(networkId);
+    }
+
     /********************************************************
      * Vendor HAL operations
      ********************************************************/
@@ -802,18 +818,27 @@ public class WifiNative {
     }
 
     /**
-     * Bring up the Vendor HAL and configure for STA mode or AP mode.
+     * Bring up the Vendor HAL and configure for STA mode or AP mode, if vendor HAL is supported.
      *
      * @param isStaMode true to start HAL in STA mode, false to start in AP mode.
+     * @return false if the HAL start fails, true if successful or if vendor HAL not supported.
      */
-    public boolean startHal(boolean isStaMode) {
+    private boolean startHalIfNecessary(boolean isStaMode) {
+        if (!mWifiVendorHal.isVendorHalSupported()) {
+            Log.i(mTAG, "Vendor HAL not supported, Ignore start...");
+            return true;
+        }
         return mWifiVendorHal.startVendorHal(isStaMode);
     }
 
     /**
-     * Stops the HAL
+     * Stops the HAL, if vendor HAL is supported.
      */
-    public void stopHal() {
+    private void stopHalIfNecessary() {
+        if (!mWifiVendorHal.isVendorHalSupported()) {
+            Log.i(mTAG, "Vendor HAL not supported, Ignore stop...");
+            return;
+        }
         mWifiVendorHal.stopVendorHal();
     }
 

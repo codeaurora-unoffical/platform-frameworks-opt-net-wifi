@@ -148,7 +148,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
 
     public WificondScannerImpl(Context context, WifiNative wifiNative,
                                      WifiMonitor wifiMonitor, Looper looper, Clock clock) {
-        // TODO figure out how to get channel information from supplicant
+        // TODO get channel information from wificond.
         this(context, wifiNative, wifiMonitor, new NoBandChannelHelper(), looper, clock);
     }
 
@@ -422,7 +422,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             if ((newScanSettings.backgroundScanActive || newScanSettings.singleScanActive)
                     && !allFreqs.isEmpty()) {
                 pauseHwPnoScan();
-                Set<Integer> freqs = allFreqs.getSupplicantScanFreqs();
+                Set<Integer> freqs = allFreqs.getScanFreqs();
                 boolean success = mWifiNative.scan(freqs, hiddenNetworkSSIDSet);
                 if (success) {
                     // TODO handle scan timeout
@@ -562,6 +562,16 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
                     pnoScanResultsArray[i] = hwPnoScanResults.get(i);
                 }
                 mLastScanSettings.pnoScanEventHandler.onPnoNetworkFound(pnoScanResultsArray);
+            }
+            // On pno scan result event, we are expecting a mLastScanSettings for pno scan.
+            // However, if unlikey mLastScanSettings is for single scan, we need this part
+            // to protect from leaving WifiSingleScanStateMachine in a forever wait state.
+            if (mLastScanSettings.singleScanActive
+                    && mLastScanSettings.singleScanEventHandler != null) {
+                Log.w(TAG, "Polling pno scan result when single scan is active, reporting"
+                        + " single scan failure");
+                mLastScanSettings.singleScanEventHandler
+                        .onScanStatus(WifiNative.WIFI_SCAN_FAILED);
             }
             // mLastScanSettings is for either single/batched scan or pno scan.
             // We can safely set it to null when pno scan finishes.

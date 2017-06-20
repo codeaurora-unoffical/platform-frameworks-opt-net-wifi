@@ -1607,7 +1607,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     /**
      * TODO: doc
      */
-    public void setHostApRunning(WifiConfiguration wifiConfig, boolean enable) {
+    public void setHostApRunning(SoftApModeConfiguration wifiConfig, boolean enable) {
         if (enable) {
             sendMessage(CMD_START_AP, wifiConfig);
         } else {
@@ -2806,7 +2806,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
     }
 
-    private void setWifiApState(int wifiApState, int reason) {
+    private void setWifiApState(int wifiApState, int reason, String ifaceName, int mode) {
         final int previousWifiApState = mWifiApState.get();
 
         try {
@@ -2832,6 +2832,12 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             //only set reason number when softAP start failed
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_REASON, reason);
         }
+
+        if (ifaceName == null) {
+            loge("Updating wifiApState with a null iface name");
+        }
+        intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, ifaceName);
+        intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mode);
 
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
     }
@@ -3965,14 +3971,14 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     }
                     break;
                 case CMD_CLIENT_INTERFACE_BINDER_DEATH:
-                    Log.wtf(TAG, "wificond died unexpectedly");
-                    // TODO(b/36586897): Automatically recover from this.
-                    transitionTo(mInitialState);
+                    Log.e(TAG, "wificond died unexpectedly. Triggering recovery");
+                    mWifiMetrics.incrementNumWificondCrashes();
+                    mWifiInjector.getSelfRecovery().trigger(SelfRecovery.REASON_WIFICOND_CRASH);
                     break;
                 case CMD_VENDOR_HAL_HWBINDER_DEATH:
-                    Log.wtf(TAG, "Vendor HAL died unexpectedly");
-                    // TODO(b/36586897): Automatically recover from this.
-                    transitionTo(mInitialState);
+                    Log.e(TAG, "Vendor HAL died unexpectedly. Triggering recovery");
+                    mWifiMetrics.incrementNumHalCrashes();
+                    mWifiInjector.getSelfRecovery().trigger(SelfRecovery.REASON_HAL_CRASH);
                     break;
                 case CMD_DIAGS_CONNECT_TIMEOUT:
                     mWifiDiagnostics.reportConnectionEvent(
@@ -4277,7 +4283,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 case CMD_START_AP:
                     /* Cannot start soft AP while in client mode */
                     loge("Failed to start soft AP with a running supplicant");
-                    setWifiApState(WIFI_AP_STATE_FAILED, WifiManager.SAP_START_FAILURE_GENERAL);
+                    setWifiApState(WIFI_AP_STATE_FAILED, WifiManager.SAP_START_FAILURE_GENERAL,
+                            null, WifiManager.IFACE_IP_MODE_UNSPECIFIED);
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
                     mOperationalMode = message.arg1;
@@ -6645,8 +6652,12 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 return false;
             }
             for (Map.Entry<String, WifiConfiguration> entry : configs.entrySet()) {
+                WifiConfiguration config = entry.getValue();
+                // Reset the network ID retrieved from wpa_supplicant, since we want to treat
+                // this as a new network addition in framework.
+                config.networkId = WifiConfiguration.INVALID_NETWORK_ID;
                 NetworkUpdateResult result = mWifiConfigManager.addOrUpdateNetwork(
-                        entry.getValue(), mSourceMessage.sendingUid);
+                        config, mSourceMessage.sendingUid);
                 if (!result.isSuccess()) {
                     loge("Failed to add network after WPS: " + entry.getValue());
                     return false;
@@ -6663,6 +6674,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
     class SoftApState extends State {
         private SoftApManager mSoftApManager;
+        private String mIfaceName;
+        private int mMode;
 
         private class SoftApListener implements SoftApManager.Listener {
             @Override
@@ -6673,7 +6686,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     sendMessage(CMD_START_AP_FAILURE);
                 }
 
-                setWifiApState(state, reason);
+                setWifiApState(state, reason, mIfaceName, mMode);
             }
         }
 
@@ -6683,11 +6696,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             if (message.what != CMD_START_AP) {
                 throw new RuntimeException("Illegal transition to SoftApState: " + message);
             }
+            SoftApModeConfiguration config = (SoftApModeConfiguration) message.obj;
+            mMode = config.getTargetMode();
 
             IApInterface apInterface = mWifiNative.setupForSoftApMode();
             if (apInterface == null) {
                 setWifiApState(WIFI_AP_STATE_FAILED,
-                        WifiManager.SAP_START_FAILURE_GENERAL);
+                        WifiManager.SAP_START_FAILURE_GENERAL, null, mMode);
                 /**
                  * Transition to InitialState to reset the
                  * driver/HAL back to the initial state.
@@ -6696,13 +6711,19 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 return;
             }
 
-            WifiConfiguration config = (WifiConfiguration) message.obj;
+            try {
+                mIfaceName = apInterface.getInterfaceName();
+            } catch (RemoteException e) {
+                // Failed to get the interface name. The name will not be available for
+                // the enabled broadcast, but since we had an error getting the name, we most likely
+                // won't be able to fully start softap mode.
+            }
 
             checkAndSetConnectivityInstance();
             mSoftApManager = mWifiInjector.makeSoftApManager(mNwService,
                                                              new SoftApListener(),
                                                              apInterface,
-                                                             config);
+                                                             config.getWifiConfiguration());
             mSoftApManager.start();
             mWifiStateTracker.updateState(WifiStateTracker.SOFT_AP);
         }
@@ -6710,6 +6731,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         @Override
         public void exit() {
             mSoftApManager = null;
+            mIfaceName = null;
+            mMode = WifiManager.IFACE_IP_MODE_UNSPECIFIED;
         }
 
         @Override
