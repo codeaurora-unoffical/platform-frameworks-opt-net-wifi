@@ -46,7 +46,7 @@ namespace {
 
 const int kDefaultApChannel = 6;
 const char kHostapdServiceName[] = "hostapd";
-const char kHostapdConfigFilePath[] = "/data/misc/wifi/hostapd.conf";
+const char kHostapdConfigFilePath[] = "/data/vendor/wifi/hostapd.conf";
 
 
 string GeneratePsk(const vector<uint8_t>& ssid,
@@ -109,6 +109,14 @@ bool HostapdManager::WriteHostapdConfig(const string& config) {
     int error = errno;
     LOG(ERROR) << "Cannot write hostapd config to \""
                << kHostapdConfigFilePath << "\": " << strerror(error);
+    struct stat st;
+    int result = stat(kHostapdConfigFilePath, &st);
+    if (result == 0) {
+      LOG(ERROR) << "hostapd config file uid: "<< st.st_uid << ", gid: " << st.st_gid
+                 << ", mode: " << st.st_mode;
+    } else {
+      LOG(ERROR) << "Error calling stat() on hostapd config file: " << strerror(errno);
+    }
     return false;
   }
   return true;
@@ -166,7 +174,7 @@ string HostapdManager::CreateHostapdConfig(
   result = StringPrintf(
       "interface=%s\n"
       "driver=nl80211\n"
-      "ctrl_interface=/data/misc/wifi/hostapd/ctrl\n"
+      "ctrl_interface=/data/vendor/wifi/hostapd/ctrl\n"
       // ssid2 signals to hostapd that the value is not a literal value
       // for use as a SSID.  In this case, we're giving it a hex string
       // and hostapd needs to expect that.

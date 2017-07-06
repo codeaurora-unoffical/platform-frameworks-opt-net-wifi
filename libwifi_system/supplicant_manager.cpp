@@ -35,12 +35,12 @@ namespace {
 const char kSupplicantInitProperty[] = "init.svc.wpa_supplicant";
 const char kSupplicantConfigTemplatePath[] =
     "/etc/wifi/wpa_supplicant.conf";
-const char kSupplicantConfigFile[] = "/data/misc/wifi/wpa_supplicant.conf";
-const char kP2pConfigFile[] = "/data/misc/wifi/p2p_supplicant.conf";
+const char kSupplicantConfigFile[] = "/data/vendor/wifi/wpa_supplicant.conf";
+const char kP2pConfigFile[] = "/data/vendor/wifi/p2p_supplicant.conf";
 const char kSupplicantServiceName[] = "wpa_supplicant";
 constexpr mode_t kConfigFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
 
-const char kWiFiEntropyFile[] = "/data/misc/wifi/entropy.bin";
+const char kWiFiEntropyFile[] = "/data/vendor/wifi/entropy.bin";
 
 const unsigned char kDummyKey[21] = {0x02, 0x11, 0xbe, 0x33, 0x43, 0x35, 0x68,
                                      0x47, 0x84, 0x99, 0xa9, 0x2b, 0x1c, 0xd3,
@@ -67,16 +67,22 @@ int ensure_config_file_exists(const char* config_file) {
     return false;
   }
 
-  templatePath = std::string("/system") + std::string(kSupplicantConfigTemplatePath);
-  srcfd = TEMP_FAILURE_RETRY(open(templatePath.c_str(), O_RDONLY));
+  std::string configPathSystem =
+      std::string("/system") + std::string(kSupplicantConfigTemplatePath);
+  std::string configPathVendor =
+      std::string("/vendor") + std::string(kSupplicantConfigTemplatePath);
+  srcfd = TEMP_FAILURE_RETRY(open(configPathSystem.c_str(), O_RDONLY));
+  templatePath = configPathSystem;
   if (srcfd < 0) {
-    LOG(ERROR) << "Cannot open \"" << templatePath << "\": "
-               << strerror(errno);
-    templatePath = std::string("/vendor") + std::string(kSupplicantConfigTemplatePath);
-    srcfd = TEMP_FAILURE_RETRY(open(templatePath.c_str(), O_RDONLY));
+    int errnoSystem = errno;
+    srcfd = TEMP_FAILURE_RETRY(open(configPathVendor.c_str(), O_RDONLY));
+    templatePath = configPathVendor;
     if (srcfd < 0) {
-      LOG(ERROR) << "Cannot open \"" << templatePath << "\": "
-                 << strerror(errno);
+      int errnoVendor = errno;
+      LOG(ERROR) << "Cannot open \"" << configPathSystem << "\": "
+                 << strerror(errnoSystem);
+      LOG(ERROR) << "Cannot open \"" << configPathVendor << "\": "
+                 << strerror(errnoVendor);
       return false;
     }
   }
