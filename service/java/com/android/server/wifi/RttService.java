@@ -315,6 +315,8 @@ public final class RttService extends SystemService {
             public void OnApTorndownEvent(IApInterface networkInterface) { }
             @Override
             public void OnApInterfaceReady(IApInterface networkInterface) { }
+            @Override
+	    public void OnSoftApClientEvent(byte[] mac_address, boolean connect_status) {}
 
             private RttStateMachine mRttStateMachine;
         }
