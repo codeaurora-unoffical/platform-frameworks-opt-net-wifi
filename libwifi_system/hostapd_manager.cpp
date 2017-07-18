@@ -31,6 +31,7 @@
 #include <private/android_filesystem_config.h>
 
 #include "wifi_system/supplicant_manager.h"
+#include "wifi_fst.h"
 
 using android::base::ParseInt;
 using android::base::ReadFileToString;
@@ -46,8 +47,8 @@ namespace {
 
 const int kDefaultApChannel = 6;
 const char kHostapdServiceName[] = "hostapd";
+const char kHostapdFSTServiceName[] = "hostapd_fst";
 const char kHostapdConfigFilePath[] = "/data/vendor/wifi/hostapd.conf";
-
 
 string GeneratePsk(const vector<uint8_t>& ssid,
                    const vector<uint8_t>& passphrase) {
@@ -81,8 +82,15 @@ bool HostapdManager::StartHostapd() {
     LOG(WARNING) << "Wi-Fi entropy file was not created";
   }
 
-  if (property_set("ctl.start", kHostapdServiceName) != 0) {
+  if (wifi_start_fstman(1)) {
+    return false;
+  }
+
+  if (property_set("ctl.start",
+                   is_fst_softap_enabled() ?
+                     kHostapdFSTServiceName : kHostapdServiceName) != 0) {
     LOG(ERROR) << "Failed to start SoftAP";
+    wifi_stop_fstman(1);
     return false;
   }
 
@@ -93,11 +101,15 @@ bool HostapdManager::StartHostapd() {
 bool HostapdManager::StopHostapd() {
   LOG(DEBUG) << "Stopping the SoftAP service...";
 
-  if (property_set("ctl.stop", kHostapdServiceName) < 0) {
+  if (property_set("ctl.stop",
+                   is_fst_softap_enabled() ?
+                     kHostapdFSTServiceName : kHostapdServiceName) < 0) {
     LOG(ERROR) << "Failed to stop hostapd service!";
+    wifi_stop_fstman(1);
     return false;
   }
 
+  wifi_stop_fstman(1);
   LOG(DEBUG) << "SoftAP stopped successfully";
   return true;
 }
