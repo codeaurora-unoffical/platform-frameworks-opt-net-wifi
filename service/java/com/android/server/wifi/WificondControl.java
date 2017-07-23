@@ -550,6 +550,9 @@ public class WificondControl {
         PnoSettings settings = new PnoSettings();
         settings.pnoNetworks  = new ArrayList<>();
         settings.intervalMs = pnoSettings.periodInMs;
+        settings.plan1IntervalSec = pnoSettings.plan1PeriodInSec;
+        settings.plan1Iterations  = pnoSettings.plan1Iterations;
+        settings.plan2IntervalSec = pnoSettings.plan2PeriodInSec;
         settings.min2gRssi = pnoSettings.min24GHzRssi;
         settings.min5gRssi = pnoSettings.min5GHzRssi;
         if (pnoSettings.networkList != null) {

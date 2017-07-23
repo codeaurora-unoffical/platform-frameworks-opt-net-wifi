@@ -29,6 +29,9 @@ import java.util.Objects;
  */
 public class PnoSettings implements Parcelable {
     public int intervalMs;
+    public int plan1IntervalSec;
+    public int plan1Iterations;
+    public int plan2IntervalSec;
     public int min2gRssi;
     public int min5gRssi;
     public ArrayList<PnoNetwork> pnoNetworks;
@@ -47,7 +50,10 @@ public class PnoSettings implements Parcelable {
         if (settings == null) {
             return false;
         }
-        return intervalMs == settings.intervalMs
+        return  intervalMs == settings.intervalMs
+                && plan1IntervalSec == settings.plan1IntervalSec
+                && plan1Iterations == settings.plan1Iterations
+                && plan2IntervalSec == settings.plan2IntervalSec
                 && min2gRssi == settings.min2gRssi
                 && min5gRssi == settings.min5gRssi
                 && pnoNetworks.equals(settings.pnoNetworks);
@@ -56,7 +62,7 @@ public class PnoSettings implements Parcelable {
     /** override hash code */
     @Override
     public int hashCode() {
-        return Objects.hash(intervalMs, min2gRssi, min5gRssi, pnoNetworks);
+        return Objects.hash(intervalMs, plan1IntervalSec, plan1Iterations, plan2IntervalSec, min2gRssi, min5gRssi, pnoNetworks);
     }
 
     /** implement Parcelable interface */
@@ -72,6 +78,9 @@ public class PnoSettings implements Parcelable {
     @Override
     public void writeToParcel(Parcel out, int flags) {
         out.writeInt(intervalMs);
+        out.writeInt(plan1IntervalSec);
+        out.writeInt(plan1Iterations);
+        out.writeInt(plan2IntervalSec);
         out.writeInt(min2gRssi);
         out.writeInt(min5gRssi);
         out.writeTypedList(pnoNetworks);
@@ -84,6 +93,9 @@ public class PnoSettings implements Parcelable {
         public PnoSettings createFromParcel(Parcel in) {
             PnoSettings result = new PnoSettings();
             result.intervalMs = in.readInt();
+            result.plan1IntervalSec = in.readInt();
+            result.plan1Iterations = in.readInt();
+            result.plan2IntervalSec = in.readInt();
             result.min2gRssi = in.readInt();
             result.min5gRssi = in.readInt();
 
