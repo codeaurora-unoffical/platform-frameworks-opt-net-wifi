@@ -26,6 +26,7 @@ import android.net.StaticIpConfiguration;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.WifiSsid;
 import android.text.TextUtils;
 
 import java.net.InetAddress;
@@ -65,6 +66,7 @@ public class WifiConfigurationTestUtil {
     public static final String[] TEST_WEP_KEYS =
             {"\"WifiConfigurationTestUtilWep1\"", "\"WifiConfigurationTestUtilWep2\"",
                     "45342312ab", "45342312ab45342312ab34ac12"};
+    public static final String TEST_EAP_PASSWORD = "WifiConfigurationTestUtilEapPassword";
     public static final int TEST_WEP_TX_KEY_INDEX = 1;
     public static final String TEST_FQDN = "WifiConfigurationTestUtilFQDN";
     public static final String TEST_PROVIDER_FRIENDLY_NAME =
@@ -241,6 +243,15 @@ public class WifiConfigurationTestUtil {
         return configuration;
     }
 
+    public static WifiConfiguration createPskNetwork(String ssid) {
+        WifiConfiguration configuration =
+                generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid, true, true, null,
+                        null, SECURITY_PSK);
+        configuration.preSharedKey = TEST_PSK;
+        return configuration;
+    }
+
+
     public static WifiConfiguration createPskHiddenNetwork() {
         WifiConfiguration configuration = createPskNetwork();
         configuration.hiddenSSID = true;
@@ -279,6 +290,14 @@ public class WifiConfigurationTestUtil {
                         null, null, SECURITY_EAP);
         return configuration;
     }
+
+    public static WifiConfiguration createEapNetwork(String ssid) {
+        WifiConfiguration configuration =
+                generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid, true, true,
+                        null, null, SECURITY_EAP);
+        return configuration;
+    }
+
 
     public static WifiConfiguration createEapNetwork(int eapMethod, int phase2Method) {
         WifiConfiguration configuration =
@@ -394,6 +413,29 @@ public class WifiConfigurationTestUtil {
         config.setEapMethod(WifiEnterpriseConfig.Eap.TLS);
         config.setPhase2Method(WifiEnterpriseConfig.Phase2.AKA);
         return config;
+    }
+
+    /**
+     * Creates a scan detail corresponding to the provided network and given BSSID, level &frequency
+     * values.
+     */
+    public static ScanDetail createScanDetailForNetwork(
+            WifiConfiguration configuration, String bssid, int level, int frequency,
+            long tsf, long seen) {
+        String caps;
+        if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK)) {
+            caps = "[WPA2-PSK-CCMP]";
+        } else if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP)
+                || configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.IEEE8021X)) {
+            caps = "[WPA2-EAP-CCMP]";
+        } else if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.NONE)
+                && WifiConfigurationUtil.hasAnyValidWepKey(configuration.wepKeys)) {
+            caps = "[WEP]";
+        } else {
+            caps = "[]";
+        }
+        WifiSsid ssid = WifiSsid.createFromAsciiEncoded(configuration.getPrintableSsid());
+        return new ScanDetail(ssid, bssid, caps, level, frequency, tsf, seen);
     }
 
     /**

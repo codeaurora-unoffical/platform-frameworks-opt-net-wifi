@@ -106,11 +106,14 @@ LOCAL_JNI_SHARED_LIBRARIES := \
 	libui \
 	libunwind \
 	libutils \
+	libvndksupport \
 
 ifdef WPA_SUPPLICANT_VERSION
 LOCAL_JNI_SHARED_LIBRARIES += libwpa_client
 endif
 
 LOCAL_PACKAGE_NAME := FrameworksWifiTests
+
+LOCAL_COMPATIBILITY_SUITE := device-tests
 
 include $(BUILD_PACKAGE)

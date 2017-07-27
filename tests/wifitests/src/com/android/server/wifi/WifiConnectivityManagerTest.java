@@ -25,6 +25,7 @@ import static org.mockito.Mockito.*;
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.app.test.TestAlarmManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.net.NetworkScoreManager;
 import android.net.wifi.ScanResult;
@@ -90,6 +91,10 @@ public class WifiConnectivityManagerTest {
         verify(mWifiConfigManager).setOnSavedNetworkUpdateListener(anyObject());
         mWifiConnectivityManager.setWifiEnabled(true);
         when(mClock.getElapsedSinceBootMillis()).thenReturn(SystemClock.elapsedRealtime());
+        mFullScanMaxTxPacketRate = mResource.getInteger(
+                R.integer.config_wifi_framework_max_tx_rate_for_full_scan);
+        mFullScanMaxRxPacketRate = mResource.getInteger(
+                R.integer.config_wifi_framework_max_rx_rate_for_full_scan);
     }
 
     /**
@@ -124,6 +129,8 @@ public class WifiConnectivityManagerTest {
     @Captor ArgumentCaptor<ArrayList<String>> mBssidBlacklistCaptor;
     @Captor ArgumentCaptor<ArrayList<String>> mSsidWhitelistCaptor;
     private MockResources mResources;
+    private int mFullScanMaxTxPacketRate;
+    private int mFullScanMaxRxPacketRate;
 
     private static final int CANDIDATE_NETWORK_ID = 0;
     private static final String CANDIDATE_SSID = "\"AnSsid\"";
@@ -145,6 +152,10 @@ public class WifiConnectivityManagerTest {
                 .thenReturn(-60);
         when(resource.getInteger(
                 R.integer.config_wifi_framework_current_network_boost)).thenReturn(16);
+        when(resource.getInteger(
+                R.integer.config_wifi_framework_max_tx_rate_for_full_scan)).thenReturn(8);
+        when(resource.getInteger(
+                R.integer.config_wifi_framework_max_rx_rate_for_full_scan)).thenReturn(16);
         return resource;
     }
 
@@ -154,6 +165,7 @@ public class WifiConnectivityManagerTest {
         when(context.getResources()).thenReturn(mResource);
         when(context.getSystemService(Context.ALARM_SERVICE)).thenReturn(
                 mAlarmManager.getAlarmManager());
+        when(context.getPackageManager()).thenReturn(mock(PackageManager.class));
 
         return context;
     }
@@ -906,8 +918,8 @@ public class WifiConnectivityManagerTest {
      */
     @Test
     public void checkSingleScanSettingsWhenConnectedWithHighDataRate() {
-        mWifiInfo.txSuccessRate = WifiConnectivityManager.MAX_TX_PACKET_FOR_FULL_SCANS * 2;
-        mWifiInfo.rxSuccessRate = WifiConnectivityManager.MAX_RX_PACKET_FOR_FULL_SCANS * 2;
+        mWifiInfo.txSuccessRate = mFullScanMaxTxPacketRate * 2;
+        mWifiInfo.rxSuccessRate = mFullScanMaxRxPacketRate * 2;
 
         final HashSet<Integer> channelList = new HashSet<>();
         channelList.add(1);
@@ -948,8 +960,8 @@ public class WifiConnectivityManagerTest {
      */
     @Test
     public void checkSingleScanSettingsWhenConnectedWithHighDataRateNotInCache() {
-        mWifiInfo.txSuccessRate = WifiConnectivityManager.MAX_TX_PACKET_FOR_FULL_SCANS * 2;
-        mWifiInfo.rxSuccessRate = WifiConnectivityManager.MAX_RX_PACKET_FOR_FULL_SCANS * 2;
+        mWifiInfo.txSuccessRate = mFullScanMaxTxPacketRate * 2;
+        mWifiInfo.rxSuccessRate = mFullScanMaxRxPacketRate * 2;
 
         final HashSet<Integer> channelList = new HashSet<>();
 

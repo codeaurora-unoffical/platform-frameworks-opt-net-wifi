@@ -20,6 +20,7 @@ import static com.android.server.wifi.WifiStateMachine.WIFI_WORK_SOURCE;
 
 import android.app.AlarmManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
@@ -107,10 +108,6 @@ public class WifiConnectivityManager {
     public static final int MAX_CONNECTION_ATTEMPTS_TIME_INTERVAL_MS = 4 * 60 * 1000; // 4 mins
     // Max number of connection attempts in the above time interval.
     public static final int MAX_CONNECTION_ATTEMPTS_RATE = 6;
-    // Packet tx/rx rates to determine if we want to do partial vs full scans.
-    // TODO(b/31180330): Make these device configs.
-    public static final int MAX_TX_PACKET_FOR_FULL_SCANS = 8;
-    public static final int MAX_RX_PACKET_FOR_FULL_SCANS = 16;
 
     // WifiStateMachine has a bunch of states. From the
     // WifiConnectivityManager's perspective it only cares
@@ -160,6 +157,8 @@ public class WifiConnectivityManager {
     // Device configs
     private boolean mEnableAutoJoinWhenAssociated;
     private boolean mWaitForFullBandScanResults = false;
+    private int mFullScanMaxTxRate;
+    private int mFullScanMaxRxRate;
 
     // PNO settings
     private int mMin5GHzRssi;
@@ -460,6 +459,10 @@ public class WifiConnectivityManager {
         @Override
         public void onPnoNetworkFound(ScanResult[] results) {
             for (ScanResult result: results) {
+                if (result.informationElements == null) {
+                    localLog("Skipping scan result with null information elements");
+                    continue;
+                }
                 mScanDetails.add(ScanResultUtil.toScanDetail(result));
             }
 
@@ -487,7 +490,32 @@ public class WifiConnectivityManager {
 
     private class OnSavedNetworkUpdateListener implements
             WifiConfigManager.OnSavedNetworkUpdateListener {
-        public void onSavedNetworkUpdate() {
+        @Override
+        public void onSavedNetworkAdded(int networkId) {
+            updatePnoScan();
+        }
+        @Override
+        public void onSavedNetworkEnabled(int networkId) {
+            updatePnoScan();
+        }
+        @Override
+        public void onSavedNetworkRemoved(int networkId) {
+            updatePnoScan();
+        }
+        @Override
+        public void onSavedNetworkUpdated(int networkId) {
+            updatePnoScan();
+        }
+        @Override
+        public void onSavedNetworkTemporarilyDisabled(int networkId) {
+            mConnectivityHelper.removeNetworkIfCurrent(networkId);
+        }
+        @Override
+        public void onSavedNetworkPermanentlyDisabled(int networkId) {
+            mConnectivityHelper.removeNetworkIfCurrent(networkId);
+            updatePnoScan();
+        }
+        private void updatePnoScan() {
             // Update the PNO scan network list when screen is off. Here we
             // rely on startConnectivityScan() to perform all the checks and clean up.
             if (!mScreenOn) {
@@ -545,6 +573,10 @@ public class WifiConnectivityManager {
                             R.integer.config_wifi_framework_RSSI_SCORE_OFFSET))
                 * context.getResources().getInteger(
                         R.integer.config_wifi_framework_RSSI_SCORE_SLOPE);
+        mFullScanMaxTxRate = context.getResources().getInteger(
+                R.integer.config_wifi_framework_max_tx_rate_for_full_scan);
+        mFullScanMaxRxRate = context.getResources().getInteger(
+                R.integer.config_wifi_framework_max_rx_rate_for_full_scan);
 
         localLog("PNO settings:" + " min5GHzRssi " + mMin5GHzRssi
                 + " min24GHzRssi " + mMin24GHzRssi
@@ -553,8 +585,8 @@ public class WifiConnectivityManager {
                 + " secureNetworkBonus " + mSecureBonus
                 + " initialScoreMax " + mInitialScoreMax);
 
-        boolean hs2Enabled = context.getResources().getBoolean(
-                R.bool.config_wifi_hotspot2_enabled);
+        boolean hs2Enabled = context.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_PASSPOINT);
         localLog("Passpoint is: " + (hs2Enabled ? "enabled" : "disabled"));
 
         // Register the network evaluators
@@ -654,7 +686,7 @@ public class WifiConnectivityManager {
             return;
         }
 
-        Long elapsedTimeMillis = mClock.getElapsedSinceBootMillis();
+        long elapsedTimeMillis = mClock.getElapsedSinceBootMillis();
         if (!mScreenOn && shouldSkipConnectionAttempt(elapsedTimeMillis)) {
             localLog("connectToNetwork: Too many connection attempts. Skipping this attempt!");
             mTotalConnectivityAttemptsRateLimited++;
@@ -772,8 +804,8 @@ public class WifiConnectivityManager {
 
         // If the WiFi traffic is heavy, only partial scan is initiated.
         if (mWifiState == WIFI_STATE_CONNECTED
-                && (mWifiInfo.txSuccessRate > MAX_TX_PACKET_FOR_FULL_SCANS
-                    || mWifiInfo.rxSuccessRate > MAX_RX_PACKET_FOR_FULL_SCANS)) {
+                && (mWifiInfo.txSuccessRate > mFullScanMaxTxRate
+                    || mWifiInfo.rxSuccessRate > mFullScanMaxRxRate)) {
             localLog("No full band scan due to ongoing traffic");
             isFullBandScan = false;
         }

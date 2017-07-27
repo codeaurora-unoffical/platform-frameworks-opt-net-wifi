@@ -41,7 +41,8 @@ LOCAL_SHARED_LIBRARIES := \
 LOCAL_SRC_FILES := \
     hostapd_manager.cpp \
     interface_tool.cpp \
-    supplicant_manager.cpp
+    supplicant_manager.cpp \
+    wifi_fst.cpp
 include $(BUILD_SHARED_LIBRARY)
 
 # Test utilities (e.g. mock classes) for libwifi-system

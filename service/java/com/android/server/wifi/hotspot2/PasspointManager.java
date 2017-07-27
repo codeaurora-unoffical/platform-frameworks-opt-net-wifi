@@ -18,9 +18,7 @@ package com.android.server.wifi.hotspot2;
 
 import static android.net.wifi.WifiManager.ACTION_PASSPOINT_DEAUTH_IMMINENT;
 import static android.net.wifi.WifiManager.ACTION_PASSPOINT_ICON;
-import static android.net.wifi.WifiManager.ACTION_PASSPOINT_OSU_PROVIDERS_LIST;
 import static android.net.wifi.WifiManager.ACTION_PASSPOINT_SUBSCRIPTION_REMEDIATION;
-import static android.net.wifi.WifiManager.EXTRA_ANQP_ELEMENT_DATA;
 import static android.net.wifi.WifiManager.EXTRA_BSSID_LONG;
 import static android.net.wifi.WifiManager.EXTRA_DELAY;
 import static android.net.wifi.WifiManager.EXTRA_ESS;
@@ -35,6 +33,7 @@ import android.graphics.drawable.Icon;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
+import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.os.UserHandle;
 import android.text.TextUtils;
@@ -49,7 +48,8 @@ import com.android.server.wifi.WifiKeyStore;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.hotspot2.anqp.ANQPElement;
 import com.android.server.wifi.hotspot2.anqp.Constants;
-import com.android.server.wifi.hotspot2.anqp.RawByteElement;
+import com.android.server.wifi.hotspot2.anqp.HSOsuProvidersElement;
+import com.android.server.wifi.hotspot2.anqp.OsuProviderInfo;
 import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -121,18 +121,6 @@ public class PasspointManager {
 
             // Add new entry to the cache.
             mAnqpCache.addEntry(anqpKey, anqpElements);
-
-            // Broadcast OSU providers info.
-            if (anqpElements.containsKey(Constants.ANQPElementType.HSOSUProviders)) {
-                RawByteElement osuProviders = (RawByteElement) anqpElements.get(
-                        Constants.ANQPElementType.HSOSUProviders);
-                Intent intent = new Intent(ACTION_PASSPOINT_OSU_PROVIDERS_LIST);
-                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-                intent.putExtra(EXTRA_BSSID_LONG, bssid);
-                intent.putExtra(EXTRA_ANQP_ELEMENT_DATA, osuProviders.getPayload());
-                mContext.sendBroadcastAsUser(intent, UserHandle.ALL,
-                        android.Manifest.permission.ACCESS_WIFI_STATE);
-            }
         }
 
         @Override
@@ -337,7 +325,13 @@ public class PasspointManager {
                 scanResult.informationElements);
 
         // Lookup ANQP data in the cache.
-        long bssid = Utils.parseMac(scanResult.BSSID);
+        long bssid;
+        try {
+            bssid = Utils.parseMac(scanResult.BSSID);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "Invalid BSSID provided in the scan result: " + scanResult.BSSID);
+            return null;
+        }
         ANQPNetworkKey anqpKey = ANQPNetworkKey.buildKey(scanResult.SSID, bssid, scanResult.hessid,
                 vsa.anqpDomainID);
         ANQPData anqpEntry = mAnqpCache.getEntry(anqpKey);
@@ -448,7 +442,13 @@ public class PasspointManager {
                 InformationElementUtil.getHS2VendorSpecificIE(scanResult.informationElements);
 
         // Lookup ANQP data in the cache.
-        long bssid = Utils.parseMac(scanResult.BSSID);
+        long bssid;
+        try {
+            bssid = Utils.parseMac(scanResult.BSSID);
+        } catch (IllegalArgumentException e) {
+            Log.e(TAG, "Invalid BSSID provided in the scan result: " + scanResult.BSSID);
+            return new HashMap<Constants.ANQPElementType, ANQPElement>();
+        }
         ANQPData anqpEntry = mAnqpCache.getEntry(ANQPNetworkKey.buildKey(
                 scanResult.SSID, bssid, scanResult.hessid, vsa.anqpDomainID));
         if (anqpEntry != null) {
@@ -472,6 +472,10 @@ public class PasspointManager {
             Log.e(TAG, "Attempt to get matching config for a null ScanResult");
             return null;
         }
+        if (!scanResult.isPasspointNetwork()) {
+            Log.e(TAG, "Attempt to get matching config for a non-Passpoint AP");
+            return null;
+        }
         Pair<PasspointProvider, PasspointMatch> matchedProvider = matchProvider(scanResult);
         if (matchedProvider == null) {
             return null;
@@ -482,6 +486,45 @@ public class PasspointManager {
             config.isHomeProviderNetwork = true;
         }
         return config;
+    }
+
+    /**
+     * Return the list of Hosspot 2.0 OSU (Online Sign-Up) providers associated with the given
+     * AP.
+     *
+     * An empty list will be returned when an invalid scan result is provided or no match is found.
+     *
+     * @param scanResult The scan result of the AP
+     * @return List of {@link OsuProvider}
+     */
+    public List<OsuProvider> getMatchingOsuProviders(ScanResult scanResult) {
+        if (scanResult == null) {
+            Log.e(TAG, "Attempt to retrieve OSU providers for a null ScanResult");
+            return new ArrayList<OsuProvider>();
+        }
+        if (!scanResult.isPasspointNetwork()) {
+            Log.e(TAG, "Attempt to retrieve OSU providers for a non-Passpoint AP");
+            return new ArrayList<OsuProvider>();
+        }
+
+        // Lookup OSU Providers ANQP element.
+        Map<Constants.ANQPElementType, ANQPElement> anqpElements = getANQPElements(scanResult);
+        if (!anqpElements.containsKey(Constants.ANQPElementType.HSOSUProviders)) {
+            return new ArrayList<OsuProvider>();
+        }
+
+        HSOsuProvidersElement element =
+                (HSOsuProvidersElement) anqpElements.get(Constants.ANQPElementType.HSOSUProviders);
+        List<OsuProvider> providers = new ArrayList<>();
+        for (OsuProviderInfo info : element.getProviders()) {
+            // TODO(b/62256482): include icon data once the icon file retrieval and management
+            // support is added.
+            OsuProvider provider = new OsuProvider(element.getOsuSsid(), info.getFriendlyName(),
+                    info.getServiceDescription(), info.getServerUri(),
+                    info.getNetworkAccessIdentifier(), info.getMethodList(), null);
+            providers.add(provider);
+        }
+        return providers;
     }
 
     /**

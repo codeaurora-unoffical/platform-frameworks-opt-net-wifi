@@ -131,17 +131,13 @@ public class WifiNative {
      *
      * 1. Tears down all the interfaces from Wificond.
      * 2. Stops the Wifi HAL.
-     *
-     * @return Returns true on success.
      */
-    public boolean tearDown() {
+    public void tearDown() {
         if (!mWificondControl.tearDownInterfaces()) {
             // TODO(b/34859006): Handle failures.
             Log.e(mTAG, "Failed to teardown interfaces from Wificond");
-            return false;
         }
         stopHalIfNecessary();
-        return true;
     }
 
     /********************************************************
@@ -787,6 +783,16 @@ public class WifiNative {
     public String getCurrentNetworkWpsNfcConfigurationToken() {
         return mSupplicantStaIfaceHal.getCurrentNetworkWpsNfcConfigurationToken();
     }
+
+    /** Remove the request |networkId| from supplicant if it's the current network,
+     * if the current configured network matches |networkId|.
+     *
+     * @param networkId network id of the network to be removed from supplicant.
+     */
+    public void removeNetworkIfCurrent(int networkId) {
+        mSupplicantStaIfaceHal.removeNetworkIfCurrent(networkId);
+    }
+
     /********************************************************
      * Vendor HAL operations
      ********************************************************/

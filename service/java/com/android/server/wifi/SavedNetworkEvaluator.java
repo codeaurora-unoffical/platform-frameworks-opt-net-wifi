@@ -23,6 +23,7 @@ import android.util.LocalLog;
 import android.util.Pair;
 
 import com.android.internal.R;
+import com.android.server.wifi.util.TelephonyUtil;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -107,9 +108,6 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
                 continue;
             }
 
-            WifiConfiguration.NetworkSelectionStatus status =
-                    network.getNetworkSelectionStatus();
-
             // If a configuration is temporarily disabled, re-enable it before trying
             // to connect to it.
             mWifiConfigManager.tryEnableNetwork(network.networkId);
@@ -120,28 +118,26 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             // Clear the cached candidate, score and seen.
             mWifiConfigManager.clearNetworkCandidateScanResult(network.networkId);
 
-            boolean networkDisabled = false;
-            boolean networkStringLogged = false;
-            for (int index = WifiConfiguration.NetworkSelectionStatus
-                    .NETWORK_SELECTION_DISABLED_STARTING_INDEX;
-                    index < WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_DISABLED_MAX;
-                    index++) {
-                int count = status.getDisableReasonCounter(index);
-                if (count > 0) {
-                    networkDisabled = true;
-                    if (!networkStringLogged) {
-                        sbuf.append("  ").append(WifiNetworkSelector.toNetworkString(network))
-                                .append(" ");
-                        networkStringLogged = true;
+            // Log disabled network.
+            WifiConfiguration.NetworkSelectionStatus status = network.getNetworkSelectionStatus();
+            if (!status.isNetworkEnabled()) {
+                sbuf.append("  ").append(WifiNetworkSelector.toNetworkString(network)).append(" ");
+                for (int index = WifiConfiguration.NetworkSelectionStatus
+                            .NETWORK_SELECTION_DISABLED_STARTING_INDEX;
+                        index < WifiConfiguration.NetworkSelectionStatus
+                            .NETWORK_SELECTION_DISABLED_MAX;
+                        index++) {
+                    int count = status.getDisableReasonCounter(index);
+                    // Here we log the reason as long as its count is greater than zero. The
+                    // network may not be disabled because of this particular reason. Logging
+                    // this information anyway to help understand what happened to the network.
+                    if (count > 0) {
+                        sbuf.append("reason=")
+                                .append(WifiConfiguration.NetworkSelectionStatus
+                                        .getNetworkDisableReasonString(index))
+                                .append(", count=").append(count).append("; ");
                     }
-                    sbuf.append("reason=")
-                            .append(WifiConfiguration.NetworkSelectionStatus
-                                    .getNetworkDisableReasonString(index))
-                            .append(", count=").append(count).append("; ");
                 }
-            }
-
-            if (networkDisabled) {
                 sbuf.append("\n");
             }
         }
@@ -253,7 +249,7 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
             // the scores and use the highest one as the ScanResult's score.
             List<WifiConfiguration> associatedConfigurations = null;
             WifiConfiguration associatedConfiguration =
-                    mWifiConfigManager.getSavedNetworkForScanDetailAndCache(scanDetail);
+                    mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(scanDetail);
 
             if (associatedConfiguration == null) {
                 continue;
@@ -264,11 +260,12 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
 
             for (WifiConfiguration network : associatedConfigurations) {
                 /**
-                 * Ignore Passpoint networks. Passpoint networks are also considered as "saved"
-                 * network, but without being persisted to the storage. They are being evaluated
-                 * by {@link PasspointNetworkEvaluator}.
+                 * Ignore Passpoint and Ephemeral networks. They are configured networks,
+                 * but without being persisted to the storage. They are evaluated by
+                 * {@link PasspointNetworkEvaluator} and {@link ScoredNetworkEvaluator}
+                 * respectively.
                  */
-                if (network.isPasspoint()) {
+                if (network.isPasspoint() || network.isEphemeral()) {
                     continue;
                 }
 
@@ -285,6 +282,10 @@ public class SavedNetworkEvaluator implements WifiNetworkSelector.NetworkEvaluat
                     localLog("Network " + WifiNetworkSelector.toNetworkString(network)
                             + " has specified BSSID " + network.BSSID + ". Skip "
                             + scanResult.BSSID);
+                    continue;
+                } else if (TelephonyUtil.isSimConfig(network)
+                        && !mWifiConfigManager.isSimPresent()) {
+                    // Don't select if security type is EAP SIM/AKA/AKA' when SIM is not present.
                     continue;
                 }
 
