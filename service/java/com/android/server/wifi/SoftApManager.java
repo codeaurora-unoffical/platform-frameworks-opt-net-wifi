@@ -76,6 +76,8 @@ public class SoftApManager implements ActiveModeManager {
 
     private final String mCountryCode;
 
+    private int mSoftApChannel = 0;
+
     private final SoftApStateMachine mStateMachine;
 
     private final Listener mListener;
@@ -365,6 +367,14 @@ private static class DnsmasqThread extends Thread {
         }
     }
     /**
+     * Set SoftAp channel
+     * @param channel is channel number
+     */
+    public void setSapChannel(int channel) {
+        mSoftApChannel = channel;
+    }
+
+    /**
      * Start a soft AP instance with the given configuration.
      * @param config AP configuration
      * @return integer result code
@@ -401,6 +411,12 @@ private static class DnsmasqThread extends Thread {
         int encryptionType = getIApInterfaceEncryptionType(localConfig);
 
         try {
+            /* Create interface as part of CMD_SET_AP in WifiStateMachine/SoftApStateMachine. */
+            if ((localConfig.apBand != WifiConfiguration.AP_BAND_5GHZ)
+                   && (mSoftApChannel != 0)) {
+                localConfig.apBand = WifiConfiguration.AP_BAND_2GHZ;
+                localConfig.apChannel = mSoftApChannel;
+            }
             // Note that localConfig.SSID is intended to be either a hex string or "double quoted".
             // However, it seems that whatever is handing us these configurations does not obey
             // this convention.

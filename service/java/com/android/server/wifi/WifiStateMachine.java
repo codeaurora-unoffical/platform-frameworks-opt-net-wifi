@@ -26,6 +26,7 @@ import static android.net.wifi.WifiManager.WIFI_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_STATE_ENABLED;
 import static android.net.wifi.WifiManager.WIFI_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN;
+import static android.provider.Settings.Secure.WIFI_DISCONNECT_DELAY_DURATION;
 
 import android.Manifest;
 import android.app.ActivityManager;
@@ -224,6 +225,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     // Object holding most recent wifi score report and bad Linkspeed count
     private final WifiScoreReport mWifiScoreReport;
     private final PasspointManager mPasspointManager;
+    private String mSapInterfaceName = null;
+    private boolean mStaAndAPConcurrency = false;
+    private SoftApStateMachine mSoftApStateMachine = null;
 
     /* Scan results handling */
     private List<ScanDetail> mScanResults = new ArrayList<>();
@@ -432,6 +436,35 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     }
 
     private IpManager mIpManager;
+
+    public SoftApStateMachine getSoftApStateMachine() {
+        return mSoftApStateMachine;
+    }
+
+    public void setStaSoftApConcurrency() {
+        mSoftApStateMachine =
+               new SoftApStateMachine(mContext, mWifiInjector,
+                                      mWifiNative, mNwService, mBatteryStats);
+        mStaAndAPConcurrency = true;
+        mWifiNative.setStaSoftApConcurrency(true);
+        logd("mSoftApStateMachine is created");
+    }
+
+    public void setNewSapInterface(String intf) {
+        mSapInterfaceName = intf;
+    }
+
+    public void cleanup() {
+        // Tearing down the client interfaces below is going to stop our supplicant.
+        mWifiMonitor.stopAllMonitoring();
+
+        mDeathRecipient.unlinkToDeath();
+        mWifiNative.tearDown();
+    }
+
+    public int getOperationalMode() {
+        return mOperationalMode;
+    }
 
     // Channel for sending replies.
     private AsyncChannel mReplyChannel = new AsyncChannel();
@@ -760,6 +793,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
      * from the default config if the setting is not set
      */
     private long mSupplicantScanIntervalMs;
+    /**
+    * Delay configured for delayed disconnect.
+    **/
+    private int mDisconnectDelayDuration;
 
     private boolean mEnableAutoJoinWhenAssociated;
     private int mAlwaysEnableScansWhileAssociated;
@@ -1214,6 +1251,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mWifiNative.enableVerboseLogging(verbose);
         mWifiConfigManager.enableVerboseLogging(verbose);
         mSupplicantStateTracker.enableVerboseLogging(verbose);
+        if (mStaAndAPConcurrency) {
+            mSoftApStateMachine.enableVerboseLogging(verbose);
+        }
     }
 
     private static final String SYSTEM_PROPERTY_LOG_CONTROL_WIFIHAL = "log.tag.WifiHAL";
@@ -1644,7 +1684,23 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         if (enable) {
             sendMessage(CMD_START_SUPPLICANT);
         } else {
-            sendMessage(CMD_STOP_SUPPLICANT);
+            mDisconnectDelayDuration = -1;
+            try {
+                mDisconnectDelayDuration = Settings.Secure.getInt(mContext.getContentResolver(),
+                        WIFI_DISCONNECT_DELAY_DURATION,0) ;
+            } catch (NumberFormatException ex) {
+                mDisconnectDelayDuration = 0;
+                Log.e(TAG, " get mDisconnectDelayDuration caught exception ");
+            }
+            if ((mDisconnectDelayDuration > 0) && (mNetworkInfo.getState()
+                    == NetworkInfo.State.CONNECTED)) {
+                Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
+                mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+                Log.e(TAG, " Disconnection delayed by  " + mDisconnectDelayDuration + " seconds");
+                sendMessageDelayed(CMD_STOP_SUPPLICANT, mDisconnectDelayDuration * 1000);
+            } else {
+                sendMessage(CMD_STOP_SUPPLICANT);
+            }
         }
     }
 
@@ -1698,6 +1754,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
      * TODO: doc
      */
     public int syncGetWifiApState() {
+        if (mStaAndAPConcurrency) {
+            return mSoftApStateMachine.syncGetWifiApState();
+        }
         return mWifiApState.get();
     }
 
@@ -4038,18 +4097,29 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
     class InitialState extends State {
 
-        private void cleanup() {
-            // Tearing down the client interfaces below is going to stop our supplicant.
-            mWifiMonitor.stopAllMonitoring();
-
-            mDeathRecipient.unlinkToDeath();
-            mWifiNative.tearDown();
+        private void staCleanup() {
+            boolean skipUnload = false;
+            if (mStaAndAPConcurrency) {
+                int wifiApState = mSoftApStateMachine.syncGetWifiApState();
+                if ((wifiApState ==  WifiManager.WIFI_AP_STATE_ENABLING) ||
+                       (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
+                    log("Avoid unloading driver, AP_STATE is enabled/enabling");
+                    skipUnload = true;
+                }
+            }
+            if (!skipUnload) {
+                cleanup();
+            } else  {
+                mWifiMonitor.stopAllMonitoring();
+                mDeathRecipient.unlinkToDeath();
+                mWifiNative.tearDownSta();
+            }
         }
 
         @Override
         public void enter() {
             mWifiStateTracker.updateState(WifiStateTracker.INVALID);
-            cleanup();
+            staCleanup();
         }
 
         @Override
@@ -4061,7 +4131,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     if (mClientInterface == null
                             || !mDeathRecipient.linkToDeath(mClientInterface.asBinder())) {
                         setWifiState(WifiManager.WIFI_STATE_UNKNOWN);
-                        cleanup();
+                        staCleanup();
                         break;
                     }
 
@@ -4091,7 +4161,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     if (!mWifiNative.enableSupplicant()) {
                         loge("Failed to start supplicant!");
                         setWifiState(WifiManager.WIFI_STATE_UNKNOWN);
-                        cleanup();
+                        staCleanup();
                         break;
                     }
                     if (mVerboseLoggingEnabled) log("Supplicant start successful");
@@ -6727,8 +6797,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             @Override
             public void onStateChanged(int state, int reason) {
                 if (state == WIFI_AP_STATE_DISABLED) {
+                    mWifiNative.addOrRemoveInterface(mSapInterfaceName, false);
                     sendMessage(CMD_AP_STOPPED);
                 } else if (state == WIFI_AP_STATE_FAILED) {
+                    mWifiNative.addOrRemoveInterface(mSapInterfaceName, false);
                     sendMessage(CMD_START_AP_FAILURE);
                 }
 
@@ -6745,8 +6817,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             SoftApModeConfiguration config = (SoftApModeConfiguration) message.obj;
             mMode = config.getTargetMode();
 
+            if (mSapInterfaceName != null &&
+                !mWifiNative.addOrRemoveInterface(mSapInterfaceName, true)) {
+                transitionTo(mInitialState);
+                return;
+            }
+
             IApInterface apInterface = mWifiNative.setupForSoftApMode();
             if (apInterface == null) {
+                mWifiNative.addOrRemoveInterface(mSapInterfaceName, false);
                 setWifiApState(WIFI_AP_STATE_FAILED,
                         WifiManager.SAP_START_FAILURE_GENERAL, null, mMode);
                 /**
