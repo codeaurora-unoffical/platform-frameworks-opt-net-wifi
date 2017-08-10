@@ -48,7 +48,7 @@ namespace {
 const int kDefaultApChannel = 6;
 const char kHostapdServiceName[] = "hostapd";
 const char kHostapdFSTServiceName[] = "hostapd_fst";
-const char kHostapdConfigFilePath[] = "/data/vendor/wifi/hostapd.conf";
+const char kHostapdConfigFilePath[] = "/data/misc/wifi/hostapd.conf";
 
 string GeneratePsk(const vector<uint8_t>& ssid,
                    const vector<uint8_t>& passphrase) {
@@ -186,7 +186,7 @@ string HostapdManager::CreateHostapdConfig(
   result = StringPrintf(
       "interface=%s\n"
       "driver=nl80211\n"
-      "ctrl_interface=/data/vendor/wifi/hostapd/ctrl\n"
+      "ctrl_interface=/data/misc/wifi/hostapd/ctrl\n"
       // ssid2 signals to hostapd that the value is not a literal value
       // for use as a SSID.  In this case, we're giving it a hex string
       // and hostapd needs to expect that.
