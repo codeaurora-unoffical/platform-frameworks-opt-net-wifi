@@ -23,6 +23,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
 import android.net.ConnectivityManager;
 import android.net.NetworkScoreManager;
+import android.os.Binder;
 import android.os.RemoteException;
 import android.os.UserManager;
 import android.provider.Settings;
@@ -76,6 +77,22 @@ public class WifiPermissionsUtil {
     }
 
     /**
+     * Checks if the app has the permission to change Wi-Fi network configuration or not.
+     *
+     * @param uid uid of the app.
+     * @return true if the app does have the permission, false otherwise.
+     */
+    public boolean checkChangePermission(int uid) {
+        try {
+            int permission = mWifiPermissionsWrapper.getChangeWifiConfigPermission(uid);
+            return (permission == PackageManager.PERMISSION_GRANTED);
+        } catch (RemoteException e) {
+            mLog.err("Error checking for permission: %").r(e.getMessage()).flush();
+            return false;
+        }
+    }
+
+    /**
      * Check and enforce tether change permission.
      *
      * @param context Context object of the caller.
@@ -100,7 +117,7 @@ public class WifiPermissionsUtil {
     /**
      * API to determine if the caller has permissions to get
      * scan results.
-     * @param pkgName Packagename of the application requesting access
+     * @param pkgName package name of the application requesting access
      * @param uid The uid of the package
      * @param minVersion Minimum app API Version number to enforce location permission
      * @return boolean true or false if permissions is granted
@@ -177,19 +194,24 @@ public class WifiPermissionsUtil {
      * current user.
      */
     private boolean isCurrentProfile(int uid) {
-        int currentUser = mWifiPermissionsWrapper.getCurrentUser();
-        int callingUserId = mWifiPermissionsWrapper.getCallingUserId(uid);
-        if (callingUserId == currentUser) {
-            return true;
-        } else {
-            List<UserInfo> userProfiles = mUserManager.getProfiles(currentUser);
-            for (UserInfo user: userProfiles) {
-                if (user.id == callingUserId) {
-                    return true;
+        final long token = Binder.clearCallingIdentity();
+        try {
+            int currentUser = mWifiPermissionsWrapper.getCurrentUser();
+            int callingUserId = mWifiPermissionsWrapper.getCallingUserId(uid);
+            if (callingUserId == currentUser) {
+                return true;
+            } else {
+                List<UserInfo> userProfiles = mUserManager.getProfiles(currentUser);
+                for (UserInfo user : userProfiles) {
+                    if (user.id == callingUserId) {
+                        return true;
+                    }
                 }
             }
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(token);
         }
-        return false;
     }
 
     /**
@@ -239,5 +261,14 @@ public class WifiPermissionsUtil {
         // Location mode check on applications that are later than version.
         return (mSettingsStore.getLocationModeSetting(mContext)
                  != Settings.Secure.LOCATION_MODE_OFF);
+    }
+
+    /**
+     * Returns true if the |uid| holds NETWORK_SETTINGS permission.
+     */
+    public boolean checkNetworkSettingsPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(
+                android.Manifest.permission.NETWORK_SETTINGS, uid)
+                == PackageManager.PERMISSION_GRANTED;
     }
 }

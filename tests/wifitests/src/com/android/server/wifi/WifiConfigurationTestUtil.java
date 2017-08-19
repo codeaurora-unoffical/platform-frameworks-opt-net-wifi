@@ -225,8 +225,18 @@ public class WifiConfigurationTestUtil {
      * use a static index to avoid duplicate configurations.
      */
     public static WifiConfiguration createOpenNetwork() {
-        return generateWifiConfig(TEST_NETWORK_ID, TEST_UID, createNewSSID(), true, true, null,
+        return createOpenNetwork(createNewSSID());
+    }
+
+    public static WifiConfiguration createOpenNetwork(String ssid) {
+        return generateWifiConfig(TEST_NETWORK_ID, TEST_UID, ssid, true, true, null,
                 null, SECURITY_NONE);
+    }
+
+    public static WifiConfiguration createEphemeralNetwork() {
+        WifiConfiguration configuration = createOpenNetwork();
+        configuration.ephemeral = true;
+        return configuration;
     }
 
     public static WifiConfiguration createOpenHiddenNetwork() {

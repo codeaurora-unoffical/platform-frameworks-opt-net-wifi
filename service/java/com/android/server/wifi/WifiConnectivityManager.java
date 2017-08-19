@@ -133,6 +133,7 @@ public class WifiConnectivityManager {
     private final WifiConnectivityHelper mConnectivityHelper;
     private final WifiNetworkSelector mNetworkSelector;
     private final WifiLastResortWatchdog mWifiLastResortWatchdog;
+    private final WifiNotificationController mWifiNotificationController;
     private final WifiMetrics mWifiMetrics;
     private final AlarmManager mAlarmManager;
     private final Handler mEventHandler;
@@ -261,13 +262,17 @@ public class WifiConnectivityManager {
                 mStateMachine.isConnected(), mStateMachine.isDisconnected(),
                 mUntrustedConnectionAllowed);
         mWifiLastResortWatchdog.updateAvailableNetworks(
-                mNetworkSelector.getFilteredScanDetails());
+                mNetworkSelector.getConnectableScanDetails());
         mWifiMetrics.countScanResults(scanDetails);
         if (candidate != null) {
             localLog(listenerName + ":  WNS candidate-" + candidate.SSID);
             connectToNetwork(candidate);
             return true;
         } else {
+            if (mWifiState == WIFI_STATE_DISCONNECTED) {
+                mWifiNotificationController.handleScanResults(
+                        mNetworkSelector.getFilteredScanDetailsForOpenUnsavedNetworks());
+            }
             return false;
         }
     }
@@ -316,7 +321,10 @@ public class WifiConnectivityManager {
                     mWaitForFullBandScanResults = false;
                 }
             }
-
+            if (results.length > 0) {
+                mWifiMetrics.incrementAvailableNetworksHistograms(mScanDetails,
+                        results[0].isAllChannelsScanned());
+            }
             boolean wasConnectAttempted = handleScanResults(mScanDetails, "AllSingleScanListener");
             clearScanDetails();
 
@@ -531,7 +539,8 @@ public class WifiConnectivityManager {
     WifiConnectivityManager(Context context, WifiStateMachine stateMachine,
             WifiScanner scanner, WifiConfigManager configManager, WifiInfo wifiInfo,
             WifiNetworkSelector networkSelector, WifiConnectivityHelper connectivityHelper,
-            WifiLastResortWatchdog wifiLastResortWatchdog, WifiMetrics wifiMetrics,
+            WifiLastResortWatchdog wifiLastResortWatchdog,
+            WifiNotificationController wifiNotificationController, WifiMetrics wifiMetrics,
             Looper looper, Clock clock, LocalLog localLog, boolean enable,
             FrameworkFacade frameworkFacade,
             SavedNetworkEvaluator savedNetworkEvaluator,
@@ -545,6 +554,7 @@ public class WifiConnectivityManager {
         mConnectivityHelper = connectivityHelper;
         mLocalLog = localLog;
         mWifiLastResortWatchdog = wifiLastResortWatchdog;
+        mWifiNotificationController = wifiNotificationController;
         mWifiMetrics = wifiMetrics;
         mAlarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         mEventHandler = new Handler(looper);
@@ -1031,6 +1041,8 @@ public class WifiConnectivityManager {
 
         mScreenOn = screenOn;
 
+        mWifiNotificationController.handleScreenStateChanged(screenOn);
+
         startConnectivityScan(SCAN_ON_SCHEDULE);
     }
 
@@ -1057,6 +1069,10 @@ public class WifiConnectivityManager {
         localLog("handleConnectionStateChanged: state=" + stateToString(state));
 
         mWifiState = state;
+
+        if (mWifiState == WIFI_STATE_CONNECTED) {
+            mWifiNotificationController.clearPendingNotification(false /* resetRepeatDelay */);
+        }
 
         // Reset BSSID of last connection attempt and kick off
         // the watchdog timer if entering disconnected state.
@@ -1291,6 +1307,7 @@ public class WifiConnectivityManager {
         stopConnectivityScan();
         clearBssidBlacklist();
         resetLastPeriodicSingleScanTimeStamp();
+        mWifiNotificationController.clearPendingNotification(true /* resetRepeatDelay */);
         mLastConnectionAttemptBssid = null;
         mWaitForFullBandScanResults = false;
     }
@@ -1350,5 +1367,6 @@ public class WifiConnectivityManager {
         pw.println("WifiConnectivityManager - Log Begin ----");
         mLocalLog.dump(fd, pw, args);
         pw.println("WifiConnectivityManager - Log End ----");
+        mWifiNotificationController.dump(fd, pw, args);
     }
 }

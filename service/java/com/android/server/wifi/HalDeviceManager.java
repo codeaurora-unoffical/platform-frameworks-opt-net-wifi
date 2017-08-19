@@ -170,7 +170,7 @@ public class HalDeviceManager {
      *
      * @return A set of IfaceTypes constants (possibly empty, e.g. on error).
      */
-    Set<Integer> getSupportedIfaceTypes() {
+    public Set<Integer> getSupportedIfaceTypes() {
         return getSupportedIfaceTypesInternal(null);
     }
 
@@ -179,7 +179,7 @@ public class HalDeviceManager {
      *
      * @return A set of IfaceTypes constants  (possibly empty, e.g. on error).
      */
-    Set<Integer> getSupportedIfaceTypes(IWifiChip chip) {
+    public Set<Integer> getSupportedIfaceTypes(IWifiChip chip) {
         return getSupportedIfaceTypesInternal(chip);
     }
 
@@ -532,6 +532,9 @@ public class HalDeviceManager {
 
     private void initializeInternal() {
         initIServiceManagerIfNecessary();
+        if (isSupportedInternal()) {
+            initIWifiIfNecessary();
+        }
     }
 
     private void teardownInternal() {
@@ -560,9 +563,9 @@ public class HalDeviceManager {
                                            boolean preexisting) {
                     Log.d(TAG, "IWifi registration notification: fqName=" + fqName
                             + ", name=" + name + ", preexisting=" + preexisting);
-                    mWifi = null; // get rid of old copy!
-                    initIWifiIfNecessary();
-                    stopWifi(); // just in case
+                    synchronized (mLock) {
+                        initIWifiIfNecessary();
+                    }
                 }
             };
 
@@ -671,7 +674,8 @@ public class HalDeviceManager {
                     mWifi = null;
                     return;
                 }
-                managerStatusListenerDispatch();
+                // Stopping wifi just in case. This would also trigger the status callback.
+                stopWifi();
             } catch (RemoteException e) {
                 Log.e(TAG, "Exception while operating on IWifi: " + e);
             }

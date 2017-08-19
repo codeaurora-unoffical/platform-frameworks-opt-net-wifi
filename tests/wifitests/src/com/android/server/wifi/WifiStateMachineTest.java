@@ -30,6 +30,8 @@ import static com.android.server.wifi.LocalOnlyHotspotRequestInfo.HOTSPOT_NO_ERR
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
@@ -41,7 +43,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
-import android.content.res.Resources;
+import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.net.ConnectivityManager;
 import android.net.DhcpResults;
 import android.net.LinkProperties;
@@ -74,16 +76,20 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
 import android.os.PowerManager;
+import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.test.TestLooper;
 import android.provider.Settings;
 import android.security.KeyStore;
+import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyManager;
 import android.test.mock.MockContentProvider;
 import android.test.mock.MockContentResolver;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.util.Log;
+import android.util.Pair;
 import android.util.SparseArray;
 
 import com.android.internal.R;
@@ -94,6 +100,7 @@ import com.android.internal.util.StateMachine;
 import com.android.server.wifi.hotspot2.NetworkDetail;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.p2p.WifiP2pServiceImpl;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import org.junit.After;
 import org.junit.Before;
@@ -130,9 +137,12 @@ public class WifiStateMachineTest {
             (ActivityManager.isLowRamDeviceStatic()
                     ? WifiStateMachine.NUM_LOG_RECS_VERBOSE_LOW_MEMORY
                     : WifiStateMachine.NUM_LOG_RECS_VERBOSE);
+    private static final int FRAMEWORK_NETWORK_ID = 7;
+    private static final int TEST_RSSI = -54;
     private static final int WPS_SUPPLICANT_NETWORK_ID = 5;
     private static final int WPS_FRAMEWORK_NETWORK_ID = 10;
     private static final String DEFAULT_TEST_SSID = "\"GoogleGuest\"";
+    private static final String OP_PACKAGE_NAME = "com.xxx";
 
     private long mBinderToken;
 
@@ -201,9 +211,6 @@ public class WifiStateMachineTest {
         Context context = mock(Context.class);
         when(context.getPackageManager()).thenReturn(pkgMgr);
 
-        MockResources resources = new com.android.server.wifi.MockResources();
-        when(context.getResources()).thenReturn(resources);
-
         MockContentResolver mockContentResolver = new MockContentResolver();
         mockContentResolver.addProvider(Settings.AUTHORITY,
                 new MockContentProvider(context) {
@@ -224,12 +231,16 @@ public class WifiStateMachineTest {
         when(context.getSystemService(Context.CONNECTIVITY_SERVICE)).thenReturn(
                 mock(ConnectivityManager.class));
 
+        when(context.getOpPackageName()).thenReturn(OP_PACKAGE_NAME);
+
         return context;
     }
 
-    private Resources getMockResources() {
+    private MockResources getMockResources() {
         MockResources resources = new MockResources();
         resources.setBoolean(R.bool.config_wifi_enable_wifi_firmware_debugging, false);
+        resources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, false);
         return resources;
     }
 
@@ -264,11 +275,11 @@ public class WifiStateMachineTest {
         Log.d(TAG, "WifiStateMachine state -" + stream.toString());
     }
 
-    private static ScanDetail getGoogleGuestScanDetail(int rssi) {
+    private static ScanDetail getGoogleGuestScanDetail(int rssi, String bssid, int freq) {
         ScanResult.InformationElement ie[] = new ScanResult.InformationElement[1];
         ie[0] = ScanResults.generateSsidIe(sSSID);
         NetworkDetail nd = new NetworkDetail(sBSSID, ie, new ArrayList<String>(), sFreq);
-        ScanDetail detail = new ScanDetail(nd, sWifiSsid, sBSSID, "", rssi, sFreq,
+        ScanDetail detail = new ScanDetail(nd, sWifiSsid, bssid, "", rssi, freq,
                 Long.MAX_VALUE, /* needed so that scan results aren't rejected because
                                    there older than scan start */
                 ie, new ArrayList<String>());
@@ -279,8 +290,7 @@ public class WifiStateMachineTest {
         ScanResults sr = ScanResults.create(0, 2412, 2437, 2462, 5180, 5220, 5745, 5825);
         ArrayList<ScanDetail> list = sr.getScanDetailArrayList();
 
-        int rssi = -65;
-        list.add(getGoogleGuestScanDetail(rssi));
+        list.add(getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq));
         return list;
     }
 
@@ -297,7 +307,9 @@ public class WifiStateMachineTest {
     static final String   sSSID = "\"GoogleGuest\"";
     static final WifiSsid sWifiSsid = WifiSsid.createFromAsciiEncoded(sSSID);
     static final String   sBSSID = "01:02:03:04:05:06";
+    static final String   sBSSID1 = "02:01:04:03:06:05";
     static final int      sFreq = 2437;
+    static final int      sFreq1 = 5240;
     static final String   WIFI_IFACE_NAME = "mockWlan";
 
     WifiStateMachine mWsm;
@@ -309,7 +321,10 @@ public class WifiStateMachineTest {
     MockWifiMonitor mWifiMonitor;
     TestLooper mLooper;
     Context mContext;
+    MockResources mResources;
+    FrameworkFacade mFrameworkFacade;
     IpManager.Callback mIpManagerCallback;
+    PhoneStateListener mPhoneStateListener;
 
     final ArgumentCaptor<SoftApManager.Listener> mSoftApManagerListenerCaptor =
                     ArgumentCaptor.forClass(SoftApManager.Listener.class);
@@ -330,6 +345,7 @@ public class WifiStateMachineTest {
     @Mock IClientInterface mClientInterface;
     @Mock IBinder mApInterfaceBinder;
     @Mock IBinder mClientInterfaceBinder;
+    @Mock IBinder mPackageManagerBinder;
     @Mock WifiConfigManager mWifiConfigManager;
     @Mock WifiNative mWifiNative;
     @Mock WifiConnectivityManager mWifiConnectivityManager;
@@ -337,7 +353,12 @@ public class WifiStateMachineTest {
     @Mock WifiStateTracker mWifiStateTracker;
     @Mock PasspointManager mPasspointManager;
     @Mock SelfRecovery mSelfRecovery;
+    @Mock WifiPermissionsUtil mWifiPermissionsUtil;
     @Mock IpManager mIpManager;
+    @Mock TelephonyManager mTelephonyManager;
+    @Mock WrongPasswordNotifier mWrongPasswordNotifier;
+    @Mock Clock mClock;
+    @Mock ScanDetailCache mScanDetailCache;
 
     public WifiStateMachineTest() throws Exception {
     }
@@ -378,9 +399,14 @@ public class WifiStateMachineTest {
         when(mWifiInjector.getWifiMonitor()).thenReturn(mWifiMonitor);
         when(mWifiInjector.getWifiNative()).thenReturn(mWifiNative);
         when(mWifiInjector.getSelfRecovery()).thenReturn(mSelfRecovery);
+        when(mWifiInjector.getWifiPermissionsUtil()).thenReturn(mWifiPermissionsUtil);
+        when(mWifiInjector.makeTelephonyManager()).thenReturn(mTelephonyManager);
+        when(mWifiInjector.getClock()).thenReturn(mClock);
 
-        when(mWifiNative.setupForClientMode()).thenReturn(mClientInterface);
-        when(mWifiNative.setupForSoftApMode()).thenReturn(mApInterface);
+        when(mWifiNative.setupForClientMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_SUCCESS, mClientInterface));
+        when(mWifiNative.setupForSoftApMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_SUCCESS, mApInterface));
         when(mApInterface.getInterfaceName()).thenReturn(WIFI_IFACE_NAME);
         when(mWifiNative.getInterfaceName()).thenReturn(WIFI_IFACE_NAME);
         when(mWifiNative.enableSupplicant()).thenReturn(true);
@@ -388,21 +414,21 @@ public class WifiStateMachineTest {
         when(mWifiNative.getFrameworkNetworkId(anyInt())).thenReturn(0);
 
 
-        FrameworkFacade factory = getFrameworkFacade();
+        mFrameworkFacade = getFrameworkFacade();
         mContext = getContext();
 
-        Resources resources = getMockResources();
-        when(mContext.getResources()).thenReturn(resources);
+        mResources = getMockResources();
+        when(mContext.getResources()).thenReturn(mResources);
 
-        when(factory.getIntegerSetting(mContext,
+        when(mFrameworkFacade.getIntegerSetting(mContext,
                 Settings.Global.WIFI_FREQUENCY_BAND,
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO)).thenReturn(
                 WifiManager.WIFI_FREQUENCY_BAND_AUTO);
 
-        when(factory.makeApConfigStore(eq(mContext), eq(mBackupManagerProxy)))
+        when(mFrameworkFacade.makeApConfigStore(eq(mContext), eq(mBackupManagerProxy)))
                 .thenReturn(mApConfigStore);
 
-        when(factory.makeSupplicantStateTracker(
+        when(mFrameworkFacade.makeSupplicantStateTracker(
                 any(Context.class), any(WifiConfigManager.class),
                 any(Handler.class))).thenReturn(mSupplicantStateTracker);
 
@@ -415,8 +441,20 @@ public class WifiStateMachineTest {
         when(mApInterface.asBinder()).thenReturn(mApInterfaceBinder);
         when(mClientInterface.asBinder()).thenReturn(mClientInterfaceBinder);
 
-        mWsm = new WifiStateMachine(mContext, factory, mLooper.getLooper(),
-            mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative);
+        doAnswer(new AnswerWithArguments() {
+            public void answer(PhoneStateListener phoneStateListener, int events)
+                    throws Exception {
+                mPhoneStateListener = phoneStateListener;
+            }
+        }).when(mTelephonyManager).listen(any(PhoneStateListener.class), anyInt());
+
+        initializeWsm();
+    }
+
+    private void initializeWsm() throws Exception {
+        mWsm = new WifiStateMachine(mContext, mFrameworkFacade, mLooper.getLooper(),
+                mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
+                mWrongPasswordNotifier);
         mWsmThread = getWsmHandlerThread(mWsm);
 
         final AsyncChannel channel = new AsyncChannel();
@@ -443,6 +481,10 @@ public class WifiStateMachineTest {
         /* Now channel is supposed to be connected */
 
         mBinderToken = Binder.clearCallingIdentity();
+
+        /* Send the BOOT_COMPLETED message to setup some WSM state. */
+        mWsm.sendMessage(WifiStateMachine.CMD_BOOT_COMPLETED);
+        mLooper.dispatchAll();
     }
 
     @After
@@ -501,6 +543,7 @@ public class WifiStateMachineTest {
 
         assertEquals("SoftApState", getCurrentState().getName());
 
+        verify(mWifiNative).setupForSoftApMode();
         verify(mSoftApManager).start();
 
         // reset expectations for mContext due to previously sent AP broadcast
@@ -787,6 +830,7 @@ public class WifiStateMachineTest {
 
     private void addNetworkAndVerifySuccess(boolean isHidden) throws Exception {
         WifiConfiguration config = new WifiConfiguration();
+        config.networkId = FRAMEWORK_NETWORK_ID;
         config.SSID = sSSID;
         config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         config.hiddenSSID = isHidden;
@@ -795,6 +839,7 @@ public class WifiStateMachineTest {
                 .thenReturn(new NetworkUpdateResult(0));
         when(mWifiConfigManager.getSavedNetworks()).thenReturn(Arrays.asList(config));
         when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
+        when(mWifiConfigManager.getConfiguredNetworkWithPassword(0)).thenReturn(config);
 
         mLooper.startAutoDispatch();
         mWsm.syncAddOrUpdateNetwork(mWsmAsyncChannel, config);
@@ -919,6 +964,13 @@ public class WifiStateMachineTest {
 
         verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
         verify(mWifiConnectivityManager).setUserConnectChoice(eq(0));
+        when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
+                .thenReturn(mScanDetailCache);
+
+        when(mScanDetailCache.getScanDetail(sBSSID)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq));
+        when(mScanDetailCache.get(sBSSID)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID, sFreq).getScanResult());
 
         mWsm.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, sBSSID);
         mLooper.dispatchAll();
@@ -937,6 +989,12 @@ public class WifiStateMachineTest {
 
         injectDhcpSuccess(dhcpResults);
         mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mWsm.getWifiInfo();
+        assertNotNull(wifiInfo);
+        assertEquals(sBSSID, wifiInfo.getBSSID());
+        assertEquals(sFreq, wifiInfo.getFrequency());
+        assertTrue(sWifiSsid.equals(wifiInfo.getWifiSsid()));
 
         assertEquals("ConnectedState", getCurrentState().getName());
     }
@@ -1088,6 +1146,7 @@ public class WifiStateMachineTest {
                 WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD);
         mLooper.dispatchAll();
 
+        verify(mWrongPasswordNotifier, never()).onWrongPasswordError(anyString());
         verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
                 eq(WifiConfiguration.NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE));
 
@@ -1113,6 +1172,7 @@ public class WifiStateMachineTest {
         verify(mWifiConfigManager).enableNetwork(eq(0), eq(true), anyInt());
 
         WifiConfiguration config = new WifiConfiguration();
+        config.SSID = sSSID;
         config.getNetworkSelectionStatus().setHasEverConnected(false);
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
 
@@ -1120,6 +1180,7 @@ public class WifiStateMachineTest {
                 WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD);
         mLooper.dispatchAll();
 
+        verify(mWrongPasswordNotifier).onWrongPasswordError(eq(sSSID));
         verify(mWifiConfigManager).updateNetworkSelectionStatus(anyInt(),
                 eq(WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD));
 
@@ -1193,7 +1254,7 @@ public class WifiStateMachineTest {
     public void disconnect() throws Exception {
         connect();
 
-        mWsm.sendMessage(WifiMonitor.NETWORK_DISCONNECTION_EVENT, -1, 3, "01:02:03:04:05:06");
+        mWsm.sendMessage(WifiMonitor.NETWORK_DISCONNECTION_EVENT, -1, 3, sBSSID);
         mLooper.dispatchAll();
         mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(0, sWifiSsid, sBSSID, SupplicantState.DISCONNECTED));
@@ -1686,6 +1747,61 @@ public class WifiStateMachineTest {
     }
 
     /**
+     * Verifies that WifiInfo is updated upon SUPPLICANT_STATE_CHANGE_EVENT.
+     */
+    @Test
+    public void testWifiInfoUpdatedUponSupplicantStateChangedEvent() throws Exception {
+        // Connect to network with |sBSSID|, |sFreq|.
+        connect();
+
+        // Set the scan detail cache for roaming target.
+        when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
+                .thenReturn(mScanDetailCache);
+        when(mScanDetailCache.getScanDetail(sBSSID1)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID1, sFreq1));
+        when(mScanDetailCache.get(sBSSID1)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID1, sFreq1).getScanResult());
+
+        // This simulates the behavior of roaming to network with |sBSSID1|, |sFreq1|.
+        // Send a SUPPLICANT_STATE_CHANGE_EVENT, verify WifiInfo is updated.
+        mWsm.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(0, sWifiSsid, sBSSID1, SupplicantState.COMPLETED));
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mWsm.getWifiInfo();
+        assertEquals(sBSSID1, wifiInfo.getBSSID());
+        assertEquals(sFreq1, wifiInfo.getFrequency());
+        assertEquals(SupplicantState.COMPLETED, wifiInfo.getSupplicantState());
+    }
+
+    /**
+     * Verifies that WifiInfo is updated upon CMD_ASSOCIATED_BSSID event.
+     */
+    @Test
+    public void testWifiInfoUpdatedUponAssociatedBSSIDEvent() throws Exception {
+        // Connect to network with |sBSSID|, |sFreq|.
+        connect();
+
+        // Set the scan detail cache for roaming target.
+        when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
+                .thenReturn(mScanDetailCache);
+        when(mScanDetailCache.getScanDetail(sBSSID1)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID1, sFreq1));
+        when(mScanDetailCache.get(sBSSID1)).thenReturn(
+                getGoogleGuestScanDetail(TEST_RSSI, sBSSID1, sFreq1).getScanResult());
+
+        // This simulates the behavior of roaming to network with |sBSSID1|, |sFreq1|.
+        // Send a CMD_ASSOCIATED_BSSID, verify WifiInfo is updated.
+        mWsm.sendMessage(WifiStateMachine.CMD_ASSOCIATED_BSSID, 0, 0, sBSSID1);
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mWsm.getWifiInfo();
+        assertEquals(sBSSID1, wifiInfo.getBSSID());
+        assertEquals(sFreq1, wifiInfo.getFrequency());
+        assertEquals(SupplicantState.COMPLETED, wifiInfo.getSupplicantState());
+    }
+
+    /**
      * Verifies that WifiInfo is cleared upon exiting and entering WifiInfo, and that it is not
      * updated by SUPPLICAN_STATE_CHANGE_EVENTs in ScanModeState.
      * This protects WifiStateMachine from  getting into a bad state where WifiInfo says wifi is
@@ -1751,6 +1867,124 @@ public class WifiStateMachineTest {
     }
 
     /**
+     * Test that the process uid has full wifiInfo access.
+     * Also tests that {@link WifiStateMachine#syncRequestConnectionInfo(String)} always
+     * returns a copy of WifiInfo.
+     */
+    @Test
+    public void testConnectedIdsAreVisibleFromOwnUid() throws Exception {
+        assertEquals(Process.myUid(), Binder.getCallingUid());
+        WifiInfo wifiInfo = mWsm.getWifiInfo();
+        wifiInfo.setBSSID(sBSSID);
+        wifiInfo.setSSID(WifiSsid.createFromAsciiEncoded(sSSID));
+
+        connect();
+        WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName());
+
+        assertNotEquals(wifiInfo, connectionInfo);
+        assertEquals(wifiInfo.getSSID(), connectionInfo.getSSID());
+        assertEquals(wifiInfo.getBSSID(), connectionInfo.getBSSID());
+    }
+
+    /**
+     * Test that connected SSID and BSSID are not exposed to an app that does not have the
+     * appropriate permissions.
+     * Also tests that {@link WifiStateMachine#syncRequestConnectionInfo(String)} always
+     * returns a copy of WifiInfo.
+     */
+    @Test
+    public void testConnectedIdsAreHiddenFromRandomApp() throws Exception {
+        int actualUid = Binder.getCallingUid();
+        int fakeUid = Process.myUid() + 100000;
+        assertNotEquals(actualUid, fakeUid);
+        BinderUtil.setUid(fakeUid);
+        try {
+            WifiInfo wifiInfo = mWsm.getWifiInfo();
+
+            // Get into a connected state, with known BSSID and SSID
+            connect();
+            assertEquals(sBSSID, wifiInfo.getBSSID());
+            assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
+
+            when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(fakeUid), anyInt()))
+                    .thenReturn(false);
+
+            WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName());
+
+            assertNotEquals(wifiInfo, connectionInfo);
+            assertEquals(WifiSsid.NONE, connectionInfo.getSSID());
+            assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
+        } finally {
+            BinderUtil.setUid(actualUid);
+        }
+    }
+
+    /**
+     * Test that connected SSID and BSSID are not exposed to an app that does not have the
+     * appropriate permissions, when canAccessScanResults raises a SecurityException.
+     * Also tests that {@link WifiStateMachine#syncRequestConnectionInfo(String)} always
+     * returns a copy of WifiInfo.
+     */
+    @Test
+    public void testConnectedIdsAreHiddenOnSecurityException() throws Exception {
+        int actualUid = Binder.getCallingUid();
+        int fakeUid = Process.myUid() + 100000;
+        assertNotEquals(actualUid, fakeUid);
+        BinderUtil.setUid(fakeUid);
+        try {
+            WifiInfo wifiInfo = mWsm.getWifiInfo();
+
+            // Get into a connected state, with known BSSID and SSID
+            connect();
+            assertEquals(sBSSID, wifiInfo.getBSSID());
+            assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
+
+            when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(fakeUid), anyInt()))
+                    .thenThrow(new SecurityException());
+
+            WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName());
+
+            assertNotEquals(wifiInfo, connectionInfo);
+            assertEquals(WifiSsid.NONE, connectionInfo.getSSID());
+            assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getBSSID());
+        } finally {
+            BinderUtil.setUid(actualUid);
+        }
+    }
+
+    /**
+     * Test that connected SSID and BSSID are exposed to an app that does have the
+     * appropriate permissions.
+     */
+    @Test
+    public void testConnectedIdsAreVisibleFromPermittedApp() throws Exception {
+        int actualUid = Binder.getCallingUid();
+        int fakeUid = Process.myUid() + 100000;
+        BinderUtil.setUid(fakeUid);
+        try {
+            WifiInfo wifiInfo = mWsm.getWifiInfo();
+
+            // Get into a connected state, with known BSSID and SSID
+            connect();
+            assertEquals(sBSSID, wifiInfo.getBSSID());
+            assertEquals(sWifiSsid, wifiInfo.getWifiSsid());
+
+            when(mWifiPermissionsUtil.canAccessScanResults(anyString(), eq(fakeUid), anyInt()))
+                    .thenReturn(true);
+
+            WifiInfo connectionInfo = mWsm.syncRequestConnectionInfo(mContext.getOpPackageName());
+
+            assertNotEquals(wifiInfo, connectionInfo);
+            assertEquals(wifiInfo.getSSID(), connectionInfo.getSSID());
+            assertEquals(wifiInfo.getBSSID(), connectionInfo.getBSSID());
+            // Access to our MAC address uses a different permission, make sure it is not granted
+            assertEquals(WifiInfo.DEFAULT_MAC_ADDRESS, connectionInfo.getMacAddress());
+        } finally {
+            BinderUtil.setUid(actualUid);
+        }
+    }
+
+    /**
      * Adds the network without putting WifiStateMachine into ConnectMode.
      */
     @Test
@@ -1793,5 +2027,357 @@ public class WifiStateMachineTest {
         boolean succeeded = mWsm.syncDisableNetwork(mWsmAsyncChannel, 0);
         mLooper.stopAutoDispatch();
         assertFalse(succeeded);
+    }
+
+    /**
+     * Test that failure to start HAL in AP mode increments the corresponding metrics.
+     */
+    @Test
+    public void testSetupForSoftApModeHalFailureIncrementsMetrics() throws Exception {
+        when(mWifiNative.setupForSoftApMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_FAILURE_HAL, null));
+
+        SoftApModeConfiguration config = new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, new WifiConfiguration());
+        mWsm.setHostApRunning(config, true);
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).setupForSoftApMode();
+        verify(mWifiMetrics).incrementNumWifiOnFailureDueToHal();
+    }
+
+    /**
+     * Test that failure to start HAL in AP mode increments the corresponding metrics.
+     */
+    @Test
+    public void testSetupForSoftApModeWificondFailureIncrementsMetrics() throws Exception {
+        when(mWifiNative.setupForSoftApMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_FAILURE_WIFICOND, null));
+
+        SoftApModeConfiguration config = new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, new WifiConfiguration());
+        mWsm.setHostApRunning(config, true);
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).setupForSoftApMode();
+        verify(mWifiMetrics).incrementNumWifiOnFailureDueToWificond();
+    }
+
+    /**
+     * Test that failure to start HAL in client mode increments the corresponding metrics.
+     */
+    @Test
+    public void testSetupForClientModeHalFailureIncrementsMetrics() throws Exception {
+        when(mWifiNative.setupForClientMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_FAILURE_HAL, null));
+
+        mWsm.setSupplicantRunning(true);
+        mLooper.dispatchAll();
+
+        mWsm.sendMessage(WifiMonitor.SUP_CONNECTION_EVENT);
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).setupForClientMode();
+        verify(mWifiMetrics).incrementNumWifiOnFailureDueToHal();
+    }
+
+    /**
+     * Test that failure to start HAL in client mode increments the corresponding metrics.
+     */
+    @Test
+    public void testSetupForClientModeWificondFailureIncrementsMetrics() throws Exception {
+        when(mWifiNative.setupForClientMode())
+                .thenReturn(Pair.create(WifiNative.SETUP_FAILURE_WIFICOND, null));
+
+        mWsm.setSupplicantRunning(true);
+        mLooper.dispatchAll();
+
+        mWsm.sendMessage(WifiMonitor.SUP_CONNECTION_EVENT);
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).setupForClientMode();
+        verify(mWifiMetrics).incrementNumWifiOnFailureDueToWificond();
+    }
+
+    /**
+     * Test that we don't register the telephony call state listener on devices which do not support
+     * setting/resetting Tx power limit.
+     */
+    @Test
+    public void testVoiceCallSar_disabledTxPowerScenario_WifiOn() throws Exception {
+        loadComponentsInStaMode();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals("DisconnectedState", getCurrentState().getName());
+        assertNull(mPhoneStateListener);
+    }
+
+    /**
+     * Test that we do register the telephony call state listener on devices which do support
+     * setting/resetting Tx power limit.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenario_WifiOn() throws Exception {
+        mResources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, true);
+        initializeWsm();
+
+        loadComponentsInStaMode();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals("DisconnectedState", getCurrentState().getName());
+        assertNotNull(mPhoneStateListener);
+    }
+
+    /**
+     * Test that we do register the telephony call state listener on devices which do support
+     * setting/resetting Tx power limit and set the tx power level if we're in state
+     * {@link TelephonyManager#CALL_STATE_OFFHOOK}.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateOffHook_WhenWifiTurnedOn()
+            throws Exception {
+        mResources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, true);
+        initializeWsm();
+
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(true);
+        when(mTelephonyManager.isOffhook()).thenReturn(true);
+
+        loadComponentsInStaMode();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals("DisconnectedState", getCurrentState().getName());
+        assertNotNull(mPhoneStateListener);
+        verify(mWifiNative).selectTxPowerScenario(eq(WifiNative.TX_POWER_SCENARIO_VOICE_CALL));
+    }
+
+    /**
+     * Test that we do register the telephony call state listener on devices which do support
+     * setting/resetting Tx power limit and set the tx power level if we're in state
+     * {@link TelephonyManager#CALL_STATE_IDLE}.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateIdle_WhenWifiTurnedOn()
+            throws Exception {
+        mResources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, true);
+        initializeWsm();
+
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(true);
+        when(mTelephonyManager.isIdle()).thenReturn(true);
+
+        loadComponentsInStaMode();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals("DisconnectedState", getCurrentState().getName());
+        assertNotNull(mPhoneStateListener);
+    }
+
+    /**
+     * Test that we do register the telephony call state listener on devices which do support
+     * setting/resetting Tx power limit and set the tx power level if we're in state
+     * {@link TelephonyManager#CALL_STATE_OFFHOOK}. This test checks if the
+     * {@link WifiNative#selectTxPowerScenario(int)} failure is handled correctly.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateOffHook_WhenWifiTurnedOn_Fails()
+            throws Exception {
+        mResources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, true);
+        initializeWsm();
+
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(false);
+        when(mTelephonyManager.isOffhook()).thenReturn(true);
+
+        loadComponentsInStaMode();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        assertEquals(WifiStateMachine.CONNECT_MODE, mWsm.getOperationalModeForTest());
+        assertEquals("DisconnectedState", getCurrentState().getName());
+        assertNotNull(mPhoneStateListener);
+        verify(mWifiNative).selectTxPowerScenario(eq(WifiNative.TX_POWER_SCENARIO_VOICE_CALL));
+    }
+
+    /**
+     * Test that we invoke the corresponding WifiNative method when
+     * {@link PhoneStateListener#onCallStateChanged(int, String)} is invoked with state
+     * {@link TelephonyManager#CALL_STATE_OFFHOOK}.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateOffHook_WhenWifiOn()
+            throws Exception {
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(true);
+        testVoiceCallSar_enabledTxPowerScenario_WifiOn();
+
+        mPhoneStateListener.onCallStateChanged(TelephonyManager.CALL_STATE_OFFHOOK, "");
+        mLooper.dispatchAll();
+        verify(mWifiNative).selectTxPowerScenario(eq(WifiNative.TX_POWER_SCENARIO_VOICE_CALL));
+    }
+
+    /**
+     * Test that we invoke the corresponding WifiNative method when
+     * {@link PhoneStateListener#onCallStateChanged(int, String)} is invoked with state
+     * {@link TelephonyManager#CALL_STATE_IDLE}.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateIdle_WhenWifiOn() throws Exception {
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(true);
+        testVoiceCallSar_enabledTxPowerScenario_WifiOn();
+
+        mPhoneStateListener.onCallStateChanged(TelephonyManager.CALL_STATE_IDLE, "");
+        mLooper.dispatchAll();
+        verify(mWifiNative, atLeastOnce())
+                .selectTxPowerScenario(eq(WifiNative.TX_POWER_SCENARIO_NORMAL));
+    }
+
+    /**
+     * Test that we invoke the corresponding WifiNative method when
+     * {@link PhoneStateListener#onCallStateChanged(int, String)} is invoked with state
+     * {@link TelephonyManager#CALL_STATE_OFFHOOK}. This test checks if the
+     * {@link WifiNative#selectTxPowerScenario(int)} failure is handled correctly.
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallStateOffHook_WhenWifiOn_Fails()
+            throws Exception {
+        when(mWifiNative.selectTxPowerScenario(anyInt())).thenReturn(false);
+        testVoiceCallSar_enabledTxPowerScenario_WifiOn();
+
+        mPhoneStateListener.onCallStateChanged(TelephonyManager.CALL_STATE_OFFHOOK, "");
+        mLooper.dispatchAll();
+        verify(mWifiNative).selectTxPowerScenario(eq(WifiNative.TX_POWER_SCENARIO_VOICE_CALL));
+    }
+
+    /**
+     * Test that we don't invoke the corresponding WifiNative method when
+     * {@link PhoneStateListener#onCallStateChanged(int, String)} is invoked with state
+     * {@link TelephonyManager#CALL_STATE_IDLE} or {@link TelephonyManager#CALL_STATE_OFFHOOK} when
+     * wifi is off (state machine is not in SupplicantStarted state).
+     */
+    @Test
+    public void testVoiceCallSar_enabledTxPowerScenarioCallState_WhenWifiOff() throws Exception {
+        mResources.setBoolean(
+                R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit, true);
+        initializeWsm();
+
+        mPhoneStateListener.onCallStateChanged(TelephonyManager.CALL_STATE_OFFHOOK, "");
+        mLooper.dispatchAll();
+        verify(mWifiNative, never()).selectTxPowerScenario(anyInt());
+
+        mPhoneStateListener.onCallStateChanged(TelephonyManager.CALL_STATE_IDLE, "");
+        mLooper.dispatchAll();
+        verify(mWifiNative, never()).selectTxPowerScenario(anyInt());
+    }
+
+    /**
+     * Verifies that a network disconnection event will result in WifiStateMachine invoking
+     * {@link WifiConfigManager#removeAllEphemeralOrPasspointConfiguredNetworks()} to remove
+     * any ephemeral or passpoint networks from it's internal database.
+     */
+    @Test
+    public void testDisconnectionRemovesEphemeralAndPasspointNetworks() throws Exception {
+        disconnect();
+        verify(mWifiConfigManager).removeAllEphemeralOrPasspointConfiguredNetworks();
+    }
+
+    /**
+     * Verifies that WifiStateMachine sets and unsets appropriate 'RecentFailureReason' values
+     * on a WifiConfiguration when it fails association, authentication, or successfully connects
+     */
+    @Test
+    public void testExtraFailureReason_ApIsBusy() throws Exception {
+        // Setup CONNECT_MODE & a WifiConfiguration
+        initializeAndAddNetworkAndVerifySuccess();
+        mWsm.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+        mLooper.dispatchAll();
+        // Trigger a connection to this (CMD_START_CONNECT will actually fail, but it sets up
+        // targetNetworkId state)
+        mWsm.sendMessage(WifiStateMachine.CMD_START_CONNECT, 0, 0, sBSSID);
+        mLooper.dispatchAll();
+        // Simulate an ASSOCIATION_REJECTION_EVENT, due to the AP being busy
+        mWsm.sendMessage(WifiMonitor.ASSOCIATION_REJECTION_EVENT, 0,
+                ISupplicantStaIfaceCallback.StatusCode.AP_UNABLE_TO_HANDLE_NEW_STA, sBSSID);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).setRecentFailureAssociationStatus(eq(0),
+                eq(WifiConfiguration.RecentFailure.STATUS_AP_UNABLE_TO_HANDLE_NEW_STA));
+        assertEquals("DisconnectedState", getCurrentState().getName());
+
+        // Simulate an AUTHENTICATION_FAILURE_EVENT, which should clear the ExtraFailureReason
+        reset(mWifiConfigManager);
+        mWsm.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT, 0, 0, null);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).clearRecentFailureReason(eq(0));
+        verify(mWifiConfigManager, never()).setRecentFailureAssociationStatus(anyInt(), anyInt());
+
+        // Simulate a NETWORK_CONNECTION_EVENT which should clear the ExtraFailureReason
+        reset(mWifiConfigManager);
+        mWsm.sendMessage(WifiMonitor.NETWORK_CONNECTION_EVENT, 0, 0, null);
+        mLooper.dispatchAll();
+        verify(mWifiConfigManager).clearRecentFailureReason(eq(0));
+        verify(mWifiConfigManager, never()).setRecentFailureAssociationStatus(anyInt(), anyInt());
+    }
+
+    /**
+     * Test that the helper method
+     * {@link WifiStateMachine#shouldEvaluateWhetherToSendExplicitlySelected(WifiConfiguration)}
+     * returns true when we connect to the last selected network before expiration of
+     * {@link WifiStateMachine#LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS}.
+     */
+    @Test
+    public void testShouldEvaluateWhetherToSendExplicitlySelected_SameNetworkNotExpired() {
+        long lastSelectedTimestamp = 45666743454L;
+        int lastSelectedNetworkId = 5;
+
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(
+                lastSelectedTimestamp
+                        + WifiStateMachine.LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS - 1);
+        when(mWifiConfigManager.getLastSelectedTimeStamp()).thenReturn(lastSelectedTimestamp);
+        when(mWifiConfigManager.getLastSelectedNetwork()).thenReturn(lastSelectedNetworkId);
+
+        WifiConfiguration currentConfig = new WifiConfiguration();
+        currentConfig.networkId = lastSelectedNetworkId;
+        assertTrue(mWsm.shouldEvaluateWhetherToSendExplicitlySelected(currentConfig));
+    }
+
+    /**
+     * Test that the helper method
+     * {@link WifiStateMachine#shouldEvaluateWhetherToSendExplicitlySelected(WifiConfiguration)}
+     * returns false when we connect to the last selected network after expiration of
+     * {@link WifiStateMachine#LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS}.
+     */
+    @Test
+    public void testShouldEvaluateWhetherToSendExplicitlySelected_SameNetworkExpired() {
+        long lastSelectedTimestamp = 45666743454L;
+        int lastSelectedNetworkId = 5;
+
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(
+                lastSelectedTimestamp
+                        + WifiStateMachine.LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS + 1);
+        when(mWifiConfigManager.getLastSelectedTimeStamp()).thenReturn(lastSelectedTimestamp);
+        when(mWifiConfigManager.getLastSelectedNetwork()).thenReturn(lastSelectedNetworkId);
+
+        WifiConfiguration currentConfig = new WifiConfiguration();
+        currentConfig.networkId = lastSelectedNetworkId;
+        assertFalse(mWsm.shouldEvaluateWhetherToSendExplicitlySelected(currentConfig));
+    }
+
+    /**
+     * Test that the helper method
+     * {@link WifiStateMachine#shouldEvaluateWhetherToSendExplicitlySelected(WifiConfiguration)}
+     * returns false when we connect to a different network to the last selected network.
+     */
+    @Test
+    public void testShouldEvaluateWhetherToSendExplicitlySelected_DifferentNetwork() {
+        long lastSelectedTimestamp = 45666743454L;
+        int lastSelectedNetworkId = 5;
+
+        when(mClock.getElapsedSinceBootMillis()).thenReturn(
+                lastSelectedTimestamp
+                        + WifiStateMachine.LAST_SELECTED_NETWORK_EXPIRATION_AGE_MILLIS - 1);
+        when(mWifiConfigManager.getLastSelectedTimeStamp()).thenReturn(lastSelectedTimestamp);
+        when(mWifiConfigManager.getLastSelectedNetwork()).thenReturn(lastSelectedNetworkId);
+
+        WifiConfiguration currentConfig = new WifiConfiguration();
+        currentConfig.networkId = lastSelectedNetworkId - 1;
+        assertFalse(mWsm.shouldEvaluateWhetherToSendExplicitlySelected(currentConfig));
     }
 }

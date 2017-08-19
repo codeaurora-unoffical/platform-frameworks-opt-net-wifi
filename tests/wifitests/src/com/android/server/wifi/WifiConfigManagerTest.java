@@ -176,7 +176,7 @@ public class WifiConfigManagerTest {
 
         when(mDevicePolicyManagerInternal.isActiveAdminWithPolicy(anyInt(), anyInt()))
                 .thenReturn(false);
-        when(mWifiPermissionsUtil.checkConfigOverridePermission(anyInt())).thenReturn(true);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         when(mWifiPermissionsWrapper.getDevicePolicyManagerInternal())
                 .thenReturn(mDevicePolicyManagerInternal);
         createWifiConfigManager();
@@ -325,7 +325,7 @@ public class WifiConfigManagerTest {
         // Now change BSSID of the network.
         assertAndSetNetworkBSSID(openNetwork, TEST_BSSID);
 
-        when(mWifiPermissionsUtil.checkConfigOverridePermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
 
         // Update the same configuration and ensure that the operation failed.
         NetworkUpdateResult result = updateNetworkToWifiConfigManager(openNetwork);
@@ -781,7 +781,7 @@ public class WifiConfigManagerTest {
         assertTrue(retrievedStatus.isNetworkEnabled());
         verifyUpdateNetworkStatus(retrievedNetwork, WifiConfiguration.Status.ENABLED);
 
-        when(mWifiPermissionsUtil.checkConfigOverridePermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
 
         // Now try to set it disabled with |TEST_UPDATE_UID|, it should fail and the network
         // should remain enabled.
@@ -810,7 +810,7 @@ public class WifiConfigManagerTest {
                 mWifiConfigManager.getConfiguredNetwork(result.getNetworkId());
         assertEquals(TEST_CREATOR_UID, retrievedNetwork.lastConnectUid);
 
-        when(mWifiPermissionsUtil.checkConfigOverridePermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
 
         // Now try to update the last connect UID with |TEST_UPDATE_UID|, it should fail and
         // the lastConnectUid should remain the same.
@@ -1489,6 +1489,35 @@ public class WifiConfigManagerTest {
         assertEquals(2, pnoNetworks.size());
         assertEquals(network1.SSID, pnoNetworks.get(0).ssid);
         assertEquals(network2.SSID, pnoNetworks.get(1).ssid);
+    }
+
+    /**
+     * Verifies that the list of PNO networks does not contain ephemeral or passpoint networks
+     * {@link WifiConfigManager#retrievePnoNetworkList()}.
+     */
+    @Test
+    public void testRetrievePnoListDoesNotContainEphemeralOrPasspointNetworks() throws Exception {
+        WifiConfiguration savedOpenNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        WifiConfiguration ephemeralNetwork = WifiConfigurationTestUtil.createEphemeralNetwork();
+        WifiConfiguration passpointNetwork = WifiConfigurationTestUtil.createPasspointNetwork();
+
+        verifyAddNetworkToWifiConfigManager(savedOpenNetwork);
+        verifyAddEphemeralNetworkToWifiConfigManager(ephemeralNetwork);
+        verifyAddPasspointNetworkToWifiConfigManager(passpointNetwork);
+
+        // Enable all of them.
+        assertTrue(mWifiConfigManager.enableNetwork(
+                savedOpenNetwork.networkId, false, TEST_CREATOR_UID));
+        assertTrue(mWifiConfigManager.enableNetwork(
+                ephemeralNetwork.networkId, false, TEST_CREATOR_UID));
+        assertTrue(mWifiConfigManager.enableNetwork(
+                passpointNetwork.networkId, false, TEST_CREATOR_UID));
+
+        // Retrieve the Pno network list & verify the order of the networks returned.
+        List<WifiScanner.PnoSettings.PnoNetwork> pnoNetworks =
+                mWifiConfigManager.retrievePnoNetworkList();
+        assertEquals(1, pnoNetworks.size());
+        assertEquals(savedOpenNetwork.SSID, pnoNetworks.get(0).ssid);
     }
 
     /**
@@ -2715,6 +2744,40 @@ public class WifiConfigManagerTest {
     }
 
     /**
+     * Verifies that all the ephemeral and passpoint networks are removed when
+     * {@link WifiConfigManager#removeAllEphemeralOrPasspointConfiguredNetworks()} is invoked.
+     */
+    @Test
+    public void testRemoveAllEphemeralOrPasspointConfiguredNetworks() throws Exception {
+        WifiConfiguration savedOpenNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        WifiConfiguration ephemeralNetwork = WifiConfigurationTestUtil.createEphemeralNetwork();
+        WifiConfiguration passpointNetwork = WifiConfigurationTestUtil.createPasspointNetwork();
+
+        verifyAddNetworkToWifiConfigManager(savedOpenNetwork);
+        verifyAddEphemeralNetworkToWifiConfigManager(ephemeralNetwork);
+        verifyAddPasspointNetworkToWifiConfigManager(passpointNetwork);
+
+        List<WifiConfiguration> expectedConfigsBeforeRemove = new ArrayList<WifiConfiguration>() {{
+                add(savedOpenNetwork);
+                add(ephemeralNetwork);
+                add(passpointNetwork);
+            }};
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigManagerAddOrUpdate(
+                expectedConfigsBeforeRemove, mWifiConfigManager.getConfiguredNetworks());
+
+        assertTrue(mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks());
+
+        List<WifiConfiguration> expectedConfigsAfterRemove = new ArrayList<WifiConfiguration>() {{
+                add(savedOpenNetwork);
+            }};
+        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigManagerAddOrUpdate(
+                expectedConfigsAfterRemove, mWifiConfigManager.getConfiguredNetworks());
+
+        // No more ephemeral or passpoint networks to remove now.
+        assertFalse(mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks());
+    }
+
+    /**
      * Verifies that the modification of a single network using
      * {@link WifiConfigManager#addOrUpdateNetwork(WifiConfiguration, int)} and ensures that any
      * updates to the network config in
@@ -2914,14 +2977,14 @@ public class WifiConfigManagerTest {
     @Test
     public void testAddNetworkWithProxyFails() {
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
                 false, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithStaticProxy(),
@@ -2936,14 +2999,14 @@ public class WifiConfigManagerTest {
     @Test
     public void testAddNetworkWithProxyWithConfOverride() {
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true,  // withConfOverride
+                true,  // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true,  // withConfOverride
+                true,  // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithStaticProxy(),
@@ -2958,14 +3021,14 @@ public class WifiConfigManagerTest {
     @Test
     public void testAddNetworkWithProxyAsProfileOwner() {
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false,  // withConfOverride
+                false,  // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false,  // withConfOverride
+                false,  // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithStaticProxy(),
@@ -2979,14 +3042,14 @@ public class WifiConfigManagerTest {
     @Test
     public void testAddNetworkWithProxyAsDeviceOwner() {
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false,  // withConfOverride
+                false,  // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false,  // withConfOverride
+                false,  // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithStaticProxy(),
@@ -3002,14 +3065,14 @@ public class WifiConfigManagerTest {
         WifiConfiguration network = WifiConfigurationTestUtil.createOpenHiddenNetwork();
         NetworkUpdateResult result = verifyAddNetworkToWifiConfigManager(network);
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
                 false, // assertSuccess
                 result.getNetworkId()); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithStaticProxy(),
@@ -3029,7 +3092,7 @@ public class WifiConfigManagerTest {
         NetworkUpdateResult result = addNetworkToWifiConfigManager(network, TEST_CREATOR_UID);
         assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true, // withConfOverride
+                true, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
@@ -3041,7 +3104,7 @@ public class WifiConfigManagerTest {
         result = addNetworkToWifiConfigManager(network, TEST_NO_PERM_UID);
         assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
@@ -3053,7 +3116,7 @@ public class WifiConfigManagerTest {
         result = addNetworkToWifiConfigManager(network, TEST_NO_PERM_UID);
         assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy(),
@@ -3070,7 +3133,7 @@ public class WifiConfigManagerTest {
         IpConfiguration ipConf = WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy();
         // First create a WifiConfiguration with proxy
         NetworkUpdateResult result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                        false, // withConfOverride
+                        false, // withNetworkSettings
                         true, // withProfileOwnerPolicy
                         false, // withDeviceOwnerPolicy
                         ipConf,
@@ -3078,7 +3141,7 @@ public class WifiConfigManagerTest {
                         WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         // Update the network while using the same ipConf, and no proxy specific permissions
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                        false, // withConfOverride
+                        false, // withNetworkSettings
                         false, // withProfileOwnerPolicy
                         false, // withDeviceOwnerPolicy
                         ipConf,
@@ -3112,14 +3175,14 @@ public class WifiConfigManagerTest {
 
         // Update with Conf Override
         NetworkUpdateResult result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true, // withConfOverride
+                true, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true, // withConfOverride
+                true, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3128,14 +3191,14 @@ public class WifiConfigManagerTest {
 
         // Update as Device Owner
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3144,14 +3207,14 @@ public class WifiConfigManagerTest {
 
         // Update as Profile Owner
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3160,14 +3223,14 @@ public class WifiConfigManagerTest {
 
         // Update with no permissions (should fail)
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3200,14 +3263,14 @@ public class WifiConfigManagerTest {
 
         // Update with Conf Override
         NetworkUpdateResult result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true, // withConfOverride
+                true, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                true, // withConfOverride
+                true, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3216,14 +3279,14 @@ public class WifiConfigManagerTest {
 
         // Update as Device Owner
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 true, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3232,14 +3295,14 @@ public class WifiConfigManagerTest {
 
         // Update as Profile Owner
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3248,14 +3311,14 @@ public class WifiConfigManagerTest {
 
         // Update with no permissions (should fail)
         result = verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 true, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf1,
                 true, // assertSuccess
                 WifiConfiguration.INVALID_NETWORK_ID); // Update networkID
         verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-                false, // withConfOverride
+                false, // withNetworkSettings
                 false, // withProfileOwnerPolicy
                 false, // withDeviceOwnerPolicy
                 ipConf2,
@@ -3282,7 +3345,7 @@ public class WifiConfigManagerTest {
     }
 
     private NetworkUpdateResult verifyAddOrUpdateNetworkWithProxySettingsAndPermissions(
-            boolean withConfOverride,
+            boolean withNetworkSettings,
             boolean withProfileOwnerPolicy,
             boolean withDeviceOwnerPolicy,
             IpConfiguration ipConfiguration,
@@ -3301,9 +3364,9 @@ public class WifiConfigManagerTest {
         when(mDevicePolicyManagerInternal.isActiveAdminWithPolicy(anyInt(),
                 eq(DeviceAdminInfo.USES_POLICY_DEVICE_OWNER)))
                 .thenReturn(withDeviceOwnerPolicy);
-        when(mWifiPermissionsUtil.checkConfigOverridePermission(anyInt()))
-                .thenReturn(withConfOverride);
-        int uid = withConfOverride ? TEST_CREATOR_UID : TEST_NO_PERM_UID;
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt()))
+                .thenReturn(withNetworkSettings);
+        int uid = withNetworkSettings ? TEST_CREATOR_UID : TEST_NO_PERM_UID;
         NetworkUpdateResult result = addNetworkToWifiConfigManager(network, uid);
         assertEquals(assertSuccess, result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
         return result;

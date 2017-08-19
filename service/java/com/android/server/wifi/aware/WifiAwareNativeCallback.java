@@ -167,6 +167,10 @@ public class WifiAwareNativeCallback extends IWifiNanIfaceEventCallback.Stub imp
                     capabilities.maxSubscribeInterfaceAddresses;
             frameworkCapabilities.supportedCipherSuites = capabilities.supportedCipherSuites;
 
+            // TODO (b/63635857): enable framework support of >1 NDI
+            // Until then: force corresponding capability to 1.
+            frameworkCapabilities.maxNdiInterfaces = 1;
+
             mWifiAwareStateManager.onCapabilitiesUpdateResponse(id, frameworkCapabilities);
         } else {
             Log.e(TAG, "notifyCapabilitiesResponse: error code=" + status.status + " ("
@@ -178,7 +182,12 @@ public class WifiAwareNativeCallback extends IWifiNanIfaceEventCallback.Stub imp
     public void notifyEnableResponse(short id, WifiNanStatus status) {
         if (VDBG) Log.v(TAG, "notifyEnableResponse: id=" + id + ", status=" + statusString(status));
 
-        if (status.status == NanStatusType.SUCCESS) {
+        if (status.status == NanStatusType.ALREADY_ENABLED) {
+            Log.wtf(TAG, "notifyEnableResponse: id=" + id + ", already enabled!?");
+        }
+
+        if (status.status == NanStatusType.SUCCESS
+                || status.status == NanStatusType.ALREADY_ENABLED) {
             mWifiAwareStateManager.onConfigSuccessResponse(id);
         } else {
             mWifiAwareStateManager.onConfigFailedResponse(id, status.status);

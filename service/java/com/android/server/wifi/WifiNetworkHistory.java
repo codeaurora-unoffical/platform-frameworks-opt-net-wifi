@@ -17,16 +17,13 @@
 package com.android.server.wifi;
 
 import android.content.Context;
-
 import android.net.wifi.ScanResult;
-
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiSsid;
 import android.os.Environment;
 import android.os.Process;
 import android.text.TextUtils;
-
 import android.util.Log;
 
 import com.android.server.net.DelayedDiskWrite;
@@ -76,7 +73,6 @@ public class WifiNetworkHistory {
     private static final String AUTH_KEY = "AUTH";
     private static final String BSSID_STATUS_KEY = "BSSID_STATUS";
     private static final String SELF_ADDED_KEY = "SELF_ADDED";
-    private static final String FAILURE_KEY = "FAILURE";
     private static final String DID_SELF_ADD_KEY = "DID_SELF_ADD";
     private static final String PEER_CONFIGURATION_KEY = "PEER_CONFIGURATION";
     static final String CREATOR_UID_KEY = "CREATOR_UID_KEY";
@@ -91,6 +87,7 @@ public class WifiNetworkHistory {
     private static final String EPHEMERAL_KEY = "EPHEMERAL";
     private static final String USE_EXTERNAL_SCORES_KEY = "USE_EXTERNAL_SCORES";
     private static final String METERED_HINT_KEY = "METERED_HINT";
+    private static final String METERED_OVERRIDE_KEY = "METERED_OVERRIDE";
     private static final String NUM_ASSOCIATION_KEY = "NUM_ASSOCIATION";
     private static final String DELETED_EPHEMERAL_KEY = "DELETED_EPHEMERAL";
     private static final String CREATOR_NAME_KEY = "CREATOR_NAME";
@@ -213,6 +210,8 @@ public class WifiNetworkHistory {
                             + Boolean.toString(config.ephemeral) + NL);
                     out.writeUTF(METERED_HINT_KEY + SEPARATOR
                             + Boolean.toString(config.meteredHint) + NL);
+                    out.writeUTF(METERED_OVERRIDE_KEY + SEPARATOR
+                            + Integer.toString(config.meteredOverride) + NL);
                     out.writeUTF(USE_EXTERNAL_SCORES_KEY + SEPARATOR
                             + Boolean.toString(config.useExternalScores) + NL);
                     if (config.creationTime != null) {
@@ -288,9 +287,6 @@ public class WifiNetworkHistory {
 
                             out.writeUTF(BSSID_KEY_END + NL);
                         }
-                    }
-                    if (config.lastFailure != null) {
-                        out.writeUTF(FAILURE_KEY + SEPARATOR + config.lastFailure + NL);
                     }
                     out.writeUTF(HAS_EVER_CONNECTED_KEY + SEPARATOR
                             + Boolean.toString(status.getHasEverConnected()) + NL);
@@ -427,6 +423,9 @@ public class WifiNetworkHistory {
                         case METERED_HINT_KEY:
                             config.meteredHint = Boolean.parseBoolean(value);
                             break;
+                        case METERED_OVERRIDE_KEY:
+                            config.meteredOverride = Integer.parseInt(value);
+                            break;
                         case USE_EXTERNAL_SCORES_KEY:
                             config.useExternalScores = Boolean.parseBoolean(value);
                             break;
@@ -447,9 +446,6 @@ public class WifiNetworkHistory {
                             break;
                         case UPDATE_UID_KEY:
                             config.lastUpdateUid = Integer.parseInt(value);
-                            break;
-                        case FAILURE_KEY:
-                            config.lastFailure = value;
                             break;
                         case PEER_CONFIGURATION_KEY:
                             config.peerWifiConfiguration = value;

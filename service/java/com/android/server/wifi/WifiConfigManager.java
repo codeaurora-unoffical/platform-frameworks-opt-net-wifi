@@ -652,6 +652,12 @@ public class WifiConfigManager {
      * @param ignoreLockdown Ignore the configuration lockdown checks for connection attempts.
      */
     private boolean canModifyNetwork(WifiConfiguration config, int uid, boolean ignoreLockdown) {
+        // System internals can always update networks; they're typically only
+        // making meteredHint or meteredOverride changes
+        if (uid == Process.SYSTEM_UID) {
+            return true;
+        }
+
         // Passpoint configurations are generated and managed by PasspointManager. They can be
         // added by either PasspointNetworkEvaluator (for auto connection) or Settings app
         // (for manual connection), and need to be removed once the connection is completed.
@@ -682,10 +688,10 @@ public class WifiConfigManager {
 
         final boolean isCreator = (config.creatorUid == uid);
 
-        // Check if the |uid| holds the |OVERRIDE_CONFIG_WIFI| permission if the caller asks us to
+        // Check if the |uid| holds the |NETWORK_SETTINGS| permission if the caller asks us to
         // bypass the lockdown checks.
         if (ignoreLockdown) {
-            return mWifiPermissionsUtil.checkConfigOverridePermission(uid);
+            return mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         }
 
         // Check if device has DPM capability. If it has and |dpmi| is still null, then we
@@ -700,26 +706,35 @@ public class WifiConfigManager {
         final boolean isConfigEligibleForLockdown = dpmi != null && dpmi.isActiveAdminWithPolicy(
                 config.creatorUid, DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
         if (!isConfigEligibleForLockdown) {
-            return isCreator || mWifiPermissionsUtil.checkConfigOverridePermission(uid);
+            return isCreator || mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         }
 
         final ContentResolver resolver = mContext.getContentResolver();
         final boolean isLockdownFeatureEnabled = Settings.Global.getInt(resolver,
                 Settings.Global.WIFI_DEVICE_OWNER_CONFIGS_LOCKDOWN, 0) != 0;
-        return !isLockdownFeatureEnabled && mWifiPermissionsUtil.checkConfigOverridePermission(uid);
+        return !isLockdownFeatureEnabled
+                && mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
     }
 
     /**
-     * Method to check if the provided UID belongs to the current foreground user or some other
-     * app (only SysUI today) running on behalf of the user.
-     * This is used to prevent any background user apps from modifying network configurations.
+     * Check if the given UID belongs to the current foreground user. This is
+     * used to prevent apps running in background users from modifying network
+     * configurations.
+     * <p>
+     * UIDs belonging to system internals (such as SystemUI) are always allowed,
+     * since they always run as {@link UserHandle#USER_SYSTEM}.
      *
      * @param uid uid of the app.
-     * @return true if the UID belongs to the current foreground app or SystemUI, false otherwise.
+     * @return true if the given UID belongs to the current foreground user,
+     *         otherwise false.
      */
     private boolean doesUidBelongToCurrentUser(int uid) {
-        return (WifiConfigurationUtil.doesUidBelongToAnyProfile(
-                uid, mUserManager.getProfiles(mCurrentUserId)) || (uid == mSystemUiUid));
+        if (uid == android.os.Process.SYSTEM_UID || uid == mSystemUiUid) {
+            return true;
+        } else {
+            return WifiConfigurationUtil.doesUidBelongToAnyProfile(
+                    uid, mUserManager.getProfiles(mCurrentUserId));
+        }
     }
 
     /**
@@ -828,6 +843,10 @@ public class WifiConfigManager {
             internalConfig.enterpriseConfig.copyFromExternal(
                     externalConfig.enterpriseConfig, PASSWORD_MASK);
         }
+
+        // Copy over any metered information.
+        internalConfig.meteredHint = externalConfig.meteredHint;
+        internalConfig.meteredOverride = externalConfig.meteredOverride;
     }
 
     /**
@@ -890,7 +909,6 @@ public class WifiConfigManager {
         newInternalConfig.requirePMF = externalConfig.requirePMF;
         newInternalConfig.noInternetAccessExpected = externalConfig.noInternetAccessExpected;
         newInternalConfig.ephemeral = externalConfig.ephemeral;
-        newInternalConfig.meteredHint = externalConfig.meteredHint;
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
 
@@ -979,7 +997,7 @@ public class WifiConfigManager {
         if (WifiConfigurationUtil.hasProxyChanged(existingInternalConfig, newInternalConfig)
                 && !canModifyProxySettings(uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify proxy Settings "
-                    + config.configKey() + ". Must have OVERRIDE_WIFI_CONFIG,"
+                    + config.configKey() + ". Must have NETWORK_SETTINGS,"
                     + " or be device or profile owner.");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
@@ -1204,6 +1222,33 @@ public class WifiConfigManager {
             }
         }
         return removedNetworks;
+    }
+
+    /**
+     * Iterates through the internal list of configured networks and removes any ephemeral or
+     * passpoint network configurations which are transient in nature.
+     *
+     * @return true if a network was removed, false otherwise.
+     */
+    public boolean removeAllEphemeralOrPasspointConfiguredNetworks() {
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Removing all passpoint or ephemeral configured networks");
+        }
+        boolean didRemove = false;
+        WifiConfiguration[] copiedConfigs =
+                mConfiguredNetworks.valuesForAllUsers().toArray(new WifiConfiguration[0]);
+        for (WifiConfiguration config : copiedConfigs) {
+            if (config.isPasspoint()) {
+                Log.d(TAG, "Removing passpoint network config " + config.configKey());
+                removeNetwork(config.networkId, mSystemUiUid);
+                didRemove = true;
+            } else if (config.ephemeral) {
+                Log.d(TAG, "Removing ephemeral network config " + config.configKey());
+                removeNetwork(config.networkId, mSystemUiUid);
+                didRemove = true;
+            }
+        }
+        return didRemove;
     }
 
     /**
@@ -1498,7 +1543,7 @@ public class WifiConfigManager {
      * @return true if |uid| has the necessary permission to trigger explicit connection to the
      * network, false otherwise.
      * Note: This returns true only for the system settings/sysui app which holds the
-     * {@link android.Manifest.permission#OVERRIDE_WIFI_CONFIG} permission. We don't want to let
+     * {@link android.Manifest.permission#NETWORK_SETTINGS} permission. We don't want to let
      * any other app force connection to a network.
      */
     public boolean checkAndUpdateLastConnectUid(int networkId, int uid) {
@@ -1910,7 +1955,7 @@ public class WifiConfigManager {
      * @return WifiConfiguration object representing the network corresponding to the scanDetail,
      * null if none exists.
      */
-    private WifiConfiguration getConfiguredNetworkForScanDetail(ScanDetail scanDetail) {
+    public WifiConfiguration getConfiguredNetworkForScanDetail(ScanDetail scanDetail) {
         ScanResult scanResult = scanDetail.getScanResult();
         if (scanResult == null) {
             Log.e(TAG, "No scan result found in scan detail");
@@ -2292,7 +2337,8 @@ public class WifiConfigManager {
         Iterator<WifiConfiguration> iter = networks.iterator();
         while (iter.hasNext()) {
             WifiConfiguration config = iter.next();
-            if (config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()) {
+            if (config.ephemeral || config.isPasspoint()
+                    || config.getNetworkSelectionStatus().isNetworkPermanentlyDisabled()) {
                 iter.remove();
             }
         }
@@ -2858,15 +2904,15 @@ public class WifiConfigManager {
                 DeviceAdminInfo.USES_POLICY_PROFILE_OWNER);
         final boolean isUidDeviceOwner = dpmi != null && dpmi.isActiveAdminWithPolicy(uid,
                 DeviceAdminInfo.USES_POLICY_DEVICE_OWNER);
-        final boolean hasConfigOverridePermission =
-                mWifiPermissionsUtil.checkConfigOverridePermission(uid);
+        final boolean hasNetworkSettingsPermission =
+                mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         // If |uid| corresponds to the device owner, allow all modifications.
-        if (isUidDeviceOwner || isUidProfileOwner || hasConfigOverridePermission) {
+        if (isUidDeviceOwner || isUidProfileOwner || hasNetworkSettingsPermission) {
             return true;
         }
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "UID: " + uid + " cannot modify WifiConfiguration proxy settings."
-                    + " ConfigOverride=" + hasConfigOverridePermission
+                    + " ConfigOverride=" + hasNetworkSettingsPermission
                     + " DeviceOwner=" + isUidDeviceOwner
                     + " ProfileOwner=" + isUidProfileOwner);
         }
@@ -2878,5 +2924,30 @@ public class WifiConfigManager {
      */
     public void setOnSavedNetworkUpdateListener(OnSavedNetworkUpdateListener listener) {
         mListener = listener;
+    }
+
+    /**
+     * Set extra failure reason for given config. Used to surface extra failure details to the UI
+     * @param netId The network ID of the config to set the extra failure reason for
+     * @param reason the WifiConfiguration.ExtraFailureReason failure code representing the most
+     *               recent failure reason
+     */
+    public void setRecentFailureAssociationStatus(int netId, int reason) {
+        WifiConfiguration config = getInternalConfiguredNetwork(netId);
+        if (config == null) {
+            return;
+        }
+        config.recentFailure.setAssociationStatus(reason);
+    }
+
+    /**
+     * @param netId The network ID of the config to clear the extra failure reason from
+     */
+    public void clearRecentFailureReason(int netId) {
+        WifiConfiguration config = getInternalConfiguredNetwork(netId);
+        if (config == null) {
+            return;
+        }
+        config.recentFailure.clear();
     }
 }
