@@ -67,7 +67,6 @@ public class WifiNative {
     private final WificondControl mWificondControl;
     private final WifiInjector mWifiInjector;
     private boolean mStaAndAPConcurrency = false;
-    private String mSoftApInterface = null;
 
     public WifiNative(String interfaceName, WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, WificondControl condControl,
@@ -134,7 +133,7 @@ public class WifiNative {
             return null;
         }
 
-        return mWificondControl.QcSetupDriverForSoftApMode(mSoftApInterface, isDualMode);
+        return mWificondControl.QcSetupDriverForSoftApMode(isDualMode);
     }
 
     /**
@@ -225,15 +224,12 @@ public class WifiNative {
     public boolean addOrRemoveInterface(String interfaceName, boolean add, boolean isBridge) {
         boolean status = false;
         if (interfaceName != null && !isBridge) {
-            /* Do we need to run this in a for loop if create/remove fails? */
             if (add && runQsapCmd("softap create ", interfaceName)) {
                 Log.d(mTAG, "created SAP interface " + interfaceName);
                 status = true;
-                mSoftApInterface = interfaceName;
             } else if (!add && runQsapCmd("softap remove ", interfaceName)) {
                 Log.d(mTAG, "removed SAP interface " + interfaceName);
                 status = true;
-                mSoftApInterface = null;
             } else {
                 Log.e(mTAG, "Failed to add/remove SAP interface " + interfaceName);
             }
@@ -241,10 +237,8 @@ public class WifiNative {
             // Create bridge interface.
             if (add && runQsapCmd("softap bridge create ", interfaceName)) {
                 Log.d(mTAG, "created bridge SAP interface " + interfaceName);
-                mSoftApInterface = interfaceName;
             } else if (!add && runQsapCmd("softap bridge remove ", interfaceName)) {
                 Log.d(mTAG, "removed bridge SAP interface " + interfaceName);
-                mSoftApInterface = null;
             } else {
                 Log.e(mTAG, "Failed to add/remove Bridge SAP interface " + interfaceName);
                 return false;
