@@ -212,7 +212,6 @@ public class SoftApStateMachine extends StateMachine {
                 mWifiNative.tearDownAp();
             }
         }
-
         // Update state
         mWifiApState.set(wifiApState);
 
@@ -288,10 +287,10 @@ public class SoftApStateMachine extends StateMachine {
             @Override
             public void onStateChanged(int state, int reason) {
                 if (state == WIFI_AP_STATE_DISABLED) {
-                    mWifiNative.addOrRemoveInterface(mInterfaceName, false);
+                    mWifiNative.addOrRemoveInterface(mInterfaceName, false, false);
                     sendMessage(CMD_AP_STOPPED);
                 } else if (state == WIFI_AP_STATE_FAILED) {
-                    mWifiNative.addOrRemoveInterface(mInterfaceName, false);
+                    mWifiNative.addOrRemoveInterface(mInterfaceName, false, false);
                     sendMessage(CMD_START_AP_FAILURE);
                 }
 
@@ -308,14 +307,14 @@ public class SoftApStateMachine extends StateMachine {
             SoftApModeConfiguration config = (SoftApModeConfiguration) message.obj;
             mMode = config.getTargetMode();
 
-            if (!mWifiNative.addOrRemoveInterface(mInterfaceName, true)) {
+            if (!mWifiNative.addOrRemoveInterface(mInterfaceName, true, false)) {
                 transitionTo(mInitialState);
                 return;
             }
 
-            IApInterface apInterface = mWifiNative.setupForSoftApMode();
+            IApInterface apInterface = mWifiNative.setupForSoftApMode(false);
             if (apInterface == null) {
-                mWifiNative.addOrRemoveInterface(mInterfaceName, false);
+                mWifiNative.addOrRemoveInterface(mInterfaceName, false, false);
                 setWifiApState(WIFI_AP_STATE_FAILED,
                         WifiManager.SAP_START_FAILURE_GENERAL, null, mMode);
                 /**

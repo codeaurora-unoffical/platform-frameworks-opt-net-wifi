@@ -187,6 +187,56 @@ public class WificondControl {
     }
 
     /**
+    * Setup driver for softAp mode via wificond.
+    * @return An IApInterface as wificond Ap interface binder handler.
+    * Returns null on failure.
+    */
+    public IApInterface QcSetupDriverForSoftApMode(String sapInterfaceName,
+                                                   boolean isDualMode) {
+        if (sapInterfaceName == null) {
+            Log.d(TAG, "Can't setup SAP mode without interface names");
+            return null;
+        }
+
+        Log.d(TAG, "Setting up driver for soft ap mode");
+        mWificond = mWifiInjector.makeWificond();
+        if (mWificond == null) {
+            Log.e(TAG, "Failed to get reference to wificond");
+            return null;
+        }
+
+        String[] dualSapIfname = null;
+        if (isDualMode)
+            dualSapIfname = mWifiInjector.getWifiApConfigStore().getDualSapInterfaces();
+
+        IApInterface softApInterface = null;
+        IApInterface dualSapInterface1 = null;
+        IApInterface dualSapInterface2 = null;
+
+        try {
+            if (isDualMode && dualSapIfname != null && dualSapIfname.length == 2) {
+                dualSapInterface1 = mWificond.QcCreateApInterface(dualSapIfname[0].getBytes(StandardCharsets.UTF_8));
+                dualSapInterface2 = mWificond.QcCreateApInterface(dualSapIfname[1].getBytes(StandardCharsets.UTF_8));
+            }
+            softApInterface = mWificond.QcCreateApInterface(sapInterfaceName.getBytes(StandardCharsets.UTF_8));
+        } catch (RemoteException e1) {
+            Log.e(TAG, "Failed to get IApInterface due to remote exception");
+            return null;
+        }
+
+        if (softApInterface == null || (dualSapIfname != null && (dualSapInterface1 == null || dualSapInterface2 == null))) {
+            Log.e(TAG, "Could not get IApInterface instance from wificond");
+            return null;
+        }
+        Binder.allowBlocking(softApInterface.asBinder());
+
+        // Refresh Handlers
+        mApInterface = softApInterface;
+
+        return softApInterface;
+    }
+
+    /**
     * Teardown all interfaces configured in wificond.
     * @return Returns true on success.
     */

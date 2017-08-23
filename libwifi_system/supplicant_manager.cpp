@@ -37,12 +37,12 @@ namespace {
 const char kSupplicantInitProperty[] = "init.svc.wpa_supplicant";
 const char kSupplicantConfigTemplatePath[] =
     "/etc/wifi/wpa_supplicant.conf";
-const char kSupplicantConfigFile[] = "/data/vendor/wifi/wpa_supplicant.conf";
-const char kP2pConfigFile[] = "/data/vendor/wifi/p2p_supplicant.conf";
+const char kSupplicantConfigFile[] = "/data/misc/wifi/wpa_supplicant.conf";
+const char kP2pConfigFile[] = "/data/misc/wifi/p2p_supplicant.conf";
 const char kSupplicantServiceName[] = "wpa_supplicant";
 constexpr mode_t kConfigFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
 
-const char kWiFiEntropyFile[] = "/data/vendor/wifi/entropy.bin";
+const char kWiFiEntropyFile[] = "/data/misc/wifi/entropy.bin";
 
 const unsigned char kDummyKey[21] = {0x02, 0x11, 0xbe, 0x33, 0x43, 0x35, 0x68,
                                      0x47, 0x84, 0x99, 0xa9, 0x2b, 0x1c, 0xd3,

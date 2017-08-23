@@ -15,6 +15,7 @@
  */
 
 package com.android.server.wifi;
+
 import static com.android.server.wifi.util.ApConfigUtil.ERROR_GENERIC;
 import static com.android.server.wifi.util.ApConfigUtil.ERROR_NO_CHANNEL;
 import static com.android.server.wifi.util.ApConfigUtil.SUCCESS;
@@ -47,6 +48,7 @@ import android.os.RemoteException;
 import android.util.Log;
 //import android.net.wifi.WifiDevice;
 import java.util.HashMap;
+import java.math.BigInteger;
 
 import com.android.internal.util.State;
 import com.android.internal.R;
@@ -69,9 +71,10 @@ import java.io.InputStreamReader;
  * The internal state machine runs under "WifiStateMachine" thread context.
  */
 public class SoftApManager implements ActiveModeManager {
-   private  Context mContext;
+    private  Context mContext;
     private static final String TAG = "SoftApManager";
     private final static boolean DBG = true;
+
     private final WifiNative mWifiNative;
 
     private final String mCountryCode;
@@ -103,6 +106,9 @@ public class SoftApManager implements ActiveModeManager {
     // Device name polling interval(ms) and max times
     private static final int DNSMASQ_POLLING_INTERVAL = 1000;
     private static final int DNSMASQ_POLLING_MAX_TIMES = 10;
+
+    private boolean mDualSapMode = false;
+
     /**
      * Listener for soft AP state changes.
      */
@@ -123,7 +129,7 @@ public class SoftApManager implements ActiveModeManager {
                          INetworkManagementService nms,
                          WifiApConfigStore wifiApConfigStore,
                          WifiConfiguration config,
-                         WifiMetrics wifiMetrics, 
+                         WifiMetrics wifiMetrics,
                          WifiInjector wifiInjector,
                          Context context) {
         mStateMachine = new SoftApStateMachine(looper, wifiInjector);
@@ -167,6 +173,14 @@ public class SoftApManager implements ActiveModeManager {
             mListener.onStateChanged(state, reason);
         }
     }
+
+    /**
+     * Set Dual SAP mode
+     */
+    public void setDualSapMode(boolean enable) {
+        mDualSapMode = enable;
+    }
+
     // We can't do this once in the Tethering() constructor and cache the value, because the
     // CONNECTIVITY_SERVICE is registered only after the Tethering() constructor has completed.
     private ConnectivityManager getConnectivityManager() {
@@ -366,12 +380,105 @@ private static class DnsmasqThread extends Thread {
             mLastSoftApNotificationId = 0;
         }
     }
+
     /**
      * Set SoftAp channel
      * @param channel is channel number
      */
     public void setSapChannel(int channel) {
         mSoftApChannel = channel;
+    }
+
+    /**
+     * Write configuration for dual soft AP mode
+     * @param config AP configuration
+     * @return true on success
+     */
+    private boolean writeDualHostapdConfig(WifiConfiguration wifiConfig) {
+
+        String[] dualApInterfaces = mWifiApConfigStore.getDualSapInterfaces();
+        if (dualApInterfaces == null || dualApInterfaces.length != 2) {
+            Log.e(TAG, " dualApInterfaces is not set or length is not 2");
+            return false;
+        }
+
+        String hexSsid = String.format("%x", new BigInteger(1, wifiConfig.SSID.getBytes(StandardCharsets.UTF_8)));
+        String authStr = null;
+        switch (wifiConfig.getAuthType()) {
+        case KeyMgmt.WPA_PSK:
+            authStr = "wpa-psk " + wifiConfig.preSharedKey;
+            break;
+        case KeyMgmt.WPA2_PSK:
+            authStr = "wpa2-psk " + wifiConfig.preSharedKey;
+            break;
+        case KeyMgmt.NONE: /* fall-through */
+        default:
+            authStr = "open";
+            break;
+        }
+
+        /* softap setsoftap <dual2g/5g> <interface> <ssid2> <hidden/visible> <channel> <open/wep/wpa-psk/wpa2-psk> <wpa_passphrase> <max_num_sta> */
+        String dual2gCmd = "softap setsoftap dual2g " + dualApInterfaces[0]
+                           + " " + hexSsid + " visible 0 " + authStr;
+        String dual5gCmd = "softap setsoftap dual5g " + dualApInterfaces[1]
+                           + " " + hexSsid + " visible 0 " + authStr;
+        try {
+            if (mWifiNative.runQsapCmd(dual2gCmd, "") && mWifiNative.runQsapCmd(dual5gCmd, "") &&
+                  mWifiNative.runQsapCmd("softap qccmd set dual2g hw_mode=", "g") &&
+                  mWifiNative.runQsapCmd("softap qccmd set dual5g hw_mode=", "a") &&
+                  mWifiNative.runQsapCmd("softap qccmd set dual2g bridge=", mApInterface.getInterfaceName()) &&
+                  mWifiNative.runQsapCmd("softap qccmd set dual5g bridge=", mApInterface.getInterfaceName())) {
+                return true;
+            }
+        } catch (RemoteException e) {
+            Log.e(TAG, "Exception in configuring softap for dual mode: " + e);
+        }
+
+        return false;
+    }
+
+    /**
+     * Start dual soft AP instance with the given configuration.
+     * @param config AP configuration
+     * @return integer result code
+     */
+    private int startDualSoftAp(WifiConfiguration config) {
+        // Make a copy of configuration for updating AP band and channel.
+        WifiConfiguration localConfig = new WifiConfiguration(config);
+
+        // Setup country code if it is provided.
+        if (mCountryCode != null) {
+            // Country code is mandatory for 5GHz band, return an error if failed to set
+            // country code when AP is configured for 5GHz band.
+            if (!mWifiNative.setCountryCodeHal(mCountryCode.toUpperCase(Locale.ROOT))) {
+                Log.e(TAG, "Failed to set country code, required for setting up "
+                        + "soft ap in 5GHz");
+                return ERROR_GENERIC;
+            }
+        }
+
+
+        try {
+            boolean success = writeDualHostapdConfig(localConfig);
+            if (!success) {
+                Log.e(TAG, "Failed to write dual hostapd configuration");
+                return ERROR_GENERIC;
+            }
+
+            success = mApInterface.startHostapd(mDualSapMode);
+            // Hostapd doesn't brings bridge interface up. Mark it UP now.
+            mWifiNative.runQsapCmd("softap bridge up ", mApInterface.getInterfaceName());
+            if (!success) {
+                Log.e(TAG, "Failed to start hostapd.");
+                return ERROR_GENERIC;
+            }
+        } catch (RemoteException e) {
+            Log.e(TAG, "Exception in starting dual soft AP: " + e);
+        }
+
+        Log.d(TAG, "Dual Soft AP is started");
+
+        return SUCCESS;
     }
 
     /**
@@ -384,6 +491,9 @@ private static class DnsmasqThread extends Thread {
             Log.e(TAG, "Unable to start soft AP without valid configuration");
             return ERROR_GENERIC;
         }
+
+        if (mDualSapMode)
+            return startDualSoftAp(config);
 
         // Make a copy of configuration for updating AP band and channel.
         WifiConfiguration localConfig = new WifiConfiguration(config);
@@ -431,7 +541,7 @@ private static class DnsmasqThread extends Thread {
                 return ERROR_GENERIC;
             }
 
-            success = mApInterface.startHostapd();
+            success = mApInterface.startHostapd(false);
             if (!success) {
                 Log.e(TAG, "Failed to start hostapd.");
                 return ERROR_GENERIC;
@@ -471,7 +581,7 @@ private static class DnsmasqThread extends Thread {
      */
     private void stopSoftAp() {
         try {
-            mApInterface.stopHostapd();
+            mApInterface.stopHostapd(mDualSapMode);
         } catch (RemoteException e) {
             Log.e(TAG, "Exception in stopping soft AP: " + e);
             return;
