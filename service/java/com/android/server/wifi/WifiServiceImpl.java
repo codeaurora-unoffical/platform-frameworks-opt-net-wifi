@@ -109,14 +109,7 @@ import com.android.server.wifi.util.WifiHandler;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.io.BufferedReader;
-import java.io.BufferedInputStream;
-import java.io.EOFException;
-import java.io.File;
 import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
@@ -167,17 +160,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private final ArraySet<String> mBackgroundThrottlePackageWhitelist = new ArraySet<>();
 
     private SoftApStateMachine mSoftApStateMachine;
-    private int mStaAndApConcurrency = 0;
-    private String mSoftApInterfaceName = null;
-    private boolean mSoftApCreateIntf = false;
-    private int mSoftApChannel = 0;
-    private static final String SEPARATOR_KEY = "\n";
-    private static final String ENABLE_STA_SAP
-            = "ENABLE_STA_SAP_CONCURRENCY:";
-    private static final String SAP_CHANNEL
-            = "SAP_CHANNEL:";
-    private static final String mConcurrencyCfgTemplateFile =
-            "/vendor/etc/wifi/wifi_concurrency_cfg.txt";
+    private WifiApConfigStore mWifiApConfigStore;
 
     private final PowerManager mPowerManager;
     private final AppOpsManager mAppOps;
@@ -425,36 +408,21 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                 wifiServiceHandlerThread.getLooper(), asyncChannel);
         mWifiController = mWifiInjector.getWifiController();
         mWifiBackupRestore = mWifiInjector.getWifiBackupRestore();
+        mWifiApConfigStore = mWifiInjector.getWifiApConfigStore();
 
-        /* Get softAp Interface name from overlay config.xml */
-        String[] softApInterfaces = mContext.getResources().getStringArray(
-                com.android.internal.R.array.config_tether_wifi_regexs);
-        for (String intf : softApInterfaces) {
-            if (intf.equals("wlan0")) {
-                mSoftApInterfaceName = intf;
-            } else if (intf.equals("softap0")) {
-                mSoftApInterfaceName = intf;
-                mSoftApCreateIntf = true;
-            }
-        }
-
-        if (ensureConcurrencyFileExist()) {
-            readConcurrencyConfig();
-        }
-        if (mStaAndApConcurrency == 1) {
-            mWifiStateMachine.setStaSoftApConcurrency();
+        if (mWifiApConfigStore.getStaSapConcurrency()) {
+            mWifiStateMachine.setStaSoftApConcurrency(true);
             mSoftApStateMachine = mWifiStateMachine.getSoftApStateMachine();
-            if (mSoftApInterfaceName != null) {
-                mSoftApStateMachine.setSoftApInterfaceName(mSoftApInterfaceName);
+            if (mWifiApConfigStore.getSapInterface() != null) {
+                mSoftApStateMachine.setSoftApInterfaceName(mWifiApConfigStore.getSapInterface());
             }
-            if (mSoftApChannel != 0) {
-                mSoftApStateMachine.setSoftApChannel(mSoftApChannel);
-            }
-            mWifiController.setSoftApStateMachine(mSoftApStateMachine);
-        } else if (mSoftApCreateIntf && mSoftApInterfaceName != null) {
+            mSoftApStateMachine.setSoftApChannel(mWifiApConfigStore.getConfigFileChannel());
+            mWifiController.setSoftApStateMachine(mSoftApStateMachine, true);
+        } else if (mWifiApConfigStore.isSapNewIntfRequired() &&
+                   (mWifiApConfigStore.getSapInterface() != null)) {
             /* Need to Create new Interface in Standalone SAP Case.
              * For STA + SAP it is handled by SoftApStateMachine */
-            mWifiStateMachine.setNewSapInterface(mSoftApInterfaceName);
+            mWifiStateMachine.setNewSapInterface(mWifiApConfigStore.getSapInterface());
         }
 
         mPermissionReviewRequired = Build.PERMISSIONS_REVIEW_REQUIRED
@@ -855,6 +823,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             }
         }
 
+        if (enable && mWifiApConfigStore.getDualSapStatus()) {
+            stopSoftAp();
+        }
+
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
         return true;
     }
@@ -890,6 +862,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         if (mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_TETHERING)) {
             throw new SecurityException("DISALLOW_CONFIG_TETHERING is enabled for this user.");
         }
+
+        // TODO: This may not be used anymore. Check if this is needed?
+        startDualSapMode(enabled);
+
         // null wifiConfig is a meaningful input for CMD_SET_AP
         if (wifiConfig == null || isValid(wifiConfig)) {
             int mode = WifiManager.IFACE_IP_MODE_UNSPECIFIED;
@@ -1023,6 +999,9 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
 
+        // This will internally check for DUAL_BAND and take action.
+        startDualSapMode(true);
+
         // null wifiConfig is a meaningful input for CMD_SET_AP
         if (wifiConfig == null || isValid(wifiConfig)) {
             SoftApModeConfiguration softApConfig = new SoftApModeConfiguration(mode, wifiConfig);
@@ -1067,7 +1046,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private boolean stopSoftApInternal() {
         mLog.trace("stopSoftApInternal uid=%").c(Binder.getCallingUid()).flush();
 
+        if (mWifiApConfigStore.getDualSapStatus())
+            return startDualSapMode(false);
+
         mWifiController.sendMessage(CMD_SET_AP, 0, 0);
+
         return true;
     }
 
@@ -1945,7 +1928,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
         if (dhcpResults.ipAddress != null &&
                 dhcpResults.ipAddress.getAddress() instanceof Inet4Address) {
-            info.ipAddress = NetworkUtils.inetAddressToInt((Inet4Address) dhcpResults.ipAddress.getAddress());
+            info.ipAddress = NetworkUtils.inetAddressToInt(
+               (Inet4Address) dhcpResults.ipAddress.getAddress());
+            info.netmask = NetworkUtils.prefixLengthToNetmaskInt(
+            dhcpResults.ipAddress.getNetworkPrefixLength());
         }
 
         if (dhcpResults.gateway != null) {
@@ -2471,7 +2457,56 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     @Override
     public boolean getWifiStaSapConcurrency() {
-        return mStaAndApConcurrency == 1;
+        return mWifiApConfigStore.getStaSapConcurrency();
+    }
+
+    private boolean startDualSapMode(boolean enable) {
+        // Check if this request is for DUAL sap mode.
+        WifiConfiguration apConfig = mWifiInjector.getWifiApConfigStore().getApConfiguration();
+        if (enable && (apConfig.apBand != WifiConfiguration.AP_BAND_DUAL)) {
+            Slog.e(TAG, "Continue with Single SAP Mode.");
+            return false;
+        }
+
+        if (!mWifiApConfigStore.isDualSapSupported() ||
+              (mWifiApConfigStore.getBridgeInterface() == null)) {
+            Slog.e(TAG, "Dual SAP Mode is not supported.");
+            return false;
+        }
+
+        mLog.trace("startDualSapMode uid=% enable=%").c(Binder.getCallingUid()).c(enable).flush();
+
+        if (enable && mWifiApConfigStore.getDualSapStatus()) {
+            Slog.d(TAG, "DUAL Sap Mode already enabled. Do nothing!!");
+            return true;
+        }
+
+        boolean apEnabled =
+                (mWifiStateMachine.syncGetWifiApState() == WifiManager.WIFI_AP_STATE_ENABLING) ||
+                (mWifiStateMachine.syncGetWifiApState() == WifiManager.WIFI_AP_STATE_ENABLED);
+
+        boolean staEnabled =
+                (mWifiStateMachine.syncGetWifiState() == WifiManager.WIFI_STATE_ENABLING) ||
+                (mWifiStateMachine.syncGetWifiState() == WifiManager.WIFI_STATE_ENABLED);
+
+        // Reset StateMachine(s) to Appropriate State(s)
+        if (!enable || (enable && apEnabled))
+            mWifiController.sendMessage(CMD_SET_AP, 0, 0);
+
+        if (enable && staEnabled) {
+            // remeber that STA was enabled
+            mSettingsStore.setWifiSavedState(WifiSettingsStore.WIFI_ENABLED);
+            mWifiController.sendMessage(CMD_WIFI_TOGGLED);
+        }
+
+        // Disable STA + SAP Concurency if enabled.
+        if (enable) {
+            mWifiStateMachine.setDualSapMode(true);
+            if (mWifiApConfigStore.getStaSapConcurrency())
+                mWifiController.setSoftApStateMachine(null, false);
+        }
+
+        return true;
     }
 
     @Override
@@ -2676,86 +2711,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                         supplicantData, ipConfigData);
         restoreNetworks(wifiConfigurations);
         Slog.d(TAG, "Restored supplicant backup data");
-    }
-
-    private void readConcurrencyConfig() {
-        BufferedReader reader = null;
-        try {
-            if (mConcurrencyCfgTemplateFile != null) {
-                Log.d(TAG, "mConcurrencyCfgTemplateFile : "
-                      + mConcurrencyCfgTemplateFile);
-            }
-            reader = new BufferedReader(new FileReader(mConcurrencyCfgTemplateFile));
-            for (String key = reader.readLine(); key != null;
-            key = reader.readLine()) {
-                if (key != null) {
-                    Log.d(TAG, "mConcurrencyCfgTemplateFile line: " + key);
-                }
-                if (key.startsWith(ENABLE_STA_SAP)) {
-                    String st = key.replace(ENABLE_STA_SAP, "");
-                    st = st.replace(SEPARATOR_KEY, "");
-                    try {
-                        mStaAndApConcurrency = Integer.parseInt(st);
-                        Log.d(TAG,"mConcurrencyCfgTemplateFile EnableConcurrency = "
-                              + mStaAndApConcurrency);
-                    } catch (NumberFormatException e) {
-                        Log.e(TAG,"mConcurrencyCfgTemplateFile: incorrect format :"
-                              + key);
-                    }
-                }
-                if (key.startsWith(SAP_CHANNEL)) {
-                    String st = key.replace(SAP_CHANNEL, "");
-                    st = st.replace(SEPARATOR_KEY, "");
-                    try {
-                        mSoftApChannel = Integer.parseInt(st);
-                        Log.d(TAG,"mConcurrencyCfgTemplateFile SAPChannel = "
-                              + mSoftApChannel);
-                    } catch (NumberFormatException e) {
-                        Log.e(TAG,"mConcurrencyCfgTemplateFile: incorrect format :"
-                              + key);
-                    }
-                }
-            }
-        } catch (EOFException ignore) {
-            if (reader != null) {
-                try {
-                    reader.close();
-                    reader = null;
-                } catch (Exception e) {
-                    Log.e(TAG, "mConcurrencyCfgTemplateFile: Error closing file" + e);
-                }
-            }
-        } catch (IOException e) {
-            Log.e(TAG, "mConcurrencyCfgTemplateFile: Error parsing configuration" + e);
-        }
-        if (reader != null) {
-          try {
-              reader.close();
-          } catch (Exception e) {
-              Log.e(TAG, "mConcurrencyCfgTemplateFile: Error closing file" + e);
-          }
-        }
-    }
-
-    private boolean ensureConcurrencyFileExist() {
-        FileOutputStream dstStream = null;
-        FileInputStream srcStream = null;
-        DataInputStream in = null;
-        // check ConcurrencyCfgTemplateFile  exist
-        try {
-            in = new DataInputStream(new BufferedInputStream(new FileInputStream(
-                            mConcurrencyCfgTemplateFile)));
-        } catch (Exception e) {
-            Log.e(TAG, "ensureConcurrencyFile template file doesnt exist" + e);
-            return false;
-        } finally {
-            if (in != null) {
-                try {
-                    in.close();
-                } catch (IOException e) {}
-            }
-        }
-        return true;
     }
 
 }

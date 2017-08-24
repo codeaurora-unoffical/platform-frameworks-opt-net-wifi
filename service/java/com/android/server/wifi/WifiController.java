@@ -45,6 +45,7 @@ import com.android.internal.util.StateMachine;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import android.net.wifi.WifiConfiguration;
 
 /**
  * WifiController is the class used to manage on/off state of WifiStateMachine for various operating
@@ -97,6 +98,7 @@ public class WifiController extends StateMachine {
     private SoftApStateMachine mSoftApStateMachine = null;
     private final WifiSettingsStore mSettingsStore;
     private final WifiLockManager mWifiLockManager;
+    private final WifiApConfigStore mWifiApConfigStore;
 
     /**
      * Temporary for computing UIDS that are responsible for starting WIFI.
@@ -157,13 +159,15 @@ public class WifiController extends StateMachine {
     private QcApStaDisablingState mQcApStaDisablingState = new QcApStaDisablingState();
 
     WifiController(Context context, WifiStateMachine wsm, WifiSettingsStore wss,
-            WifiLockManager wifiLockManager, Looper looper, FrameworkFacade f) {
+            WifiLockManager wifiLockManager, Looper looper, FrameworkFacade f,
+            WifiApConfigStore wacs) {
         super(TAG, looper);
         mFacade = f;
         mContext = context;
         mWifiStateMachine = wsm;
         mSettingsStore = wss;
         mWifiLockManager = wifiLockManager;
+        mWifiApConfigStore = wacs;
 
         mAlarmManager = (AlarmManager)mContext.getSystemService(Context.ALARM_SERVICE);
         Intent idleIntent = new Intent(ACTION_DEVICE_IDLE, null);
@@ -374,10 +378,11 @@ public class WifiController extends StateMachine {
         mWifiStateMachine.updateBatteryWorkSource(mTmpWorkSource);
     }
 
-    public void setSoftApStateMachine(SoftApStateMachine machine) {
+    public void setSoftApStateMachine(SoftApStateMachine machine, boolean enable) {
         mSoftApStateMachine = machine;
-        mStaAndApConcurrency = true;
-        Slog.d(TAG, "mStaAndApConcurrency="+mStaAndApConcurrency);
+        mStaAndApConcurrency = enable;
+        mWifiStateMachine.setStaSoftApConcurrency(enable);
+        Slog.d(TAG, "set mStaAndApConcurrency="+mStaAndApConcurrency);
     }
 
     void enableVerboseLogging(int verbose) {
@@ -1390,6 +1395,13 @@ public class WifiController extends StateMachine {
                     }
                     break;
                 case CMD_AP_STOPPED:
+                    /* check and enable STA+SAP concurrency if it was disabled because of Dual Sap. */
+                    if (mWifiApConfigStore.getDualSapStatus()) {
+                        mWifiApConfigStore.setDualSapStatus(false);
+                        mWifiStateMachine.setDualSapMode(false);
+                        if (mWifiApConfigStore.getStaSapConcurrency())
+                            setSoftApStateMachine(mWifiStateMachine.getSoftApStateMachine(), true);
+                    }
                     if (mPendingState == null) {
                         /**
                          * Stop triggered internally, either tether notification
@@ -1417,7 +1429,23 @@ public class WifiController extends StateMachine {
                     }
                     break;
                 case CMD_AP_START_FAILURE:
-                    transitionTo(getNextWifiState());
+                    mPendingState = getNextWifiState();
+                    /* check and enable STA+SAP concurrency now */
+                    if (mWifiApConfigStore.getStaSapConcurrency()) {
+                        mWifiApConfigStore.setDualSapStatus(false);
+                        mWifiStateMachine.setDualSapMode(false);
+                        setSoftApStateMachine(mWifiStateMachine.getSoftApStateMachine(), true);
+                    } else if (mWifiApConfigStore.getApConfiguration().apBand == WifiConfiguration.AP_BAND_DUAL) {
+                        mWifiApConfigStore.setDualSapStatus(false);
+                        mWifiStateMachine.setDualSapMode(false);
+                    }
+                    transitionTo(mPendingState);
+                    break;
+                case CMD_AP_STARTED:
+                    // Set dual mode to true if mStaAndApConcurrency is false.
+                    if (!mStaAndApConcurrency &&
+                        (mWifiApConfigStore.getApConfiguration().apBand == WifiConfiguration.AP_BAND_DUAL))
+                        mWifiApConfigStore.setDualSapStatus(true);
                     break;
                 default:
                     return NOT_HANDLED;

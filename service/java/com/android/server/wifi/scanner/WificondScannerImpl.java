@@ -31,6 +31,7 @@ import com.android.server.wifi.ScanDetail;
 import com.android.server.wifi.WifiMonitor;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
+import android.net.wifi.WifiManager;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -106,6 +107,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
      * complete, but timeout just in case it does not.
      */
     private static final long SCAN_TIMEOUT_MS = 15000;
+    private final WifiManager mWifiManager;
 
     AlarmManager.OnAlarmListener mScanPeriodListener = new AlarmManager.OnAlarmListener() {
             public void onAlarm() {
@@ -130,6 +132,7 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
         mWifiNative = wifiNative;
         mChannelHelper = channelHelper;
         mAlarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+        mWifiManager = (WifiManager) mContext.getSystemService(Context.WIFI_SERVICE);
         mEventHandler = new Handler(looper, this);
         mClock = clock;
         mHwPnoDebouncer = new HwPnoDebouncer(mWifiNative, mAlarmManager, mEventHandler, mClock);
@@ -300,6 +303,20 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
         }
     }
 
+    private boolean isScanAllowed() {
+        if (mWifiManager.isScanAlwaysAvailable()) {
+            return true;
+        }
+
+        int wifiState = mWifiManager.getWifiState();
+        if (wifiState == WifiManager.WIFI_STATE_DISABLING
+            || wifiState == WifiManager.WIFI_STATE_DISABLED) {
+            return false;
+        }
+        return true;
+    }
+
+
     private void unscheduleScansLocked() {
         mAlarmManager.cancel(mScanPeriodListener);
         if (mLastScanSettings != null) {
@@ -331,6 +348,10 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
             // unless if HW pno scan is running. Hw PNO scans are paused it if there
             // are other pending scans,
             if (mLastScanSettings != null && !mLastScanSettings.hwPnoScanActive) {
+                return;
+            }
+            if (!isScanAllowed()) {
+                Log.e(TAG, "Scan is not allowed - skip process pending SCANs");
                 return;
             }
 
@@ -594,6 +615,10 @@ public class WificondScannerImpl extends WifiScannerImpl implements Handler.Call
         synchronized (mSettingsLock) {
             if (mLastScanSettings == null) {
                  // got a scan before we started scanning or after scan was canceled
+                return;
+            }
+            if (!isScanAllowed()) {
+                Log.e(TAG, "Scan is not allowed - skip reading SCAN results");
                 return;
             }
 
