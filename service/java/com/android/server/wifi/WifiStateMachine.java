@@ -213,6 +213,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
     private WifiApConfigStore mWifiApConfigStore;
+    private WifiP2pServiceImpl wifiP2pServiceImpl;
     private WifiTrafficPoller mTrafficPoller = null;
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
@@ -464,6 +465,18 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
         mDeathRecipient.unlinkToDeath();
         mWifiNative.tearDown();
+        // tearDown only brings down the wireless interface (wlan0), in case of FST
+        // make sure the bonding interface is also brought down
+        if (!mDataInterfaceName.equals(mInterfaceName)) {
+            try {
+                mNwService.setInterfaceDown(mDataInterfaceName);
+                mNwService.clearInterfaceAddresses(mDataInterfaceName);
+            } catch (RemoteException re) {
+                loge("Unable to change interface settings: " + re);
+            } catch (IllegalStateException ie) {
+                loge("Unable to change interface settings: " + ie);
+            }
+        }
     }
 
     public int getOperationalMode() {
@@ -1257,6 +1270,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mCountryCode.enableVerboseLogging(verbose);
         mWifiScoreReport.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiDiagnostics.startLogging(mVerboseLoggingEnabled);
+        if (wifiP2pServiceImpl != null)
+            wifiP2pServiceImpl.enableVerboseLogging(verbose);
         mWifiMonitor.enableVerboseLogging(verbose);
         mWifiNative.enableVerboseLogging(verbose);
         mWifiConfigManager.enableVerboseLogging(verbose);
@@ -3769,7 +3784,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         // First set up Wifi Direct
         if (mP2pSupported) {
             IBinder s1 = mFacade.getService(Context.WIFI_P2P_SERVICE);
-            WifiP2pServiceImpl wifiP2pServiceImpl =
+            wifiP2pServiceImpl =
                     (WifiP2pServiceImpl) IWifiP2pManager.Stub.asInterface(s1);
 
             if (wifiP2pServiceImpl != null) {
@@ -4620,6 +4635,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     if (message.arg1 == CONNECT_MODE) {
                         mOperationalMode = CONNECT_MODE;
                         setWifiState(WIFI_STATE_ENABLING);
+                        setNetworkDetailedState(DetailedState.DISCONNECTED);
                         transitionTo(mDisconnectedState);
                     } else if (message.arg1 == DISABLED_MODE) {
                         transitionTo(mSupplicantStoppingState);
@@ -5958,6 +5974,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             // from this point on and having the BSSID specified in the network block would
             // cause the roam to fail and the device to disconnect.
             clearTargetBssid("ObtainingIpAddress");
+
+            // Reset power save mode after association.
+            // Kernel does not forward power save request to driver if power
+            // save state of that interface is same as requested state in
+            // cfg80211. This happens when driver’s power save state not
+            // synchronized with cfg80211 power save state.
+            // By resetting power save state resolves issues of cfg80211
+            // ignoring enable power save request sent in ObtainingIpState.
+            mWifiNative.setPowerSave(false);
 
             // Stop IpManager in case we're switching from DHCP to static
             // configuration or vice versa.

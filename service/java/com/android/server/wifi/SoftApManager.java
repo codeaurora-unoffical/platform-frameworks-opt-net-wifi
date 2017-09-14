@@ -46,9 +46,11 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.RemoteException;
 import android.util.Log;
+
 //import android.net.wifi.WifiDevice;
 import java.util.HashMap;
 import java.math.BigInteger;
+
 
 import com.android.internal.util.State;
 import com.android.internal.R;
@@ -58,13 +60,7 @@ import com.android.server.wifi.util.ApConfigUtil;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
-import java.io.BufferedReader;
-import java.io.DataInputStream;
-import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import com.android.server.wifi.WifiSoftApNotificationManager;
 
 /**
  * Manage WiFi in AP mode.
@@ -95,13 +91,7 @@ public class SoftApManager implements ActiveModeManager {
     private WifiConfiguration mApConfig;
     private Notification.Builder softApNotificationBuilder;
     private int mLastSoftApNotificationId = 0;
-    private String message;
-    // Once STA established connection to hostapd, it will be added
-    // to mL2ConnectedDeviceMap. Then after deviceinfo update from dnsmasq,
-    // it will be added to mConnectedDeviceMap
-    private HashMap<String, Boolean> mL2ConnectedDeviceMap = new HashMap<String, Boolean>();
-    private HashMap<String, Boolean> mConnectedDeviceMap = new HashMap<String, Boolean>();
-    private static final String dhcpLocation = "/data/misc/dnsmasq.leases";
+    private WifiSoftApNotificationManager mWifiSoftApNotificationManager;
 
     // Device name polling interval(ms) and max times
     private static final int DNSMASQ_POLLING_INTERVAL = 1000;
@@ -134,6 +124,7 @@ public class SoftApManager implements ActiveModeManager {
                          Context context) {
         mStateMachine = new SoftApStateMachine(looper, wifiInjector);
 
+        mWifiSoftApNotificationManager = WifiSoftApNotificationManager.getInstance(context);
         mWifiNative = wifiNative;
         mCountryCode = countryCode;
         mListener = listener;
@@ -174,6 +165,7 @@ public class SoftApManager implements ActiveModeManager {
         }
     }
 
+
     /**
      * Set Dual SAP mode
      */
@@ -181,205 +173,6 @@ public class SoftApManager implements ActiveModeManager {
         mDualSapMode = enable;
     }
 
-    // We can't do this once in the Tethering() constructor and cache the value, because the
-    // CONNECTIVITY_SERVICE is registered only after the Tethering() constructor has completed.
-    private ConnectivityManager getConnectivityManager() {
-        return (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-    }
-
-    private void sendTetherConnectStateChangedBroadcast() {
-        if (!getConnectivityManager().isTetheringSupported()) return;
-
-        Intent broadcast = new Intent(ConnectivityManager.TETHER_CONNECT_STATE_CHANGED);
-        broadcast.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING |
-        Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-
-        mContext.sendStickyBroadcastAsUser(broadcast, UserHandle.ALL);
-
-        showSoftApClientsNotification(com.android.internal.R.drawable.stat_sys_tether_wifi);
-    }
-    private boolean readDeviceInfoFromDnsmasq(String mac_address) {
-        boolean result = false;
-        FileInputStream fstream = null;
-        String line;
-
-        try {
-            fstream = new FileInputStream(dhcpLocation);
-            DataInputStream in = new DataInputStream(fstream);
-            BufferedReader br = new BufferedReader(new InputStreamReader(in));
-            while ((null != (line = br.readLine())) && (line.length() != 0)) {
-                String[] fields = line.split(" ");
-
-                // 949295 00:0a:f5:6a:bf:70 192.168.43.32 android-93de88df9ec61bac *
-                if (fields.length > 3) {
-                    String addr = fields[1];
-                    String name = fields[3];
-
-                    if (addr.equals(mac_address)) {
-                        //device.deviceName = name;
-                        result = true;
-                        break;
-                    }
-                }
-            }
-        } catch (IOException ex) {
-            Log.e(TAG, "readDeviceNameFromDnsmasq: " + ex);
-        } finally {
-            if (fstream != null) {
-                try {
-                    fstream.close();
-                } catch (IOException ex) {}
-            }
-        }
-
-        return result;
-    }
-
-private static class DnsmasqThread extends Thread {
-        private final SoftApManager mSoftapmgr;
-        private int mInterval;
-        private int mMaxTimes;
-        String mac_address;
-        boolean connect_status;
-
-        public DnsmasqThread(SoftApManager softap,  String mac_address,
-            int interval, int maxTimes, boolean connect_status) {
-            super("SoftAp");
-            mSoftapmgr = softap;
-            mInterval = interval;
-            mMaxTimes = maxTimes;
-        }
-
-        public void run() {
-            boolean result = false;
-            try {
-                while (mMaxTimes > 0) {
-                    result = mSoftapmgr.readDeviceInfoFromDnsmasq(mac_address);
-                    if (result) {
-                        if (DBG) Log.d(TAG, "Successfully poll device info for " + mac_address);
-                        break;
-                    }
-
-                    mMaxTimes --;
-                    Thread.sleep(mInterval);
-                }
-            } catch (Exception ex) {
-                result = false;
-                Log.e(TAG, "Pulling " + mac_address +  "error" + ex);
-            }
-
-            if (!result) {
-                if (DBG) Log.d(TAG, "Pulling timeout, suppose STA uses static ip " + mac_address);
-            }
-
-            // When STA uses static ip, device info will be unavaiable from dnsmasq,
-            // thus no matter the result is success or failure, we will broadcast the event.
-            // But if the device is not in L2 connected state, it means the hostapd connection is
-            // disconnected before dnsmasq get device info, so in this case, don't broadcast
-            // connection event.
-            //WifiDevice other = mSoftapmgr.mL2ConnectedDeviceMap.get(mDevice.deviceAddress);*
-            //if (other != null && other.deviceState == WifiDevice.CONNECTED) {
-            if(connect_status){
-                mSoftapmgr.mL2ConnectedDeviceMap.get(mac_address);
-                mSoftapmgr.mConnectedDeviceMap.put(mac_address, connect_status);
-                mSoftapmgr.sendTetherConnectStateChangedBroadcast();
-            } else {
-                if (DBG) Log.d(TAG, "Device " + mac_address + "already disconnected, ignoring");
-            }
-        }
-
-}
-
-    public void interfaceMessageRecevied(String mac_address, boolean connect_status) {
-        // if softap extension feature not enabled, do nothing
-        if (!mContext.getResources().getBoolean(com.android.internal.R.bool.config_softap_extension)) {
-            return;
-        }
-        try {
-            if (connect_status){
-                mL2ConnectedDeviceMap.put(mac_address, connect_status);
-                mConnectedDeviceMap.put(mac_address,connect_status);
-                sendTetherConnectStateChangedBroadcast();
-                // When hostapd reported STA-connection event, it is possible that device
-                // info can't fetched from dnsmasq, then we start a thread to poll the
-                // device info, the thread will exit after device info avaiable.
-                // For static ip case, dnsmasq don't hold the device info, thus thread
-                // will exit after a timeout.
-          /*      if (readDeviceInfoFromDnsmasq(mac_address)) {
-                    mConnectedDeviceMap.put(mac_address,connect_status);
-                    sendTetherConnectStateChangedBroadcast();
-                } else {
-                    if (DBG) Log.d(TAG, "Starting poll device info for " + mac_address);
-                    new DnsmasqThread(this, mac_address,
-                        DNSMASQ_POLLING_INTERVAL, DNSMASQ_POLLING_MAX_TIMES, connect_status).start();
-                }*/ // disabled bcz dhcp permission issue
-            } else {
-                mL2ConnectedDeviceMap.remove(mac_address);
-                mConnectedDeviceMap.remove(mac_address);
-                sendTetherConnectStateChangedBroadcast();
-            }
-        } catch (IllegalArgumentException ex) {
-            Log.e(TAG, "Device IllegalArgument: " + ex);
-        }
-    }
-
-
-   private void showSoftApClientsNotification(int icon) {
-              NotificationManager notificationManager =
-                (NotificationManager)mContext.getSystemService(Context.NOTIFICATION_SERVICE);
-
-        if (notificationManager == null) {
-            return;
-        }
-
-        Intent intent = new Intent();
-        intent.setClassName("com.android.settings", "com.android.settings.TetherSettings");
-        intent.setFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
-
-        PendingIntent pi = PendingIntent.getActivityAsUser(mContext, 0, intent, 0,
-                null, UserHandle.CURRENT);
-
-        CharSequence message;
-        Resources r = Resources.getSystem();
-        CharSequence title = r.getText(com.android.internal.R.string.tethered_notification_title);
-        int size = mConnectedDeviceMap.size();
-        if (size == 0) {
-            message = r.getText(com.android.internal.R.string.tethered_notification_no_device_message);
-        } else if (size == 1) {
-            message = String.format((r.getText(com.android.internal.R.string.tethered_notification_one_device_message)).toString(),
-               size);
-        } else {
-            message = String.format((r.getText(com.android.internal.R.string.tethered_notification_multi_device_message)).toString(),
-               size);
-        }
-        if (softApNotificationBuilder == null) {
-            softApNotificationBuilder = new Notification.Builder(mContext,SystemNotificationChannels.ALERTS);
-            softApNotificationBuilder.setWhen(0)
-                    .setOngoing(true)
-                    .setColor(mContext.getColor(
-                            com.android.internal.R.color.system_notification_accent_color))
-                    .setVisibility(Notification.VISIBILITY_PUBLIC)
-                    .setCategory(Notification.CATEGORY_STATUS);
-        }
-        softApNotificationBuilder.setSmallIcon(icon)
-                .setContentTitle(title)
-                .setContentText(message)
-                .setContentIntent(pi)
-                .setPriority(Notification.PRIORITY_MIN);
-        softApNotificationBuilder.setContentText(message);
-
-        mLastSoftApNotificationId = icon + 10;
-        notificationManager.notify(mLastSoftApNotificationId, softApNotificationBuilder.build());
-    }
-
- private void clearSoftApClientsNotification() {
-        NotificationManager notificationManager =
-            (NotificationManager)mContext.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (notificationManager != null && mLastSoftApNotificationId != 0) {
-            notificationManager.cancel(mLastSoftApNotificationId);
-            mLastSoftApNotificationId = 0;
-        }
-    }
 
     /**
      * Set SoftAp channel
@@ -789,9 +582,9 @@ private static class DnsmasqThread extends Thread {
                     case CMD_START:
                         // Already started, ignore this command.
                         break;
-                     case CMD_SOFTAP_CLIENT_CONNECT_STATUS_CHANGED:
-                         interfaceMessageRecevied((String) message.obj, ((int)message.arg1 == 1) ? true : false);
-                         break;
+                    case CMD_SOFTAP_CLIENT_CONNECT_STATUS_CHANGED:
+                        mWifiSoftApNotificationManager.connectionStatusChange(message);
+                        break;
                     case CMD_AP_INTERFACE_BINDER_DEATH:
                     case CMD_STOP:
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING, 0);
@@ -803,9 +596,8 @@ private static class DnsmasqThread extends Thread {
                             updateApState(WifiManager.WIFI_AP_STATE_DISABLED, 0);
                         }
                         transitionTo(mIdleState);
-                        clearSoftApClientsNotification();
-                        mConnectedDeviceMap.clear();
-                        mL2ConnectedDeviceMap.clear();
+                        mWifiSoftApNotificationManager.clearSoftApClientsNotification();
+                        mWifiSoftApNotificationManager.clearConnectedDevice();
                         try {
                             mWificond.UnregisterCallback(mInterfaceEventHandler);
                         } catch (RemoteException e1) { }

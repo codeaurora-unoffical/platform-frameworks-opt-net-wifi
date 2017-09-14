@@ -191,8 +191,14 @@ public class WificondControl {
     * @return An IApInterface as wificond Ap interface binder handler.
     * Returns null on failure.
     */
-    public IApInterface QcSetupDriverForSoftApMode(String sapInterfaceName,
-                                                   boolean isDualMode) {
+    public IApInterface QcSetupDriverForSoftApMode(boolean isDualMode) {
+        String sapInterfaceName = null;
+
+        if (isDualMode)
+            sapInterfaceName = mWifiInjector.getWifiApConfigStore().getBridgeInterface();
+        else
+            sapInterfaceName = mWifiInjector.getWifiApConfigStore().getSapInterface();
+
         if (sapInterfaceName == null) {
             Log.d(TAG, "Can't setup SAP mode without interface names");
             return null;

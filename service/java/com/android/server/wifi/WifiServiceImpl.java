@@ -128,6 +128,10 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import android.net.wifi.WifiDevice;
+import com.android.server.wifi.WifiSoftApNotificationManager;
+
 
 /**
  * WifiService handles remote WiFi operation requests by implementing
@@ -192,6 +196,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private WifiScanner mWifiScanner;
     private WifiLog mLog;
 
+    private boolean mIsControllerStarted = false;
     /**
      * Asynchronous channel to WifiStateMachine
      */
@@ -533,6 +538,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             Log.wtf(TAG, "Failed to initialize WifiStateMachine");
         }
         mWifiController.start();
+        mIsControllerStarted = true;
 
         // If we are already disabled (could be due to airplane mode), avoid changing persist
         // state here
@@ -803,6 +809,10 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             Binder.restoreCallingIdentity(ident);
         }
 
+        if (!mIsControllerStarted) {
+            Slog.e(TAG,"WifiController is not yet started, abort setWifiEnabled");
+            return false;
+        }
 
         if (mPermissionReviewRequired) {
             final int wiFiEnabledState = getWifiEnabledState();
@@ -2711,6 +2721,13 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                         supplicantData, ipConfigData);
         restoreNetworks(wifiConfigurations);
         Slog.d(TAG, "Restored supplicant backup data");
+    }
+    public List<WifiDevice> getConnectedStations() {
+        if (mContext.getResources().getBoolean(com.android.internal.R.bool.config_softap_extension)) {
+            return WifiSoftApNotificationManager.getInstance(mContext).getConnectedStations();
+        } else {
+            return Collections.emptyList();
+        }
     }
 
 }
