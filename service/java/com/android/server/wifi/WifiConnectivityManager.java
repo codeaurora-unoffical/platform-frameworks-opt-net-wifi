@@ -82,7 +82,10 @@ public class WifiConnectivityManager {
     public static final int MAX_PERIODIC_SCAN_INTERVAL_MS = 160 * 1000; // 160 seconds
     // PNO scan interval in milli-seconds. This is the scan
     // performed when screen is off and disconnected.
-    private static final int DISCONNECTED_PNO_SCAN_INTERVAL_MS = 20 * 1000; // 20 seconds
+    private static final int DISCONNECTED_PNO_SCAN_INTERVAL_MS = 20 * 1000;
+    private static  int mDisconnectedPnoScanPlan1IntervalSec;
+    private static  int mDisconnectedPnoScanPlan1Iterations;
+    private static  int mDisconnectedPnoScanPlan2IntervalSec;
     // PNO scan interval in milli-seconds. This is the scan
     // performed when screen is off and connected.
     private static final int CONNECTED_PNO_SCAN_INTERVAL_MS = 160 * 1000; // 160 seconds
@@ -345,7 +348,8 @@ public class WifiConnectivityManager {
                         + " capabilities " + fullScanResult.capabilities);
             }
 
-            mScanDetails.add(ScanResultUtil.toScanDetail(fullScanResult));
+            if (fullScanResult.informationElements != null)
+                mScanDetails.add(ScanResultUtil.toScanDetail(fullScanResult));
         }
     }
 
@@ -460,7 +464,8 @@ public class WifiConnectivityManager {
         @Override
         public void onPnoNetworkFound(ScanResult[] results) {
             for (ScanResult result: results) {
-                mScanDetails.add(ScanResultUtil.toScanDetail(result));
+                 if (result.informationElements != null)
+                     mScanDetails.add(ScanResultUtil.toScanDetail(result));
             }
 
             boolean wasConnectAttempted;
@@ -570,6 +575,14 @@ public class WifiConnectivityManager {
                             R.integer.config_wifi_framework_RSSI_SCORE_OFFSET))
                 * context.getResources().getInteger(
                         R.integer.config_wifi_framework_RSSI_SCORE_SLOPE);
+
+        mDisconnectedPnoScanPlan1IntervalSec = context.getResources().getInteger(
+                R.integer.config_disconnected_pno_scan_plan1_interval_sec);
+        mDisconnectedPnoScanPlan1Iterations = context.getResources().getInteger(
+                R.integer.config_disconnected_pno_scan_plan1_interations);
+        mDisconnectedPnoScanPlan2IntervalSec = context.getResources().getInteger(
+                R.integer.config_disconnected_pno_scan_plan2_interval_sec);
+
 
         localLog("PNO settings:" + " min5GHzRssi " + mMin5GHzRssi
                 + " min24GHzRssi " + mMin24GHzRssi
@@ -908,6 +921,9 @@ public class WifiConnectivityManager {
         scanSettings.reportEvents = WifiScanner.REPORT_EVENT_NO_BATCH;
         scanSettings.numBssidsPerScan = 0;
         scanSettings.periodInMs = DISCONNECTED_PNO_SCAN_INTERVAL_MS;
+        scanSettings.plan1PeriodInSec = mDisconnectedPnoScanPlan1IntervalSec;
+        scanSettings.plan1Iterations  = mDisconnectedPnoScanPlan1Iterations;
+        scanSettings.plan2PeriodInSec = mDisconnectedPnoScanPlan2IntervalSec;
 
         mPnoScanListener.clearScanDetails();
 

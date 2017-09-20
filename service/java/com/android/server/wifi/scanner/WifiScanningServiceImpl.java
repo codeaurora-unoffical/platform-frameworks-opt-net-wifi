@@ -1648,6 +1648,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                                                                   PnoSettings pnoSettings) {
             WifiNative.PnoSettings nativePnoSetting = new WifiNative.PnoSettings();
             nativePnoSetting.periodInMs = scanSettings.periodInMs;
+            nativePnoSetting.plan1PeriodInSec = scanSettings.plan1PeriodInSec;
+            nativePnoSetting.plan1Iterations  = scanSettings.plan1Iterations;
+            nativePnoSetting.plan2PeriodInSec = scanSettings.plan2PeriodInSec;
             nativePnoSetting.min5GHzRssi = pnoSettings.min5GHzRssi;
             nativePnoSetting.min24GHzRssi = pnoSettings.min24GHzRssi;
             nativePnoSetting.initialScoreMax = pnoSettings.initialScoreMax;

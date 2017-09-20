@@ -548,6 +548,26 @@ public class WifiNative {
     }
 
     /**
+     * Flush all previously configured HLPs.
+     *
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean flushAllHlp() {
+        return mSupplicantStaIfaceHal.flushAllHlp();
+    }
+
+    /**
+     * Set FILS HLP packet.
+     *
+     * @param dst Destination MAC address.
+     * @param hlpPacket Hlp Packet data in hex.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean addHlpReq(String dst, String hlpPacket) {
+        return mSupplicantStaIfaceHal.addHlpReq(dst, hlpPacket);
+    }
+
+    /**
      * Initiate TDLS discover and setup or teardown with the specified peer.
      *
      * @param macAddr MAC Address of the peer.
@@ -1086,6 +1106,9 @@ public class WifiNative {
         public int secureBonus;
         public int band5GHzBonus;
         public int periodInMs;
+        public int plan1PeriodInSec;
+        public int plan1Iterations;
+        public int plan2PeriodInSec;
         public boolean isConnected;
         public PnoNetwork[] networkList;
     }
