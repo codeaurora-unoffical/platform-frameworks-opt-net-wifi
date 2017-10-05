@@ -155,6 +155,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     // Apps with importance higher than this value is considered as background app.
     private static final int BACKGROUND_IMPORTANCE_CUTOFF =
             RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE;
+    private boolean mIsFactoryResetOn = false;
 
     final WifiStateMachine mWifiStateMachine;
 
@@ -2116,6 +2117,15 @@ public class WifiServiceImpl extends IWifiManager.Stub {
                 mWifiController.sendMessage(CMD_EMERGENCY_CALL_STATE_CHANGED, inCall ? 1 : 0, 0);
             } else if (action.equals(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)) {
                 handleIdleModeChanged();
+            } else if (action.equals(WifiManager.WIFI_STATE_CHANGED_ACTION)) {
+               int state  = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE,
+                                WifiManager.WIFI_STATE_UNKNOWN);
+               if (state  == WifiManager.WIFI_STATE_ENABLED) {
+                   if (mIsFactoryResetOn) {
+                       resetWifiNetworks();
+                       mIsFactoryResetOn = false;
+                   }
+               }
             }
         }
     };
@@ -2217,6 +2227,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
         intentFilter.addAction(Intent.ACTION_BATTERY_CHANGED);
         intentFilter.addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION);
+        intentFilter.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
         intentFilter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
         intentFilter.addAction(TelephonyIntents.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
         intentFilter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
@@ -2519,6 +2530,20 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         return true;
     }
 
+    private void resetWifiNetworks() {
+        // Delete all Wifi SSIDs
+         if (mWifiStateMachineChannel != null) {
+                List<WifiConfiguration> networks = mWifiStateMachine.syncGetConfiguredNetworks(
+                        Binder.getCallingUid(), mWifiStateMachineChannel);
+                if (networks != null) {
+                    for (WifiConfiguration config : networks) {
+                        removeNetwork(config.networkId);
+                    }
+                    saveConfiguration();
+                }
+        }
+    }
+
     @Override
     public void factoryReset() {
         enforceConnectivityInternalPermission();
@@ -2534,21 +2559,15 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         }
 
         if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_WIFI)) {
-            // Enable wifi
-            try {
-                setWifiEnabled(mContext.getOpPackageName(), true);
-            } catch (RemoteException e) {
+            if (getWifiEnabledState() == WifiManager.WIFI_STATE_ENABLED) {
+                resetWifiNetworks();
+            } else {
+                mIsFactoryResetOn = true;
+                // Enable wifi
+                try {
+                    setWifiEnabled(mContext.getOpPackageName(), true);
+                } catch (RemoteException e) {
                 /* ignore - local call */
-            }
-            // Delete all Wifi SSIDs
-            if (mWifiStateMachineChannel != null) {
-                List<WifiConfiguration> networks = mWifiStateMachine.syncGetConfiguredNetworks(
-                        Binder.getCallingUid(), mWifiStateMachineChannel);
-                if (networks != null) {
-                    for (WifiConfiguration config : networks) {
-                        removeNetwork(config.networkId);
-                    }
-                    saveConfiguration();
                 }
             }
         }

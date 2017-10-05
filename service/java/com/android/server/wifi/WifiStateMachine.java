@@ -530,6 +530,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     static final int CMD_STATIC_IP_SUCCESS                              = BASE + 15;
     /* Indicates Static IP failed */
     static final int CMD_STATIC_IP_FAILURE                              = BASE + 16;
+    /* The supplicant stop is completed */
+    static final int CMD_SUPPLICANT_STOPPED                             = BASE + 18;
     /* A delayed message sent to start driver when it fail to come up */
     static final int CMD_DRIVER_START_TIMED_OUT                         = BASE + 19;
 
@@ -975,7 +977,6 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mPasspointManager = mWifiInjector.getPasspointManager();
 
         mWifiMonitor = mWifiInjector.getWifiMonitor();
-        mWifiDiagnostics = mWifiInjector.makeWifiDiagnostics(mWifiNative);
 
         mWifiInfo = new WifiInfo();
         mSupplicantStateTracker =
@@ -1236,6 +1237,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         /* Restore power save and suspend optimizations */
         handlePostDhcpSetup();
         mIpManager.stop();
+    }
+
+    public void setWifiDiagnostics(BaseWifiDiagnostics WifiDiagnostics) {
+        mWifiDiagnostics = WifiDiagnostics;
     }
 
     public void setTrafficPoller(WifiTrafficPoller trafficPoller) {
@@ -3433,27 +3438,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     }
 
     void handlePreDhcpSetup() {
-        if (!mBluetoothConnectionActive) {
-            /*
-             * There are problems setting the Wi-Fi driver's power
-             * mode to active when bluetooth coexistence mode is
-             * enabled or sense.
-             * <p>
-             * We set Wi-Fi to active mode when
-             * obtaining an IP address because we've found
-             * compatibility issues with some routers with low power
-             * mode.
-             * <p>
-             * In order for this active power mode to properly be set,
-             * we disable coexistence mode until we're done with
-             * obtaining an IP address.  One exception is if we
-             * are currently connected to a headset, since disabling
-             * coexistence would interrupt that connection.
-             */
-            // Disable the coexistence mode
-            mWifiNative.setBluetoothCoexistenceMode(
+        // Disable the coexistence mode
+        mWifiNative.setBluetoothCoexistenceMode(
                     WifiNative.BLUETOOTH_COEXISTENCE_MODE_DISABLED);
-        }
 
         // Disable power save and suspend optimizations during DHCP
         // Note: The order here is important for now. Brcm driver changes
@@ -4626,7 +4613,30 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 // Failed to disable supplicant
                 handleSupplicantConnectionLoss(true);
             }
-            transitionTo(mInitialState);
+            // Give a chance to pending messages in the Queue to be handled.
+            sendMessage(CMD_SUPPLICANT_STOPPED);
+        }
+
+        @Override
+        public boolean processMessage(Message message) {
+            logStateAndMessage(message, this);
+
+            switch(message.what) {
+                case CMD_SUPPLICANT_STOPPED:
+                    transitionTo(mInitialState);
+                    break;
+                case CMD_START_SUPPLICANT:
+                case CMD_STOP_SUPPLICANT:
+                case CMD_START_AP:
+                case CMD_STOP_AP:
+                case CMD_SET_OPERATIONAL_MODE:
+                    messageHandlingStatus = MESSAGE_HANDLING_STATUS_DEFERRED;
+                    deferMessage(message);
+                    break;
+                default:
+                    return NOT_HANDLED;
+            }
+            return HANDLED;
         }
     }
 
