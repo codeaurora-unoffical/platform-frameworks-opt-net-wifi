@@ -1439,7 +1439,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     public void reconnect() {
         enforceChangePermission();
         mLog.info("reconnect uid=%").c(Binder.getCallingUid()).flush();
-        mWifiStateMachine.reconnectCommand();
+        mWifiStateMachine.reconnectCommand(new WorkSource(Binder.getCallingUid()));
     }
 
     /**
