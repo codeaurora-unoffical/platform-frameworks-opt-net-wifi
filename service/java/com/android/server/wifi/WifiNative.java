@@ -26,6 +26,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiLinkLayerStats;
 import android.net.wifi.WifiScanner;
+import android.net.wifi.WifiSsid;
 import android.net.wifi.WifiWakeReasonAndCounts;
 import android.os.SystemClock;
 import android.util.Log;
@@ -36,6 +37,7 @@ import com.android.internal.annotations.Immutable;
 import com.android.internal.util.HexDump;
 import com.android.server.connectivity.KeepalivePacketData;
 import com.android.server.wifi.util.FrameParser;
+import com.android.server.wifi.util.NativeUtil;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -548,6 +550,26 @@ public class WifiNative {
     }
 
     /**
+     * Flush all previously configured HLPs.
+     *
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean flushAllHlp() {
+        return mSupplicantStaIfaceHal.flushAllHlp();
+    }
+
+    /**
+     * Set FILS HLP packet.
+     *
+     * @param dst Destination MAC address.
+     * @param hlpPacket Hlp Packet data in hex.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean addHlpReq(String dst, String hlpPacket) {
+        return mSupplicantStaIfaceHal.addHlpReq(dst, hlpPacket);
+    }
+
+    /**
      * Initiate TDLS discover and setup or teardown with the specified peer.
      *
      * @param macAddr MAC Address of the peer.
@@ -798,6 +820,41 @@ public class WifiNative {
         return mSupplicantStaIfaceHal.loadNetworks(configs, networkExtras);
     }
 
+    // wifigbk ++
+    public String ssidStrFromGbkHistory(String ssid_str) {
+        if (ssid_str == null || ssid_str.length() == 0) {
+            return ssid_str;
+        }
+
+        ArrayList<Byte> ssid = NativeUtil.decodeSsid(ssid_str);
+        ArrayList<Byte> out_ssid = mWificondControl.getWifiGbkHistory(ssid);
+
+        if (ssid != null && !ssid.equals(out_ssid)) {
+            byte[] out_ssid_bytes = NativeUtil.byteArrayFromArrayList(out_ssid);
+            return NativeUtil.hexStringFromByteArray(out_ssid_bytes);
+        }
+
+        return ssid_str;
+    }
+
+    public WifiSsid wifiSsidFromGbkHistory(WifiSsid ssid_st) {
+        if (ssid_st == null || ssid_st.isHidden()) {
+            return ssid_st;
+        }
+
+        byte[] ssid_array = ssid_st.getOctets();
+        ArrayList<Byte> ssid = NativeUtil.byteArrayToArrayList(ssid_array);
+        ArrayList<Byte> out_ssid = mWificondControl.getWifiGbkHistory(ssid);
+
+        if (ssid != null && !ssid.equals(out_ssid)) {
+            byte[] out_ssid_bytes = NativeUtil.byteArrayFromArrayList(out_ssid);
+            return WifiSsid.createFromByteArray(out_ssid_bytes);
+        }
+
+        return ssid_st;
+    }
+    // wifigbk--
+
     /**
      * Add the provided network configuration to wpa_supplicant and initiate connection to it.
      * This method does the following:
@@ -814,6 +871,7 @@ public class WifiNative {
     public boolean connectToNetwork(WifiConfiguration configuration) {
         // Abort ongoing scan before connect() to unblock connection request.
         mWificondControl.abortScan();
+        configuration.SSID = ssidStrFromGbkHistory(configuration.SSID);
         return mSupplicantStaIfaceHal.connectToNetwork(configuration);
     }
 
@@ -833,6 +891,7 @@ public class WifiNative {
     public boolean roamToNetwork(WifiConfiguration configuration) {
         // Abort ongoing scan before connect() to unblock roaming request.
         mWificondControl.abortScan();
+        configuration.SSID = ssidStrFromGbkHistory(configuration.SSID);
         return mSupplicantStaIfaceHal.roamToNetwork(configuration);
     }
 

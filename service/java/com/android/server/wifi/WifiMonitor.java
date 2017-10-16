@@ -96,6 +96,9 @@ public class WifiMonitor {
     /* hotspot 2.0 events */
     public static final int HS20_REMEDIATION_EVENT               = BASE + 61;
 
+   /* Fils network connection completed */
+    public static final int FILS_NETWORK_CONNECTION_EVENT        = BASE + 63;
+
     /* WPS config errrors */
     private static final int CONFIG_MULTIPLE_PBC_DETECTED = 12;
     private static final int CONFIG_AUTH_FAILURE = 18;
@@ -401,6 +404,7 @@ public class WifiMonitor {
      * @param ssid SSID of the network.
      */
     public void broadcastNetworkIdentityRequestEvent(String iface, int networkId, String ssid) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_IDENTITY, 0, networkId, ssid);
     }
 
@@ -415,6 +419,7 @@ public class WifiMonitor {
      */
     public void broadcastNetworkGsmAuthRequestEvent(String iface, int networkId, String ssid,
                                                     String[] data) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_SIM_AUTH,
                 new SimAuthRequestData(networkId, WifiEnterpriseConfig.Eap.SIM, ssid, data));
     }
@@ -430,6 +435,7 @@ public class WifiMonitor {
      */
     public void broadcastNetworkUmtsAuthRequestEvent(String iface, int networkId, String ssid,
                                                      String[] data) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_SIM_AUTH,
                 new SimAuthRequestData(networkId, WifiEnterpriseConfig.Eap.AKA, ssid, data));
     }
@@ -517,6 +523,17 @@ public class WifiMonitor {
     }
 
     /**
+     * Broadcast the fils network connection event to all the handlers registered for this event.
+     *
+     * @param iface Name of iface on which this occurred.
+     * @param networkId ID of the network in wpa_supplicant.
+     * @param bssid BSSID of the access point.
+     */
+    public void broadcastFilsNetworkConnectionEvent(String iface, int networkId, String bssid) {
+        sendMessage(iface, FILS_NETWORK_CONNECTION_EVENT, networkId, 0, bssid);
+    }
+
+    /**
      * Broadcast the network disconnection event to all the handlers registered for this event.
      *
      * @param iface Name of iface on which this occurred.
@@ -540,6 +557,7 @@ public class WifiMonitor {
     public void broadcastSupplicantStateChangeEvent(String iface, int networkId, WifiSsid wifiSsid,
                                                     String bssid,
                                                     SupplicantState newSupplicantState) {
+        wifiSsid = mWifiInjector.getWifiNative().wifiSsidFromGbkHistory(wifiSsid);
         sendMessage(iface, SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(networkId, wifiSsid, bssid, newSupplicantState));
     }

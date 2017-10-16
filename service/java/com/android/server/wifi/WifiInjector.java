@@ -123,6 +123,7 @@ public class WifiInjector {
     private final WifiStateTracker mWifiStateTracker;
     private final Runtime mJavaRuntime;
     private final SelfRecovery mSelfRecovery;
+    private BaseWifiDiagnostics mWifiDiagnostics;
 
     private final boolean mUseRealLogger;
 
@@ -222,6 +223,9 @@ public class WifiInjector {
         mWifiStateMachine = new WifiStateMachine(mContext, mFrameworkFacade,
                 wifiStateMachineLooper, UserManager.get(mContext),
                 this, mBackupManagerProxy, mCountryCode, mWifiNative);
+        mWifiDiagnostics = this.makeWifiDiagnostics(mWifiNative);
+        if (mWifiStateMachine != null)
+            mWifiStateMachine.setWifiDiagnostics(mWifiDiagnostics);
         mCertManager = new WifiCertManager(mContext);
         mNotificationController = new WifiNotificationController(mContext,
                 mWifiServiceHandlerThread.getLooper(), mFrameworkFacade, null, this);
