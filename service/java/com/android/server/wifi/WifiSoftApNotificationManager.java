@@ -63,7 +63,8 @@ public class WifiSoftApNotificationManager  {
     private static final String dhcpLocation = "/data/misc/dhcp/dnsmasq.leases";
 
     //Notification channel,
-    public static String HOTSPOT_NOTIFICATION = "HOTSPOT_NOTIFICATION";
+    private static String HOTSPOT_NOTIFICATION = "HOTSPOT_NOTIFICATION";
+    private String mChannelName;
 
     // Device name polling interval(ms) and max times
     private static final int DNSMASQ_POLLING_INTERVAL = 1000;
@@ -241,10 +242,10 @@ public class WifiSoftApNotificationManager  {
         PendingIntent pi = PendingIntent.getActivityAsUser(mContext, 0, intent, 0,
                 null, UserHandle.CURRENT);
 
-        CharSequence message, mchannelName;
+        CharSequence message;
         Resources r = Resources.getSystem();
         CharSequence title = r.getText(com.android.internal.R.string.tethered_notification_title);
-        mchannelName = r.getText(com.android.internal.R.string.notification_channel_hotspot);
+        mChannelName = r.getText(com.android.internal.R.string.notification_channel_hotspot).toString();
         int size = mConnectedDeviceMap.size();
         if (size == 0) {
             message = r.getText(com.android.internal.R.string.tethered_notification_no_device_message);
@@ -257,7 +258,7 @@ public class WifiSoftApNotificationManager  {
         }
         if (softApNotificationBuilder == null) {
 
-            NotificationChannel channel = new NotificationChannel(HOTSPOT_NOTIFICATION, mchannelName, NotificationManager.IMPORTANCE_MIN);
+            NotificationChannel channel = new NotificationChannel(HOTSPOT_NOTIFICATION, mChannelName, NotificationManager.IMPORTANCE_MIN);
             notificationManager.createNotificationChannel(channel);
             softApNotificationBuilder = new Notification.Builder(mContext,HOTSPOT_NOTIFICATION);
             softApNotificationBuilder.setWhen(0)
@@ -275,14 +276,14 @@ public class WifiSoftApNotificationManager  {
         softApNotificationBuilder.setContentText(message);
 
         mLastSoftApNotificationId = icon + 10;
-        notificationManager.notify(mchannelName.toString(), mLastSoftApNotificationId, softApNotificationBuilder.build());
+        notificationManager.notify(mChannelName, mLastSoftApNotificationId, softApNotificationBuilder.build());
     }
 
     public void clearSoftApClientsNotification() {
         NotificationManager notificationManager =
                 (NotificationManager)mContext.getSystemService(Context.NOTIFICATION_SERVICE);
         if (notificationManager != null && mLastSoftApNotificationId != 0) {
-            notificationManager.cancel(mLastSoftApNotificationId);
+            notificationManager.cancel(mChannelName, mLastSoftApNotificationId);
             mLastSoftApNotificationId = 0;
         }
     }

@@ -31,10 +31,13 @@ import java.nio.charset.CharsetDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
+import android.util.Log;
+
 /**
  * Provide utility functions for native interfacing modules.
  */
 public class NativeUtil {
+    private static final String TAG = "NativeUtil";
     private static final String ANY_MAC_STR = "any";
     public static final byte[] ANY_MAC_BYTES = {0, 0, 0, 0, 0, 0};
     private static final int MAC_LENGTH = 6;
@@ -245,11 +248,12 @@ public class NativeUtil {
         byte[] byteArray = byteArrayFromArrayList(bytes);
         // Check for 0's in the byte stream in which case we cannot convert this into a string.
         if (!bytes.contains(Byte.valueOf((byte) 0))) {
-            CharsetDecoder decoder = StandardCharsets.US_ASCII.newDecoder();
+            CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
             try {
                 CharBuffer decoded = decoder.decode(ByteBuffer.wrap(byteArray));
                 return "\"" + decoded.toString() + "\"";
             } catch (CharacterCodingException cce) {
+                Log.e(TAG, "Cannot decode ssid! CharacterCodingException cce =  " + cce);
             }
         }
         return hexStringFromByteArray(byteArray);

@@ -129,10 +129,14 @@ public class WifiNative {
      * @return An IApInterface as wificond Ap interface binder handler.
      * Returns null on failure.
      */
-    public IApInterface setupForSoftApMode(boolean isDualMode) {
+    public IApInterface setupForSoftApMode(String SapInterfaceName, boolean isDualMode) {
         if (!startHalIfNecessary(false)) {
             Log.e(mTAG, "Failed to start HAL for AP mode");
             return null;
+        }
+
+        if (SapInterfaceName != null) {
+             addOrRemoveInterface(SapInterfaceName, true, isDualMode);
         }
 
         return mWificondControl.QcSetupDriverForSoftApMode(isDualMode);

@@ -592,6 +592,13 @@ public class SupplicantStaNetworkHal {
                 return false;
             }
         }
+        /** SIM Number */
+        eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.KEY_SIMNUM);
+        if (!TextUtils.isEmpty(eapParam)
+                && !setSimNumber(Integer.parseInt(eapParam))) {
+            Log.e(TAG, ssid + ": failed to set SIM number : " + eapParam);
+            return false;
+        }
 
         return true;
     }
@@ -1417,6 +1424,20 @@ public class SupplicantStaNetworkHal {
             if (!checkISupplicantVendorStaNetworkAndLogFailure(methodStr)) return false;
             try {
                 SupplicantStatus status =  mISupplicantVendorStaNetwork.setEapErp(enable);
+                return checkStatusAndLogFailure(status, methodStr);
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+                return false;
+            }
+        }
+    }
+    /** See ISupplicantVendorStaNetwork.hal for documentation */
+    private boolean setSimNumber(int SimNum) {
+        synchronized (mLock) {
+            final String methodStr = "setSimNumber";
+            if (!checkISupplicantStaNetworkAndLogFailure(methodStr)) return false;
+            try {
+                SupplicantStatus status =  mISupplicantVendorStaNetwork.setSimNumber(SimNum);
                 return checkStatusAndLogFailure(status, methodStr);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);

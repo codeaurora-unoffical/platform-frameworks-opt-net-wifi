@@ -7071,15 +7071,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             SoftApModeConfiguration config = (SoftApModeConfiguration) message.obj;
             mMode = config.getTargetMode();
 
-            if (mSapInterfaceName != null &&
-                !mWifiNative.addOrRemoveInterface(mSapInterfaceName, true, mDualSapMode)) {
-                setWifiApState(WIFI_AP_STATE_FAILED,
-                        WifiManager.SAP_START_FAILURE_GENERAL, null, mMode);
-                transitionTo(mInitialState);
-                return;
-            }
-
-            IApInterface apInterface = mWifiNative.setupForSoftApMode(mDualSapMode);
+            // If required, new interface will added by setupForSoftApMode
+            IApInterface apInterface = mWifiNative.setupForSoftApMode(mSapInterfaceName, mDualSapMode);
             if (apInterface == null) {
                 mWifiNative.addOrRemoveInterface(mSapInterfaceName, false, mDualSapMode);
                 setWifiApState(WIFI_AP_STATE_FAILED,
