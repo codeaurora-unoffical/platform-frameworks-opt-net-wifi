@@ -142,7 +142,23 @@ public class HalDeviceManager {
      * Note: direct call to HIDL.
      */
     public boolean start() {
-        return startWifi();
+        stopWifi();
+
+        int triedCount = 0;
+        while (triedCount <= START_HAL_RETRY_TIMES) {
+            if (startWifi())
+                return true;
+
+            Log.i(TAG, "Retry after "+ START_HAL_RETRY_INTERVAL_MS +"ms before giving up. count="+triedCount);
+            try {
+                Thread.sleep(START_HAL_RETRY_INTERVAL_MS);
+            } catch (InterruptedException ignore) {
+                // no-op
+            }
+            triedCount++;
+        }
+
+        return false;
     }
 
     /**
@@ -548,8 +564,11 @@ public class HalDeviceManager {
                                            boolean preexisting) {
                     Log.d(TAG, "IWifi registration notification: fqName=" + fqName
                             + ", name=" + name + ", preexisting=" + preexisting);
-                    mWifi = null; // get rid of old copy!
-                    initIWifiIfNecessary();
+                    synchronized (mLock) {
+                        Log.d(TAG, "onRegistration initIWifiIfNecessary");
+                        mWifi = null; // get rid of old copy!
+                        initIWifiIfNecessary();
+                    }
                 }
             };
 
