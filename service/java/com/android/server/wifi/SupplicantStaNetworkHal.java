@@ -159,7 +159,8 @@ public class SupplicantStaNetworkHal {
         /** SSID */
         config.SSID = null;
         if (getSsid() && !ArrayUtils.isEmpty(mSsid)) {
-            config.SSID = NativeUtil.encodeSsid(mSsid);
+            byte[] byteArray = NativeUtil.byteArrayFromArrayList(mSsid);
+            config.SSID = NativeUtil.hexStringFromByteArray(byteArray);
         } else {
             Log.e(TAG, "failed to read ssid");
             return false;
