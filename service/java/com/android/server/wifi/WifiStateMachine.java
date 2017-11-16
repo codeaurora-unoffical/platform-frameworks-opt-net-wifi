@@ -4333,7 +4333,7 @@ public class WifiStateMachine extends StateMachine {
                                 // to simplify obtainingIpState.
                                 mWifiNative.disconnect(mInterfaceName);
                                 handleNetworkDisconnect();
-                                transitionTo(mDisconnectedState);
+                                startConnectToNetwork(netId,message.sendingUid, SUPPLICANT_BSSID_ANY);
                             }
                         }
                     }
