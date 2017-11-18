@@ -114,6 +114,8 @@ public class WifiConnectivityManager {
     // TODO(b/31180330): Make these device configs.
     public static final int MAX_TX_PACKET_FOR_FULL_SCANS = 8;
     public static final int MAX_RX_PACKET_FOR_FULL_SCANS = 16;
+    public static final int MAX_TX_PACKET_FOR_PARTIAL_SCANS = 40;
+    public static final int MAX_RX_PACKET_FOR_PARTIAL_SCANS = 80;
 
     // WifiStateMachine has a bunch of states. From the
     // WifiConnectivityManager's perspective it only cares
@@ -817,7 +819,16 @@ public class WifiConnectivityManager {
         }
 
         mLastPeriodicSingleScanTimeStamp = currentTimeStamp;
-        startSingleScan(isFullBandScan);
+	if (mWifiState == WIFI_STATE_CONNECTED
+                 && (mWifiInfo.txSuccessRate
+                         > MAX_TX_PACKET_FOR_PARTIAL_SCANS
+                 || mWifiInfo.rxSuccessRate
+                         > MAX_RX_PACKET_FOR_PARTIAL_SCANS)) {
+                         Log.e(TAG,"Ignore scan due to heavy traffic");
+         } else {
+                 startSingleScan(isFullBandScan);
+         }
+
         schedulePeriodicScanTimer(mPeriodicSingleScanInterval);
 
         // Set up the next scan interval in an exponential backoff fashion.

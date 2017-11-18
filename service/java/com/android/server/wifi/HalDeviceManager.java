@@ -550,7 +550,6 @@ public class HalDeviceManager {
                             + ", name=" + name + ", preexisting=" + preexisting);
                     mWifi = null; // get rid of old copy!
                     initIWifiIfNecessary();
-                    stopWifi(); // just in case
                 }
             };
 
