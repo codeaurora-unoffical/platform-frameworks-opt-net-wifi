@@ -28,6 +28,7 @@ import android.net.wifi.WifiSsid;
 import android.os.Binder;
 import android.os.RemoteException;
 import android.util.Log;
+import java.nio.charset.StandardCharsets;
 
 import com.android.server.wifi.hotspot2.NetworkDetail;
 import com.android.server.wifi.util.InformationElementUtil;
@@ -210,6 +211,62 @@ public class WificondControl {
     }
 
     /**
+    * Setup driver for softAp mode via wificond.
+    * @return An IApInterface as wificond Ap interface binder handler.
+    * Returns null on failure.
+    */
+    public IApInterface QcSetupDriverForSoftApMode(boolean isDualMode) {
+        String sapInterfaceName = null;
+
+        if (isDualMode)
+            sapInterfaceName = mWifiInjector.getWifiApConfigStore().getBridgeInterface();
+        else
+            sapInterfaceName = mWifiInjector.getWifiApConfigStore().getSapInterface();
+
+        if (sapInterfaceName == null) {
+            Log.d(TAG, "Can't setup SAP mode without interface names");
+            return null;
+        }
+
+        Log.d(TAG, "Setting up driver for soft ap mode");
+        mWificond = mWifiInjector.makeWificond();
+        if (mWificond == null) {
+            Log.e(TAG, "Failed to get reference to wificond");
+            return null;
+        }
+
+        String[] dualSapIfname = null;
+        if (isDualMode)
+            dualSapIfname = mWifiInjector.getWifiApConfigStore().getDualSapInterfaces();
+
+        IApInterface softApInterface = null;
+        IApInterface dualSapInterface1 = null;
+        IApInterface dualSapInterface2 = null;
+
+        try {
+            if (isDualMode && dualSapIfname != null && dualSapIfname.length == 2) {
+                dualSapInterface1 = mWificond.QcCreateApInterface(dualSapIfname[0].getBytes(StandardCharsets.UTF_8));
+                dualSapInterface2 = mWificond.QcCreateApInterface(dualSapIfname[1].getBytes(StandardCharsets.UTF_8));
+            }
+            softApInterface = mWificond.QcCreateApInterface(sapInterfaceName.getBytes(StandardCharsets.UTF_8));
+        } catch (RemoteException e1) {
+            Log.e(TAG, "Failed to get IApInterface due to remote exception");
+            return null;
+        }
+
+        if (softApInterface == null || (dualSapIfname != null && (dualSapInterface1 == null || dualSapInterface2 == null))) {
+            Log.e(TAG, "Could not get IApInterface instance from wificond");
+            return null;
+        }
+        Binder.allowBlocking(softApInterface.asBinder());
+
+        // Refresh Handlers
+        mApInterface = softApInterface;
+
+        return softApInterface;
+    }
+
+    /**
     * Teardown all interfaces configured in wificond.
     * @return Returns true on success.
     */
@@ -240,6 +297,77 @@ public class WificondControl {
             return true;
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to tear down interfaces due to remote exception");
+        }
+
+        return false;
+    }
+
+    /**
+     * Teardown STA interfaces configured in wificond.
+     * @return Returns true on success.
+     */
+    public boolean tearDownStaInterfaces() {
+        Log.d(TAG, "tearing down STA interfaces in wificond");
+        mWificond = mWifiInjector.makeWificond();
+        if (mWificond == null) {
+            Log.e(TAG, "Failed to get reference to wificond");
+            return false;
+        }
+
+        try {
+            mWificond.tearDownStaInterfaces();
+            mClientInterface = null;
+            return true;
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to tear down STA interfaces due to remote exception");
+        }
+
+        return false;
+    }
+
+    /**
+     * Teardown AP interfaces configured in wificond.
+     * @return Returns true on success.
+     */
+    public boolean tearDownApInterfaces() {
+        Log.d(TAG, "tearing down AP interfaces in wificond");
+        mWificond = mWifiInjector.makeWificond();
+        if (mWificond == null) {
+            Log.e(TAG, "Failed to get reference to wificond");
+            return false;
+        }
+
+        try {
+            mWificond.tearDownApInterfaces();
+            mApInterface = null;
+            return true;
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to tear down STA interfaces due to remote exception");
+        }
+
+        return false;
+    }
+
+    /**
+     * Run Qsap command through wificond.
+     * @return Returns true on success.
+     */
+    public boolean runQsapCmd(String cmd) {
+        Log.d(TAG, "sending qsap cmd = " + cmd);
+        mWificond = mWifiInjector.makeWificond();
+        if (mWificond == null) {
+            Log.e(TAG, "Failed to get reference to wificond");
+            return false;
+        }
+
+        try {
+            if (!mWificond.setHostapdParam(cmd.getBytes(StandardCharsets.UTF_8))) {
+                Log.e(TAG, "Failed to run qsap command");
+                return false;
+            }
+            return true;
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to run qsap command due to remote exception");
         }
 
         return false;
