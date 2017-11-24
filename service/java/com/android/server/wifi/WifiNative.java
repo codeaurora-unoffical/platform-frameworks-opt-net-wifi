@@ -135,7 +135,7 @@ public class WifiNative {
      * @return Pair of <Integer, IApInterface> to indicate the status and the associated wificond
      * AP interface binder handler (will be null on failure).
      */
-    public Pair<Integer, IApInterface> setupForSoftApMode(boolean isDualMode) {
+    public Pair<Integer, IApInterface> setupForSoftApMode(String SapInterfaceName, boolean isDualMode) {
         if (!startHalIfNecessary(false)) {
             Log.e(mTAG, "Failed to start HAL for AP mode");
             return Pair.create(SETUP_FAILURE_HAL, null);
@@ -145,6 +145,10 @@ public class WifiNative {
         if (iApInterface == null) {
             return Pair.create(SETUP_FAILURE_WIFICOND, null);
         }
+        if (SapInterfaceName != null) {
+             addOrRemoveInterface(SapInterfaceName, true, isDualMode);
+        }
+
         return Pair.create(SETUP_SUCCESS, iApInterface);
     }
 

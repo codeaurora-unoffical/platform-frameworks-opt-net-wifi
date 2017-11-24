@@ -121,6 +121,7 @@ public class WifiInjector {
     private final WifiStateTracker mWifiStateTracker;
     private final Runtime mJavaRuntime;
     private final SelfRecovery mSelfRecovery;
+    private BaseWifiDiagnostics mWifiDiagnostics;
 
     private final boolean mUseRealLogger;
 
@@ -223,6 +224,9 @@ public class WifiInjector {
                 wifiStateMachineLooper, UserManager.get(mContext),
                 this, mBackupManagerProxy, mCountryCode, mWifiNative,
                 new WrongPasswordNotifier(mContext, mFrameworkFacade));
+        mWifiDiagnostics = this.makeWifiDiagnostics(mWifiNative);
+        if (mWifiStateMachine != null)
+            mWifiStateMachine.setWifiDiagnostics(mWifiDiagnostics);
         mCertManager = new WifiCertManager(mContext);
         mOpenNetworkNotifier = new OpenNetworkNotifier(mContext,
                 mWifiStateMachineHandlerThread.getLooper(), mFrameworkFacade, mClock, mWifiMetrics,

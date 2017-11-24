@@ -308,13 +308,9 @@ public class SoftApStateMachine extends StateMachine {
             SoftApModeConfiguration config = (SoftApModeConfiguration) message.obj;
             mMode = config.getTargetMode();
 
-            if (!mWifiNative.addOrRemoveInterface(mInterfaceName, true, false)) {
-                transitionTo(mInitialState);
-                return;
-            }
-
+            // If required, new interface will added by setupForSoftApMode
             IApInterface apInterface = null;
-            Pair<Integer, IApInterface> statusAndInterface = mWifiNative.setupForSoftApMode(false);
+            Pair<Integer, IApInterface> statusAndInterface = mWifiNative.setupForSoftApMode(mInterfaceName, false);
             if (statusAndInterface.first == WifiNative.SETUP_SUCCESS) {
                 apInterface = statusAndInterface.second;
             } else {

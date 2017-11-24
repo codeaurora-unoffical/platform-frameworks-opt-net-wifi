@@ -21,6 +21,7 @@ import android.content.Context;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.os.Environment;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -137,6 +138,10 @@ public class WifiApConfigStore {
             } else if (intf.equals("wifi_br0")) {
                 mBridgeInterfaceName = intf;
             }
+        }
+        /* save the softAP interface for FST */
+        if (mSoftApInterfaceName != null) {
+            SystemProperties.set("persist.vendor.fst.wifi.sap.interface", mSoftApInterfaceName);
         }
 
         if (ensureConcurrencyFileExist())
