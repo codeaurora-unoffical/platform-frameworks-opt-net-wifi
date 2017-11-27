@@ -5953,6 +5953,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                             break;
                         }
                         handleIpReachabilityLost();
+                        mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_NUD_FAILURE);
                         transitionTo(mDisconnectingState);
                     } else {
                         logd("CMD_IP_REACHABILITY_LOST but disconnect disabled -- ignore");
