@@ -821,7 +821,25 @@ public class WifiNative {
      */
     public boolean migrateNetworksFromSupplicant(Map<String, WifiConfiguration> configs,
                                                  SparseArray<Map<String, String>> networkExtras) {
-        return mSupplicantStaIfaceHal.loadNetworks(configs, networkExtras);
+        if (mSupplicantStaIfaceHal.loadNetworks(configs, networkExtras)) {
+            for (Map.Entry<String, WifiConfiguration> entry : configs.entrySet()) {
+                WifiConfiguration config = entry.getValue();
+                byte[] ssid_bytes = NativeUtil.hexStringToByteArray(config.SSID);
+                ArrayList<Byte> ssid = NativeUtil.byteArrayToArrayList(ssid_bytes);
+                ArrayList<Byte> out_ssid = mWificondControl.getWifiGbkHistory(ssid);
+                Log.d(mTAG, "ssid arraylist = " + ssid );
+                Log.d(mTAG, "out_ssid arraylist = " + out_ssid );
+
+                if (ssid != null && out_ssid != null) {
+                config.SSID = NativeUtil.encodeSsid(out_ssid);
+                }
+
+                Log.d(mTAG, "after convert, ssid = " + config.SSID + ", bssid = " + config.BSSID);
+            }
+        return true;
+        }
+        Log.e(mTAG, "Failed to load networks!");
+        return false;
     }
 
     // wifigbk ++
