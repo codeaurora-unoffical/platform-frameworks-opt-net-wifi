@@ -217,7 +217,8 @@ string HostapdManager::CreateHostapdConfig(
       "hw_mode=%c\n"
       "ignore_broadcast_ssid=%d\n"
       "wowlan_triggers=any\n"
-      "%s",
+      "%s"
+      "oce=2\n",
       interface_name.c_str(),
       ssid_as_string.c_str(),
       channel,

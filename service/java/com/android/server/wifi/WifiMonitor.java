@@ -401,6 +401,7 @@ public class WifiMonitor {
      * @param ssid SSID of the network.
      */
     public void broadcastNetworkIdentityRequestEvent(String iface, int networkId, String ssid) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_IDENTITY, 0, networkId, ssid);
     }
 
@@ -415,6 +416,7 @@ public class WifiMonitor {
      */
     public void broadcastNetworkGsmAuthRequestEvent(String iface, int networkId, String ssid,
                                                     String[] data) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_SIM_AUTH,
                 new SimAuthRequestData(networkId, WifiEnterpriseConfig.Eap.SIM, ssid, data));
     }
@@ -430,6 +432,7 @@ public class WifiMonitor {
      */
     public void broadcastNetworkUmtsAuthRequestEvent(String iface, int networkId, String ssid,
                                                      String[] data) {
+        ssid = mWifiInjector.getWifiNative().ssidStrFromGbkHistory(ssid);
         sendMessage(iface, SUP_REQUEST_SIM_AUTH,
                 new SimAuthRequestData(networkId, WifiEnterpriseConfig.Eap.AKA, ssid, data));
     }
@@ -540,6 +543,7 @@ public class WifiMonitor {
     public void broadcastSupplicantStateChangeEvent(String iface, int networkId, WifiSsid wifiSsid,
                                                     String bssid,
                                                     SupplicantState newSupplicantState) {
+        wifiSsid = mWifiInjector.getWifiNative().wifiSsidFromGbkHistory(wifiSsid);
         sendMessage(iface, SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(networkId, wifiSsid, bssid, newSupplicantState));
     }

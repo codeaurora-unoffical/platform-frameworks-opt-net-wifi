@@ -32,10 +32,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 
+import android.util.Log;
+
 /**
  * Provide utility functions for native interfacing modules.
  */
 public class NativeUtil {
+    private static final String TAG = "NativeUtil";
     private static final String ANY_MAC_STR = "any";
     public static final byte[] ANY_MAC_BYTES = {0, 0, 0, 0, 0, 0};
     private static final int MAC_LENGTH = 6;
@@ -251,6 +254,7 @@ public class NativeUtil {
                 CharBuffer decoded = decoder.decode(ByteBuffer.wrap(byteArray));
                 return "\"" + decoded.toString() + "\"";
             } catch (CharacterCodingException cce) {
+                Log.e(TAG, "Cannot decode ssid! CharacterCodingException cce =  " + cce);
             }
         }
         return hexStringFromByteArray(byteArray);

@@ -534,6 +534,27 @@ public class WificondControl {
         return results;
     }
 
+    // wifigbk +++
+    public ArrayList<Byte> getWifiGbkHistory(ArrayList<Byte> ssid) {
+        if (mWificondScanner == null) {
+            Log.e(TAG, "No valid wificond scanner interface handler");
+            return ssid;
+        }
+        try {
+            byte[] ssid_array = NativeUtil.byteArrayFromArrayList(ssid);
+            byte[] out_ssid_array = mWificondScanner.getWifiGbkHistory(ssid_array);
+            if (out_ssid_array != null && out_ssid_array.length  > 0) {
+                ssid = NativeUtil.byteArrayToArrayList(out_ssid_array);
+                Log.d(TAG, "getWifiGbkHistory success - ssid= " + NativeUtil.hexStringFromByteArray(ssid_array) +
+                           " out_ssid=" + NativeUtil.hexStringFromByteArray(out_ssid_array));
+            }
+        } catch (RemoteException e1) {
+            Log.e(TAG, "Failed to getWifiGbkHistory! (due to RemoteException)");
+        }
+        return ssid;
+    }
+    // wifigbk ---
+
     /**
      * Start a scan using wificond for the given parameters.
      * @param freqs list of frequencies to scan for, if null scan all supported channels.

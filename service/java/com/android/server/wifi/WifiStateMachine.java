@@ -220,6 +220,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
     private WifiApConfigStore mWifiApConfigStore;
+    private WifiP2pServiceImpl wifiP2pServiceImpl;
     private WifiTrafficPoller mTrafficPoller = null;
     private final boolean mP2pSupported;
     private final AtomicBoolean mP2pConnected = new AtomicBoolean(false);
@@ -305,6 +306,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private boolean mEnableRssiPolling = false;
     // Accessed via Binder thread ({get,set}PollRssiIntervalMsecs), and WifiStateMachine thread.
     private volatile int mPollRssiIntervalMsecs = DEFAULT_POLL_RSSI_INTERVAL_MSECS;
+    private boolean mIsRandomMacCleared = false;
     private int mRssiPollToken = 0;
     /* 3 operational states for STA operation: CONNECT_MODE, SCAN_ONLY_MODE, SCAN_ONLY_WIFI_OFF_MODE
     * In CONNECT_MODE, the STA can scan and connect to an access point
@@ -548,6 +550,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     static final int CMD_STATIC_IP_SUCCESS                              = BASE + 15;
     /* Indicates Static IP failed */
     static final int CMD_STATIC_IP_FAILURE                              = BASE + 16;
+    /* The supplicant stop is completed */
+    static final int CMD_SUPPLICANT_STOPPED                             = BASE + 18;
     /* A delayed message sent to start driver when it fail to come up */
     static final int CMD_DRIVER_START_TIMED_OUT                         = BASE + 19;
 
@@ -1314,6 +1318,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mCountryCode.enableVerboseLogging(verbose);
         mWifiScoreReport.enableVerboseLogging(mVerboseLoggingEnabled);
         mWifiDiagnostics.startLogging(mVerboseLoggingEnabled);
+        if (wifiP2pServiceImpl != null)
+            wifiP2pServiceImpl.enableVerboseLogging(verbose);
         mWifiMonitor.enableVerboseLogging(verbose);
         mWifiNative.enableVerboseLogging(verbose);
         mWifiConfigManager.enableVerboseLogging(verbose);
@@ -1411,6 +1417,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         ouiBytes[2] = (byte) (Integer.parseInt(ouiParts[2], 16) & 0xFF);
 
         logd("Setting OUI to " + oui);
+        return mWifiNative.setScanningMacOui(ouiBytes);
+    }
+    private boolean clearRandomMacOui() {
+        byte[] ouiBytes = new byte[]{0,0,0};
+        logd("Clear random OUI");
         return mWifiNative.setScanningMacOui(ouiBytes);
     }
 
@@ -3863,7 +3874,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         // First set up Wifi Direct
         if (mP2pSupported) {
             IBinder s1 = mFacade.getService(Context.WIFI_P2P_SERVICE);
-            WifiP2pServiceImpl wifiP2pServiceImpl =
+            wifiP2pServiceImpl =
                     (WifiP2pServiceImpl) IWifiP2pManager.Stub.asInterface(s1);
 
             if (wifiP2pServiceImpl != null) {
@@ -4717,7 +4728,30 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 // Failed to disable supplicant
                 handleSupplicantConnectionLoss(true);
             }
-            transitionTo(mInitialState);
+            // Give a chance to pending messages in the Queue to be handled.
+            sendMessage(CMD_SUPPLICANT_STOPPED);
+        }
+
+        @Override
+        public boolean processMessage(Message message) {
+            logStateAndMessage(message, this);
+
+            switch(message.what) {
+                case CMD_SUPPLICANT_STOPPED:
+                    transitionTo(mInitialState);
+                    break;
+                case CMD_START_SUPPLICANT:
+                case CMD_STOP_SUPPLICANT:
+                case CMD_START_AP:
+                case CMD_STOP_AP:
+                case CMD_SET_OPERATIONAL_MODE:
+                    messageHandlingStatus = MESSAGE_HANDLING_STATUS_DEFERRED;
+                    deferMessage(message);
+                    break;
+                default:
+                    return NOT_HANDLED;
+            }
+            return HANDLED;
         }
     }
 
@@ -5092,6 +5126,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                                     WifiLastResortWatchdog.FAILURE_CODE_ASSOCIATION);
                     break;
                 case WifiMonitor.AUTHENTICATION_FAILURE_EVENT:
+                    reasonCode = message.arg2;
+                    if (reasonCode == WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD) {
+                        Intent intent = new Intent(WifiManager.ACTION_AUTH_PASSWORD_WRONG);
+                        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+                    }
                     mWifiDiagnostics.captureBugReportData(
                             WifiDiagnostics.REPORT_REASON_AUTH_FAILURE);
                     mSupplicantStateTracker.sendMessage(WifiMonitor.AUTHENTICATION_FAILURE_EVENT);
@@ -5469,6 +5508,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     }
                     switch (wpsInfo.setup) {
                         case WpsInfo.PBC:
+                            clearRandomMacOui();
+                            mIsRandomMacCleared = true;
                             if (mWifiNative.startWpsPbc(wpsInfo.BSSID)) {
                                 wpsResult.status = WpsResult.Status.SUCCESS;
                             } else {
@@ -7060,6 +7101,14 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             }
             return Pair.create(true,
                     configs.size() == 1 ? netId : WifiConfiguration.INVALID_NETWORK_ID);
+        }
+   
+        @Override
+        public void exit() {
+            if (mIsRandomMacCleared) {
+                setRandomMacOui();
+                mIsRandomMacCleared = false;
+            }
         }
     }
 

@@ -354,7 +354,8 @@ public class WifiConnectivityManager {
                         + " capabilities " + fullScanResult.capabilities);
             }
 
-            mScanDetails.add(ScanResultUtil.toScanDetail(fullScanResult));
+            if (fullScanResult.informationElements != null)
+                mScanDetails.add(ScanResultUtil.toScanDetail(fullScanResult));
         }
     }
 
@@ -473,7 +474,8 @@ public class WifiConnectivityManager {
                     localLog("Skipping scan result with null information elements");
                     continue;
                 }
-                mScanDetails.add(ScanResultUtil.toScanDetail(result));
+                 if (result.informationElements != null)
+                     mScanDetails.add(ScanResultUtil.toScanDetail(result));
             }
 
             boolean wasConnectAttempted;
