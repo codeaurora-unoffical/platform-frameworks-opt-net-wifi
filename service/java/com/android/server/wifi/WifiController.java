@@ -173,6 +173,12 @@ public class WifiController extends StateMachine {
         addState(mDefaultState);
             addState(mApStaDisabledState, mDefaultState);
             addState(mStaEnabledState, mDefaultState);
+                addState(mDeviceActiveState, mStaEnabledState);
+                addState(mDeviceInactiveState, mStaEnabledState);
+                    addState(mScanOnlyLockHeldState, mDeviceInactiveState);
+                    addState(mFullLockHeldState, mDeviceInactiveState);
+                    addState(mFullHighPerfLockHeldState, mDeviceInactiveState);
+                    addState(mNoLockHeldState, mDeviceInactiveState);
             addState(mStaEnablingState, mDefaultState);
             addState(mStaDisablingState, mDefaultState);
             addState(mApEnablingState, mDefaultState);
@@ -180,12 +186,6 @@ public class WifiController extends StateMachine {
             addState(mApStaEnablingState, mDefaultState);
             addState(mApStaDisablingState, mDefaultState);
             addState(mApStaEnabledState, mDefaultState);
-                addState(mDeviceActiveState, mStaEnabledState);
-                addState(mDeviceInactiveState, mStaEnabledState);
-                    addState(mScanOnlyLockHeldState, mDeviceInactiveState);
-                    addState(mFullLockHeldState, mDeviceInactiveState);
-                    addState(mFullHighPerfLockHeldState, mDeviceInactiveState);
-                    addState(mNoLockHeldState, mDeviceInactiveState);
             addState(mStaDisabledWithScanState, mDefaultState);
             addState(mApEnabledState, mDefaultState);
             addState(mEcmState, mDefaultState);
@@ -704,6 +704,10 @@ public class WifiController extends StateMachine {
                     log("StaEnablingState: CMD_RESTART_WIFI_CONTINUE defered");
                     deferMessage(msg);
                     break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("StaEnablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
+                    deferMessage(msg);
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -753,6 +757,10 @@ public class WifiController extends StateMachine {
                     log("StaDisablingState: CMD_RESTART_WIFI_CONTINUE defered");
                     deferMessage(msg);
                     break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("StaDisablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
+                    deferMessage(msg);
+                    break;
                 default:
                     return NOT_HANDLED;
              }
@@ -800,6 +808,10 @@ public class WifiController extends StateMachine {
                 case CMD_AIRPLANE_TOGGLED:
                     log("ApEnablingState: CMD_AIRPLANE_TOGGLED defered");
                     deferMessage(obtainMessage(msg.what, msg.arg1, 1, msg.obj));
+                    break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("ApEnablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
+                    deferMessage(msg);
                     break;
                 default:
                     return NOT_HANDLED;
@@ -856,6 +868,10 @@ public class WifiController extends StateMachine {
                     log("ApDisablingState: CMD_AIRPLANE_TOGGLED defered");
                     deferMessage(msg);
                     break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("ApDisablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
+                    deferMessage(msg);
+                    break;
                 default:
                     return NOT_HANDLED;
              }
@@ -907,6 +923,10 @@ public class WifiController extends StateMachine {
                 case CMD_AP_START_FAILURE:
                     log("ApStaEnablingState: CMD_AP_START_FAILURE-> mStaEnabledState");
                     transitionTo(mStaEnabledState);
+                    break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("ApStaEnablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
+                    deferMessage(msg);
                     break;
                 case CMD_WIFI_DISABLED:
                 case CMD_AP_STOPPED:
@@ -968,6 +988,10 @@ public class WifiController extends StateMachine {
                     break;
                 case CMD_RESTART_WIFI:
                     log("ApStaDisablingState defer CMD_RESTART_WIFI");
+                    deferMessage(msg);
+                    break;
+                case CMD_SCAN_ALWAYS_MODE_CHANGED:
+                    log("ApStaDisablingState: CMD_SCAN_ALWAYS_MODE_CHANGED defered");
                     deferMessage(msg);
                     break;
                 default :
