@@ -564,7 +564,7 @@ public class SoftApManager implements ActiveModeManager {
                 } catch (RemoteException e) {
                 }
                 if (config != null) {
-                    onUpChanged(config.isUp());
+                    onUpChanged(config.isActive());
                 }
             }
 
