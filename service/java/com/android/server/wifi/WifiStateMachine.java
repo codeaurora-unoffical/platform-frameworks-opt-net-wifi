@@ -3050,6 +3050,24 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             loge("Failed to note battery stats in wifi");
         }
 
+        if ((wifiApState == WIFI_AP_STATE_DISABLED)
+               || (wifiApState == WIFI_AP_STATE_FAILED)) {
+            boolean skipUnload = false;
+            int wifiState = syncGetWifiState();
+            int operMode = getOperationalMode();
+            if ((wifiState ==  WifiManager.WIFI_STATE_ENABLING) ||
+                    (wifiState == WifiManager.WIFI_STATE_ENABLED) ||
+                     (operMode == WifiStateMachine.SCAN_ONLY_WITH_WIFI_OFF_MODE)) {
+                Log.d(TAG, "Avoid unload driver, WIFI_STATE is enabled/enabling");
+                skipUnload = true;
+            }
+            if (!skipUnload) {
+                cleanup();
+            } else {
+                mWifiNative.tearDownAp();
+            }
+        }
+
         // Update state
         mWifiApState.set(wifiApState);
 
