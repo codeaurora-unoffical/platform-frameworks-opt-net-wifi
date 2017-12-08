@@ -143,12 +143,13 @@ public class WifiNative {
             return Pair.create(SETUP_FAILURE_HAL, null);
         }
 
+        if (SapInterfaceName != null) {
+             addOrRemoveInterface(SapInterfaceName, true, isDualMode);
+        }
+
         IApInterface iApInterface = mWificondControl.QcSetupDriverForSoftApMode(isDualMode);
         if (iApInterface == null) {
             return Pair.create(SETUP_FAILURE_WIFICOND, null);
-        }
-        if (SapInterfaceName != null) {
-             addOrRemoveInterface(SapInterfaceName, true, isDualMode);
         }
 
         return Pair.create(SETUP_SUCCESS, iApInterface);
