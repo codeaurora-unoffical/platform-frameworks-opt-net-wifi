@@ -35,6 +35,7 @@ import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback.BssidChangeReason;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaNetwork;
+import vendor.qti.hardware.wifi.supplicant.V1_0.ISupplicantVendorStaNetwork;
 import android.hardware.wifi.supplicant.V1_0.IfaceType;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatus;
 import android.hardware.wifi.supplicant.V1_0.SupplicantStatusCode;
@@ -721,7 +722,8 @@ public class SupplicantStaIfaceHal {
             }
             if (newNetwork.value != null) {
                 return getStaNetworkMockable(
-                        ISupplicantStaNetwork.asInterface(newNetwork.value.asBinder()));
+                        ISupplicantStaNetwork.asInterface(newNetwork.value.asBinder()),
+                        ISupplicantVendorStaNetwork.asInterface(newNetwork.value.asBinder()));
             } else {
                 return null;
             }
@@ -751,15 +753,17 @@ public class SupplicantStaIfaceHal {
      * Use this to mock the creation of SupplicantStaNetworkHal instance.
      *
      * @param iSupplicantStaNetwork ISupplicantStaNetwork instance retrieved from HIDL.
+     * @param iSupplicantVendorStaNetwork ISupplicantVendorStaNetwork instance retrieved from HIDL.
      * @return The ISupplicantNetwork object for the given SupplicantNetworkId int, returns null if
      * the call fails
      */
     protected SupplicantStaNetworkHal getStaNetworkMockable(
-            ISupplicantStaNetwork iSupplicantStaNetwork) {
+            ISupplicantStaNetwork iSupplicantStaNetwork,
+            ISupplicantVendorStaNetwork iSupplicantVendorStaNetwork) {
         synchronized (mLock) {
             SupplicantStaNetworkHal network =
-                    new SupplicantStaNetworkHal(iSupplicantStaNetwork, mIfaceName, mContext,
-                            mWifiMonitor);
+                new SupplicantStaNetworkHal(iSupplicantStaNetwork, iSupplicantVendorStaNetwork,
+                                            mIfaceName, mContext, mWifiMonitor);
             if (network != null) {
                 network.enableVerboseLogging(mVerboseLoggingEnabled);
             }
@@ -788,7 +792,8 @@ public class SupplicantStaIfaceHal {
             }
             if (gotNetwork.value != null) {
                 return getStaNetworkMockable(
-                        ISupplicantStaNetwork.asInterface(gotNetwork.value.asBinder()));
+                        ISupplicantStaNetwork.asInterface(gotNetwork.value.asBinder()),
+                        ISupplicantVendorStaNetwork.asInterface(gotNetwork.value.asBinder()));
             } else {
                 return null;
             }
