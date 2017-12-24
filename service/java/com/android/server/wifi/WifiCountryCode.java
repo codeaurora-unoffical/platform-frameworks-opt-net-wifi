@@ -16,6 +16,10 @@
 
 package com.android.server.wifi;
 
+import android.content.Context;
+import android.content.Intent;
+import android.net.wifi.WifiManager;
+import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -30,6 +34,7 @@ public class WifiCountryCode {
     private final WifiNative mWifiNative;
     private boolean DBG = false;
     private boolean mReady = false;
+    private Context mContext;
 
     /** config option that indicate whether or not to reset country code to default when
      * cellular radio indicates country code loss
@@ -40,10 +45,12 @@ public class WifiCountryCode {
     private String mCurrentCountryCode = null;
 
     public WifiCountryCode(
+            Context context,
             WifiNative wifiNative,
             String oemDefaultCountryCode,
             boolean revertCountryCodeOnCellularLoss) {
 
+        mContext = context;
         mWifiNative = wifiNative;
         mRevertCountryCodeOnCellularLoss = revertCountryCodeOnCellularLoss;
 
@@ -75,6 +82,14 @@ public class WifiCountryCode {
         }
     }
 
+    private void sendCountryCodeChangedBroadcast() {
+        Log.d(TAG, "sending WIFI_COUNTRY_CODE_CHANGED_ACTION");
+        Intent intent = new Intent(WifiManager.WIFI_COUNTRY_CODE_CHANGED_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        intent.putExtra(WifiManager.EXTRA_COUNTRY_CODE, getCountryCode());
+        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
     /**
      * This is called when sim card is removed.
      * In this case we should invalid all other country codes except the
@@ -89,6 +104,7 @@ public class WifiCountryCode {
                 updateCountryCode();
             }
         }
+        sendCountryCodeChangedBroadcast();
     }
 
     /**
@@ -104,6 +120,7 @@ public class WifiCountryCode {
             mTelephonyCountryCode = null;
             // Country code will be set upon when wpa_supplicant starts next time.
         }
+        sendCountryCodeChangedBroadcast();
     }
 
     /**
@@ -143,6 +160,7 @@ public class WifiCountryCode {
         if (mReady) {
             updateCountryCode();
         }
+        sendCountryCodeChangedBroadcast();
         return true;
     }
 
