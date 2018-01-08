@@ -5276,6 +5276,17 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     /* connect command coming from auto-join */
                     netId = message.arg1;
                     bssid = (String) message.obj;
+
+                    synchronized (mWifiReqCountLock) {
+                        if (!hasConnectionRequests()) {
+                            if (mNetworkAgent == null) {
+                                loge("CMD_START_CONNECT but no requests and not connected,"
+                                        + " bailing");
+                                break;
+                            }
+                        }
+                    }
+
                     config = mWifiConfigManager.getConfiguredNetworkWithPassword(netId);
                     logd("CMD_START_CONNECT sup state "
                             + mSupplicantStateTracker.getSupplicantStateName()
@@ -7337,11 +7348,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
      * @param bssid BSSID of the network
      */
     public void startConnectToNetwork(int networkId, String bssid) {
-        synchronized (mWifiReqCountLock) {
-            if (hasConnectionRequests()) {
-                sendMessage(CMD_START_CONNECT, networkId, 0, bssid);
-            }
-        }
+        sendMessage(CMD_START_CONNECT, networkId, 0, bssid);
     }
 
     /**
