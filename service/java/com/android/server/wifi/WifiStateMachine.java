@@ -268,6 +268,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     };
     private boolean mIpReachabilityDisconnectEnabled = true;
 
+    /* if set to true then disconnect due to IP Reachability lost only when obtained for the first 10 seconds of L2 connection */
+    private boolean mDisconnectOnlyOnInitialIpReachability = false;
+    private boolean mDriverRoaming = false;
+
     @Override
     public void onRssiThresholdBreached(byte curRssi) {
         if (mVerboseLoggingEnabled) {
@@ -801,6 +805,8 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     /* Used to set the tx power limit for SAR during the start of a phone call. */
     private static final int CMD_SELECT_TX_POWER_SCENARIO               = BASE + 253;
 
+    private static final int CMD_IP_REACHABILITY_SESSION_END            = BASE + 254;
+
     // For message logging.
     private static final Class[] sMessageClasses = {
             AsyncChannel.class, WifiStateMachine.class, DhcpClient.class };
@@ -1126,6 +1132,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 R.bool.config_wifi_framework_enable_voice_call_sar_tx_power_limit);
         mEnableChipWakeUpWhenAssociated = true;
         mEnableRssiPollWhenAssociated = true;
+
+        mDisconnectOnlyOnInitialIpReachability = mContext.getResources().getBoolean(
+                R.bool.config_wifi_disconnect_only_on_initial_ipreachability);
 
         // CHECKSTYLE:OFF IndentationCheck
         addState(mDefaultState);
@@ -2952,6 +2961,11 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     sb.append(Integer.toString(msg.arg1));
                 }
                 break;
+            case CMD_IP_REACHABILITY_SESSION_END:
+                if (msg.obj != null) {
+                    sb.append(" ").append((String) msg.obj);
+                }
+                break;
             default:
                 sb.append(" ");
                 sb.append(Integer.toString(msg.arg1));
@@ -4263,6 +4277,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 case CMD_IP_CONFIGURATION_SUCCESSFUL:
                 case CMD_IP_CONFIGURATION_LOST:
                 case CMD_IP_REACHABILITY_LOST:
+                case CMD_IP_REACHABILITY_SESSION_END:
                     messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
                     break;
                 case CMD_GET_CONNECTION_STATISTICS:
@@ -5596,7 +5611,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                                 // to simplify obtainingIpState.
                                 mWifiNative.disconnect();
                                 handleNetworkDisconnect();
-                                transitionTo(mDisconnectedState);
+                                startConnectToNetwork(netId,message.sendingUid, SUPPLICANT_BSSID_ANY);
                             }
                         }
                     }
@@ -6139,6 +6154,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                 case CMD_IP_REACHABILITY_LOST:
                     if (mVerboseLoggingEnabled && message.obj != null) log((String) message.obj);
                     if (mIpReachabilityDisconnectEnabled) {
+                        if (mDisconnectOnlyOnInitialIpReachability && !mDriverRoaming) {
+                            logd("CMD_IP_REACHABILITY_LOST Connect session is over, skip ip reachability lost indication.");
+                            break;
+                        }
                         handleIpReachabilityLost();
                         mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_NUD_FAILURE);
                         transitionTo(mDisconnectingState);
@@ -6184,6 +6203,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                         mLastBssid = (String) message.obj;
                         sendNetworkStateChangeBroadcast(mLastBssid);
                     }
+                    mDriverRoaming = true;
                     break;
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
@@ -6595,6 +6615,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                         //
                         // mIpManager.confirmConfiguration() is called within
                         // the handling of SupplicantState.COMPLETED.
+                        mDriverRoaming = true;
                         transitionTo(mConnectedState);
                     } else {
                         messageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
@@ -6643,6 +6664,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_CONNECTED);
+
+            if (mDriverRoaming)
+                sendMessageDelayed(obtainMessage(CMD_IP_REACHABILITY_SESSION_END, 0, 0), 10000);
+
             registerConnected();
             lastConnectAttemptTimestamp = 0;
             targetWificonfiguration = null;
@@ -6855,6 +6880,9 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     }
                     break;
                 }
+                case CMD_IP_REACHABILITY_SESSION_END:
+                    mDriverRoaming = false;
+                    break;
                 default:
                     return NOT_HANDLED;
             }
@@ -6949,6 +6977,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
             /** clear the roaming state, if we were roaming, we failed */
             mIsAutoRoaming = false;
+            mDriverRoaming = false;
 
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_DISCONNECTED);

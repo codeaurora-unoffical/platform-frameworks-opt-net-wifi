@@ -72,6 +72,7 @@ public class WificondControl {
     private IPnoScanEvent mPnoScanEventHandler;
 
     private String mClientInterfaceName;
+    private static final int MAX_SSID_LEN = 32;
 
 
     private class ScanEventHandler extends IScanEvent.Stub {
@@ -584,6 +585,11 @@ public class WificondControl {
                     network.ssid = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid));
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Illegal argument " + ssid, e);
+                    continue;
+                }
+                if (network.ssid.length > MAX_SSID_LEN) {
+                    Log.e(TAG, "SSID is too long after conversion, skipping this ssid! SSID = " +
+                                network.ssid + " , network.ssid.size = " + network.ssid.length);
                     continue;
                 }
                 settings.hiddenNetworks.add(network);

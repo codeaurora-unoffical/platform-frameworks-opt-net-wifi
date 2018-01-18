@@ -866,8 +866,16 @@ public class WifiNative {
             return ssid_str;
         }
 
-        ArrayList<Byte> ssid = NativeUtil.decodeSsid(ssid_str);
-        ArrayList<Byte> out_ssid = mWificondControl.getWifiGbkHistory(ssid);
+        ArrayList<Byte> ssid = null;
+        ArrayList<Byte> out_ssid = null;
+
+        try {
+            ssid = NativeUtil.decodeSsid(ssid_str);
+            out_ssid = mWificondControl.getWifiGbkHistory(ssid);
+        } catch (IllegalArgumentException e) {
+            Log.i(mTAG, "Illegal argument " + ssid_str);
+            return ssid_str;
+        }
 
         if (ssid != null && !ssid.equals(out_ssid)) {
             byte[] out_ssid_bytes = NativeUtil.byteArrayFromArrayList(out_ssid);
