@@ -4532,6 +4532,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     mLastSignalLevel = -1;
 
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
+                    // Attempt to migrate data out of legacy store.
+                    if (!mWifiConfigManager.migrateFromLegacyStore()) {
+                        Log.e(TAG, "Failed to migrate from legacy config store");
+                    }
                     initializeWpsDetails();
                     sendSupplicantConnectionChangedBroadcast(true);
                     transitionTo(mSupplicantStartedState);
@@ -7247,11 +7251,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     // Ignore intermediate success, wait for full connection
                     break;
                 case WifiMonitor.NETWORK_CONNECTION_EVENT:
-                    Pair<Boolean, Integer> loadResult = loadNetworksFromSupplicantAfterWps();
-                    boolean success = loadResult.first;
-                    int netId = loadResult.second;
-                    if (success) {
-                        message.arg1 = netId;
+                    if (loadNetworksFromSupplicantAfterWps()) {
                         replyToMessage(mSourceMessage, WifiManager.WPS_COMPLETED);
                     } else {
                         replyToMessage(mSourceMessage, WifiManager.WPS_FAILED,
@@ -7349,17 +7349,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
 
         /**
          * Load network config from wpa_supplicant after WPS is complete.
-         * @return a boolean (true if load was successful) and integer (Network Id of currently
-         *          connected network, can be {@link WifiConfiguration#INVALID_NETWORK_ID} despite
-         *          successful loading, if multiple networks in supplicant) pair.
          */
-        private Pair<Boolean, Integer> loadNetworksFromSupplicantAfterWps() {
+        private boolean loadNetworksFromSupplicantAfterWps() {
             Map<String, WifiConfiguration> configs = new HashMap<>();
             SparseArray<Map<String, String>> extras = new SparseArray<>();
-            int netId = WifiConfiguration.INVALID_NETWORK_ID;
             if (!mWifiNative.migrateNetworksFromSupplicant(configs, extras)) {
                 loge("Failed to load networks from wpa_supplicant after Wps");
-                return Pair.create(false, WifiConfiguration.INVALID_NETWORK_ID);
+                return false;
             }
             for (Map.Entry<String, WifiConfiguration> entry : configs.entrySet()) {
                 WifiConfiguration config = entry.getValue();
@@ -7370,17 +7366,15 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                         config, mSourceMessage.sendingUid);
                 if (!result.isSuccess()) {
                     loge("Failed to add network after WPS: " + entry.getValue());
-                    return Pair.create(false, WifiConfiguration.INVALID_NETWORK_ID);
+                    return false;
                 }
                 if (!mWifiConfigManager.enableNetwork(
                         result.getNetworkId(), true, mSourceMessage.sendingUid)) {
-                    Log.wtf(TAG, "Failed to enable network after WPS: " + entry.getValue());
-                    return Pair.create(false, WifiConfiguration.INVALID_NETWORK_ID);
+                    loge("Failed to enable network after WPS: " + entry.getValue());
+                    return false;
                 }
-                netId = result.getNetworkId();
             }
-            return Pair.create(true,
-                    configs.size() == 1 ? netId : WifiConfiguration.INVALID_NETWORK_ID);
+            return true;
         }
    
         @Override
