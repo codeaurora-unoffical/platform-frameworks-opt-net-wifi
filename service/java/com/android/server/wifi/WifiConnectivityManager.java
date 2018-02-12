@@ -50,6 +50,9 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import android.content.Intent;
 
 /**
  * This class manages all the connectivity related scanning activities.
@@ -191,6 +194,11 @@ public class WifiConnectivityManager {
     }
     private Map<String, BssidBlacklistStatus> mBssidBlacklist =
             new HashMap<>();
+
+    /**
+     * Skip scan request during device reboot
+     */
+    private boolean skipScan = false;
 
     // Association failure reason codes
     @VisibleForTesting
@@ -631,6 +639,23 @@ public class WifiConnectivityManager {
 
         localLog("ConnectivityScanManager initialized and "
                 + (enable ? "enabled" : "disabled"));
+        context.registerReceiver(
+                new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        skipScan = true;
+                    }
+                },
+                new IntentFilter(Intent.ACTION_SHUTDOWN));
+
+        context.registerReceiver(
+                new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        skipScan = false;
+                    }
+                },
+                new IntentFilter(Intent.ACTION_BOOT_COMPLETED));
     }
 
     /**
@@ -1089,6 +1114,9 @@ public class WifiConnectivityManager {
     public void handleConnectionStateChanged(int state) {
         localLog("handleConnectionStateChanged: state=" + stateToString(state));
 
+        if (skipScan){
+            return;
+        }
         mWifiState = state;
 
         if (mWifiState == WIFI_STATE_CONNECTED) {

@@ -475,6 +475,7 @@ public class SoftApManager implements ActiveModeManager {
                 mWificond = mWifiInjector.makeWificond();
                 if (mWificond == null) {
                     Log.w(TAG, "Failed to get wificond binder handler");
+                    return ;
                 }
                 try {
                     mWificond.RegisterCallback(mInterfaceEventHandler);
@@ -603,7 +604,9 @@ public class SoftApManager implements ActiveModeManager {
                         mWifiSoftApNotificationManager.clearSoftApClientsNotification();
                         mWifiSoftApNotificationManager.clearConnectedDevice();
                         try {
-                            mWificond.UnregisterCallback(mInterfaceEventHandler);
+                               if (mWificond != null){
+                                   mWificond.UnregisterCallback(mInterfaceEventHandler);
+                               }
                         } catch (RemoteException e1) { }
                         mInterfaceEventHandler = null;
                         break;

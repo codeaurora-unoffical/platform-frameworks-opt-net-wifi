@@ -219,9 +219,10 @@ public class WifiSoftApNotificationManager  {
             }
         } else if (device.deviceState == WifiDevice.DISCONNECTED) {
             if (DBG) Log.d(TAG, "device: disconnected");
-            mL2ConnectedDeviceMap.remove(device.deviceAddress);
             mConnectedDeviceMap.remove(device.deviceAddress);
-            sendConnectDevicesStateChangedBroadcast();
+            if (mL2ConnectedDeviceMap.remove(device.deviceAddress) != null) {
+                sendConnectDevicesStateChangedBroadcast();
+            }
         }
 
     }
