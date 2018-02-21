@@ -242,6 +242,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private SoftApStateMachine mSoftApStateMachine = null;
     private boolean mDualSapMode = false;
 
+    private boolean staCleanUpDone = false;
     /* Scan results handling */
     private List<ScanDetail> mScanResults = new ArrayList<>();
     private final Object mScanResultsLock = new Object();
@@ -502,6 +503,25 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             } catch (IllegalStateException ie) {
                 loge("Unable to change interface settings: " + ie);
             }
+        }
+    }
+
+    private void staCleanup() {
+        boolean skipUnload = false;
+        if (mStaAndAPConcurrency) {
+            int wifiApState = mSoftApStateMachine.syncGetWifiApState();
+            if ((wifiApState ==  WifiManager.WIFI_AP_STATE_ENABLING) ||
+                (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
+                log("Avoid unloading driver, AP_STATE is enabled/enabling");
+                    skipUnload = true;
+            }
+        }
+        if (!skipUnload) {
+            cleanup();
+        } else  {
+            mWifiMonitor.stopAllMonitoring();
+            mDeathRecipient.unlinkToDeath();
+            mWifiNative.tearDownSta();
         }
     }
 
@@ -4264,6 +4284,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     mTemporarilyDisconnectWifi = (message.arg1 == 1);
                     replyToMessage(message, WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE);
                     break;
+                case WifiP2pServiceImpl.SET_MIRACAST_MODE:
+                    if (mVerboseLoggingEnabled) logd("SET_MIRACAST_MODE: " + (int)message.arg1);
+                    mWifiConnectivityManager.saveMiracastMode((int)message.arg1);
+                    break;
                 /* Link configuration (IP address, DNS, ...) changes notified via netlink */
                 case CMD_UPDATE_LINKPROPERTIES:
                     updateLinkProperties((LinkProperties) message.obj);
@@ -4387,30 +4411,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     }
 
     class InitialState extends State {
-
-        private void staCleanup() {
-            boolean skipUnload = false;
-            if (mStaAndAPConcurrency) {
-                int wifiApState = mSoftApStateMachine.syncGetWifiApState();
-                if ((wifiApState ==  WifiManager.WIFI_AP_STATE_ENABLING) ||
-                       (wifiApState == WifiManager.WIFI_AP_STATE_ENABLED)) {
-                    log("Avoid unloading driver, AP_STATE is enabled/enabling");
-                    skipUnload = true;
-                }
-            }
-            if (!skipUnload) {
-                cleanup();
-            } else  {
-                mWifiMonitor.stopAllMonitoring();
-                mDeathRecipient.unlinkToDeath();
-                mWifiNative.tearDownSta();
-            }
-        }
-
         @Override
         public void enter() {
             mWifiStateTracker.updateState(WifiStateTracker.INVALID);
-            staCleanup();
+            if (!staCleanUpDone) {
+                staCleanup();
+            }
+            staCleanUpDone = false;
         }
 
         @Override
@@ -4847,7 +4854,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
             if (mWifiNative.disableSupplicant()) {
                 mWifiNative.closeSupplicantConnection();
                 sendSupplicantConnectionChangedBroadcast(false);
+                staCleanup();
                 setWifiState(WIFI_STATE_DISABLED);
+                // Avoid staCleanup again via InitialState Enter
+                staCleanUpDone = true;
             } else {
                 // Failed to disable supplicant
                 handleSupplicantConnectionLoss(true);
