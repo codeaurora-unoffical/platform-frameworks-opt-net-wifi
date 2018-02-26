@@ -582,7 +582,28 @@ public class WificondControl {
             for (String ssid : hiddenNetworkSSIDs) {
                 HiddenNetwork network = new HiddenNetwork();
                 try {
-                    network.ssid = NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(ssid));
+                    ArrayList<Byte> ssid_l = NativeUtil.decodeSsid(ssid);
+
+                    // wifigbk++
+                    if (!NativeUtil.isAllAscii(ssid_l)) {
+                        // WORKAROUND: Try add extra GBK SSID
+                        byte[] ssid2 = NativeUtil.getSsidBytes(ssid, "GBK");
+                        if (ssid2 != null && ssid2.length > 0) {
+                            HiddenNetwork network2 = new HiddenNetwork();
+                            network2.ssid = ssid2;
+                            String hexS = NativeUtil.hexStringFromByteArray(
+                                network2.ssid);
+                            Log.i(TAG, "scan - extra Gbk hidden_ssid=" + hexS);
+                            if (network2.ssid.length > MAX_SSID_LEN) {
+                                Log.e(TAG, "scan - skip long ssid = " + hexS);
+                            } else {
+                                settings.hiddenNetworks.add(network2);
+                            }
+                        }
+                    }
+                    // wifigbk--
+
+                    network.ssid = NativeUtil.byteArrayFromArrayList(ssid_l);
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Illegal argument " + ssid, e);
                     continue;
@@ -625,10 +646,31 @@ public class WificondControl {
                 condNetwork.isHidden = (network.flags
                         & WifiScanner.PnoSettings.PnoNetwork.FLAG_DIRECTED_SCAN) != 0;
                 try {
+                    ArrayList<Byte> ssid_l = NativeUtil.decodeSsid(network.ssid);
+
+                    // wifigbk++
+                    if (!NativeUtil.isAllAscii(ssid_l)) {
+                        // Get ssid from history.
+                        ArrayList<Byte> out_ssid_l =
+                                this.getWifiGbkHistory(ssid_l);
+                        if (out_ssid_l != null && !out_ssid_l.equals(ssid_l)) {
+                            ssid_l = out_ssid_l;
+                            Log.i(TAG, "startPnoScan - Gbk hidden_ssid="
+                                + NativeUtil.hexStringFromByteArray(
+                                  NativeUtil.byteArrayFromArrayList(ssid_l)));
+                        }
+                    }
+                    // wifigbk--
+
                     condNetwork.ssid =
-                            NativeUtil.byteArrayFromArrayList(NativeUtil.decodeSsid(network.ssid));
+                            NativeUtil.byteArrayFromArrayList(ssid_l);
                 } catch (IllegalArgumentException e) {
                     Log.e(TAG, "Illegal argument " + network.ssid, e);
+                    continue;
+                }
+                if (condNetwork.ssid.length > MAX_SSID_LEN) {
+                    Log.e(TAG, "startPnoScan - drop too long ssid="
+                        + NativeUtil.hexStringFromByteArray(condNetwork.ssid));
                     continue;
                 }
                 settings.pnoNetworks.add(condNetwork);

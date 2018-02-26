@@ -33,6 +33,7 @@ import com.android.server.wifi.hotspot2.AnqpEvent;
 import com.android.server.wifi.hotspot2.IconEvent;
 import com.android.server.wifi.hotspot2.WnmData;
 import com.android.server.wifi.util.TelephonyUtil.SimAuthRequestData;
+import com.android.server.wifi.util.NativeUtil;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -557,7 +558,9 @@ public class WifiMonitor {
     public void broadcastSupplicantStateChangeEvent(String iface, int networkId, WifiSsid wifiSsid,
                                                     String bssid,
                                                     SupplicantState newSupplicantState) {
-        wifiSsid = mWifiInjector.getWifiNative().wifiSsidFromGbkHistory(wifiSsid);
+        if (wifiSsid != null && !NativeUtil.isUtf(wifiSsid.getOctets())) {
+            wifiSsid = mWifiInjector.getWifiNative().wifiSsidFromGbkHistory(wifiSsid);
+        }
         sendMessage(iface, SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
                 new StateChangeResult(networkId, wifiSsid, bssid, newSupplicantState));
     }
