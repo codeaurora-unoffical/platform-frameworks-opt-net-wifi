@@ -2513,6 +2513,9 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mWifiInjector.getWifiLastResortWatchdog().enableVerboseLogging(verbose);
         mWifiInjector.getWifiBackupRestore().enableVerboseLogging(verbose);
         LogcatLog.enableVerboseLogging(verbose);
+        int debug = SystemProperties.getInt("vendor.qcom.wifi.debug", 0);
+        mWifiController.enableVerboseLogging(debug);
+
     }
 
     @Override
