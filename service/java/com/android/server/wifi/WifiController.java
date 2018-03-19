@@ -1281,12 +1281,12 @@ public class WifiController extends StateMachine {
                     }
                     break;
                 case CMD_SET_AP:
-                    if (mStaAndApConcurrency) {
-                        mSoftApStateMachine.setHostApRunning(((SoftApModeConfiguration) msg.obj), true);
-                        transitionTo(mQcApEnablingState);
-                    } else {
-                        // Before starting tethering, turn off supplicant for scan mode
-                        if (msg.arg1 == 1) {
+                    if (msg.arg1 == 1) {
+                        if (mStaAndApConcurrency) {
+                            /* For STA+SAP concurrency request to start SoftAP is handled in QcApEnablingState. */
+                            transitionTo(mQcApEnablingState);
+                        } else {
+                            // Before starting tethering, turn off supplicant for scan mode
                             mSettingsStore.setWifiSavedState(WifiSettingsStore.WIFI_DISABLED);
                             deferMessage(obtainMessage(msg.what, msg.arg1, 1, msg.obj));
                             transitionTo(mApStaDisabledState);

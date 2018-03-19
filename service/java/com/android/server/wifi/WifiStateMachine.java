@@ -416,6 +416,10 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         mPollRssiIntervalMsecs = newPollIntervalMsecs;
     }
 
+    public boolean isExtendingNetworkCoverage() {
+            return (mSoftApStateMachine != null && mSoftApStateMachine.isExtendingNetworkCoverage());
+    }
+
     /**
      * Method to clear {@link #mTargetRoamBSSID} and reset the the current connected network's
      * bssid in wpa_supplicant after a roam/connect attempt.
