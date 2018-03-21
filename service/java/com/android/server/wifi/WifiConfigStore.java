@@ -815,6 +815,9 @@ public class WifiConfigStore {
         if (VDBG) localLog("addOrUpdateNetwork: " + config.networkId);
         int netId = config.networkId;
         boolean newNetwork = false;
+        String bssid = config.getNetworkSelectionStatus().getNetworkSelectionBSSID();
+        boolean setbssid = (bssid != null && bssid.matches("(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}"));
+        boolean ret;
         /*
          * If the supplied networkId is INVALID_NETWORK_ID, we create a new empty
          * network configuration. Otherwise, the networkId should
@@ -832,7 +835,10 @@ public class WifiConfigStore {
             // Save the new network ID to the config
             config.networkId = netId;
         }
-        if (!saveNetwork(config, netId)) {
+        if (setbssid) mWifiNative.wifigbkcmd("SETBSSID " + bssid);
+        ret = saveNetwork(config, netId);
+        if (setbssid) mWifiNative.wifigbkcmd("CLEARBSSID");
+        if (!ret) {
             if (newNetwork) {
                 mWifiNative.removeNetwork(netId);
                 loge("Failed to set a network variable, removed network: " + netId);
