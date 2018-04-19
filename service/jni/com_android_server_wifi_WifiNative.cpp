@@ -69,7 +69,13 @@ static bool doCommand(JNIEnv* env, jstring javaCommand,
     if (command.c_str() == NULL) {
         return false; // ScopedUtfChars already threw on error.
     }
-    if(strstr(command.c_str(), "SET_NETWORK")) {
+    // wifigbk++
+    if (strstr(command.c_str(), "WIFIGBK_CMD")) {
+        return wifigbkCmd((char *)command.c_str());
+    }
+    // wifigbk--
+
+    if (strstr(command.c_str(), "SET_NETWORK")) {
         if(!setNetworkVariable((char *)command.c_str())) {
             return false;
         }

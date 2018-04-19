@@ -566,7 +566,9 @@ public class WifiNative {
         return null;
     }
 
-
+    public void wifigbkcmd(String subcmd) {
+        doBooleanCommandWithoutLogging("WIFIGBK_CMD " + subcmd);
+    }
 
     /**
      * Format of results:
@@ -625,6 +627,7 @@ public class WifiNative {
     public ArrayList<ScanDetail> getScanResults() {
         int next_sid = 0;
         ArrayList<ScanDetail> results = new ArrayList<>();
+        wifigbkcmd("NEWSCAN"); //wifigbk++
         while(next_sid >= 0) {
             String rawResult = getRawScanResults(next_sid+"-");
             next_sid = -1;
