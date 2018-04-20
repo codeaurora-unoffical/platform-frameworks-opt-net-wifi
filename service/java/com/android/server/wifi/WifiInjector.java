@@ -90,6 +90,7 @@ public class WifiInjector {
     private final OpenNetworkNotifier mOpenNetworkNotifier;
     private final WifiLockManager mLockManager;
     private final WifiController mWifiController;
+    private final WifiVendorService mWifiVendorService;
     private final WificondControl mWificondControl;
     private final Clock mClock = new Clock();
     private final WifiMetrics mWifiMetrics;
@@ -178,6 +179,7 @@ public class WifiInjector {
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
         mWifiP2pNative = new WifiP2pNative(SystemProperties.get("wifi.direct.interface", "p2p0"),
                 mSupplicantP2pIfaceHal);
+        mWifiVendorService = new WifiVendorService(mContext, this);
 
         // Now get instances of all the objects that depend on the HandlerThreads
         mTrafficPoller =  new WifiTrafficPoller(mContext, mWifiServiceHandlerThread.getLooper(),
@@ -495,5 +497,13 @@ public class WifiInjector {
 
     public SelfRecovery getSelfRecovery() {
         return mSelfRecovery;
+    }
+
+    public WifiVendorService getWifiVendorService() {
+        return mWifiVendorService;
+    }
+
+    public WifiVendorHal getWifiVendorHal() {
+        return mWifiVendorHal;
     }
 }

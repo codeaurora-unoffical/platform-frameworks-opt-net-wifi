@@ -444,6 +444,14 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         return mWifiNative.setConfiguredNetworkBSSID(bssid);
     }
 
+    public boolean setDnbsEnabled(int uid, boolean enable) {
+        return mWifiInjector.getWifiVendorService().setDnbsEnabled(uid, enable);
+    }
+
+    public String dumpDnbs() {
+        return mWifiInjector.getWifiVendorService().dumpDnbs();
+    }
+
     /**
      * Set Config's default BSSID (for association purpose) and {@link #mTargetRoamBSSID}
      * @param config config need set BSSID

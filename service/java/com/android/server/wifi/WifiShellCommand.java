@@ -99,6 +99,24 @@ public class WifiShellCommand extends ShellCommand {
                     pw.println("WifiStateMachine.mPollRssiIntervalMsecs = "
                             + mStateMachine.getPollRssiIntervalMsecs());
                     return 0;
+                case "set-dnbs":
+                    int uid;
+                    boolean enable;
+                    try {
+                        uid = Integer.parseInt(getNextArgRequired());
+                        enable = (Integer.parseInt(getNextArgRequired()) == 0) ? false : true;
+                    } catch (NumberFormatException e) {
+                        pw.println(
+                                "Invalid argument to 'set-dnbs <uid> <enable>' "
+                                        + "- uid must be a positive integer "
+                                        + "- enable must be a boolean");
+                        return -1;
+                    }
+                    mStateMachine.setDnbsEnabled(uid, enable);
+                    return 0;
+                case "dump-dnbs":
+                    pw.println("=== dump-dnbs ===\n" + mStateMachine.dumpDnbs());
+                    return 0;
                 default:
                     return handleDefaultCommands(cmd);
             }
@@ -132,6 +150,10 @@ public class WifiShellCommand extends ShellCommand {
         pw.println("    Sets the interval between RSSI polls to <int> milliseconds.");
         pw.println("  get-poll-rssi-interval-msecs");
         pw.println("    Gets current interval between RSSI polls, in milliseconds.");
+        pw.println("  set-dnbs <uid> <enable|disable>");
+        pw.println("    Set do not break stream.");
+        pw.println("  dump-dnbs");
+        pw.println("    Dump dnbs config");
         pw.println();
     }
 }

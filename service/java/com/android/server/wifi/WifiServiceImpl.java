@@ -982,6 +982,15 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     }
 
     /**
+     * @param enable true to enable and false to disable
+     */
+    @Override
+    public boolean setDnbsEnabled(boolean enable) {
+        return mWifiInjector.getWifiVendorService()
+                   .setDnbsEnabled(Binder.getCallingUid(), enable);
+    }
+
+    /**
      * see {@link WifiManager#getWifiApState()}
      * @return One of {@link WifiManager#WIFI_AP_STATE_DISABLED},
      *         {@link WifiManager#WIFI_AP_STATE_DISABLING},

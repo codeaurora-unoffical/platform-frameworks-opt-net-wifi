@@ -78,6 +78,7 @@ import com.android.server.wifi.util.NativeUtil;
 
 import java.util.ArrayList;
 import java.util.Set;
+import vendor.qti.hardware.wifi.V1_1.IWifiVendorChip;
 
 import android.os.SystemProperties;
 
@@ -2244,6 +2245,47 @@ public class WifiVendorHal {
                 return -1;
             }
         }
+    }
+
+    public IWifiVendorChip getWifiVendorChip() {
+        IWifiVendorChip vchip;
+
+        if (mIWifiChip == null) {
+            mLog.i("getWifiVendorChip - mIWifiChip is null");
+            return null;
+        }
+        vchip = IWifiVendorChip.castFrom(mIWifiChip);
+        if (vchip == null) {
+            mLog.i("getWifiVendorChip - castFrom(mIWifiChip) fail");
+            return null;
+        }
+        return vchip;
+    }
+
+    /**
+     * Set RestrictedOffChannel to vendor chip.
+     *
+     * @param ifname - the name of the interface, SAP or p2p GO.
+     * @return Returns true on success
+     */
+    public boolean setRestrictedOffChannel(String ifname, boolean enable) {
+        IWifiVendorChip vchip;
+        enter("enable=%").c(enable).flush();
+        synchronized (sLock) {
+            mLog.i("setRestrictedOffChannel:" + enable + " ifname=" + ifname);
+            vchip = getWifiVendorChip();
+            if (vchip == null) return boolResult(false);
+            try {
+                WifiStatus status;
+                status = vchip.setRestrictedOffChannel(ifname, enable);
+                mLog.i("setRestrictedOffChannel [try], ok(status) = " + ok(status));
+                if (!ok(status)) return false;
+            } catch (RemoteException e) {
+                handleRemoteException(e);
+                return false;
+            }
+        }
+        return true;
     }
 
     //TODO - belongs in NativeUtil
