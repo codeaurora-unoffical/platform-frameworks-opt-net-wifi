@@ -287,6 +287,8 @@ public class WifiMetrics {
         public static final int FAILURE_ROAM_TIMEOUT = 9;
         // DHCP failure
         public static final int FAILURE_DHCP = 10;
+        // ASSOCIATION_TIMED_OUT
+        public static final int FAILURE_ASSOCIATION_TIMED_OUT = 11;
 
         RouterFingerPrint mRouterFingerPrint;
         private long mRealStartTime;
@@ -375,6 +377,10 @@ public class WifiMetrics {
                         break;
                     case FAILURE_DHCP:
                         sb.append("DHCP");
+                        break;
+                    case FAILURE_ASSOCIATION_TIMED_OUT:
+                        sb.append("ASSOCIATION_TIMED_OUT");
+                        break;
                     default:
                         sb.append("UNKNOWN");
                         break;
@@ -843,6 +849,32 @@ public class WifiMetrics {
     public int getConnectivityOneshotScanCount() {
         synchronized (mLock) {
             return mWifiLogProto.numConnectivityOneshotScans;
+        }
+    }
+
+    /**
+     * Increment oneshot scan count for external apps.
+     */
+    public void incrementExternalAppOneshotScanRequestsCount() {
+        synchronized (mLock) {
+            mWifiLogProto.numExternalAppOneshotScanRequests++;
+        }
+    }
+    /**
+     * Increment oneshot scan throttle count for external foreground apps.
+     */
+    public void incrementExternalForegroundAppOneshotScanRequestsThrottledCount() {
+        synchronized (mLock) {
+            mWifiLogProto.numExternalForegroundAppOneshotScanRequestsThrottled++;
+        }
+    }
+
+    /**
+     * Increment oneshot scan throttle count for external background apps.
+     */
+    public void incrementExternalBackgroundAppOneshotScanRequestsThrottledCount() {
+        synchronized (mLock) {
+            mWifiLogProto.numExternalBackgroundAppOneshotScanRequestsThrottled++;
         }
     }
 
@@ -1333,8 +1365,7 @@ public class WifiMetrics {
      */
     public void incrementNumSupplicantCrashes() {
         synchronized (mLock) {
-            // TODO(b/71720421): Add metrics for supplicant crashes.
-            mWifiLogProto.numHalCrashes++;
+            mWifiLogProto.numSupplicantCrashes++;
         }
     }
 
@@ -1343,36 +1374,79 @@ public class WifiMetrics {
      */
     public void incrementNumHostapdCrashes() {
         synchronized (mLock) {
-            // TODO(b/71720421): Add metrics for hostapd crashes.
-            mWifiLogProto.numHalCrashes++;
+            mWifiLogProto.numHostapdCrashes++;
         }
     }
 
     /**
      * Increment number of times the wifi on failed due to an error in HAL.
      */
-    public void incrementNumWifiOnFailureDueToHal() {
+    public void incrementNumSetupClientInterfaceFailureDueToHal() {
         synchronized (mLock) {
-            mWifiLogProto.numWifiOnFailureDueToHal++;
+            mWifiLogProto.numSetupClientInterfaceFailureDueToHal++;
         }
     }
 
     /**
      * Increment number of times the wifi on failed due to an error in wificond.
      */
-    public void incrementNumWifiOnFailureDueToWificond() {
+    public void incrementNumSetupClientInterfaceFailureDueToWificond() {
         synchronized (mLock) {
-            mWifiLogProto.numWifiOnFailureDueToWificond++;
+            mWifiLogProto.numSetupClientInterfaceFailureDueToWificond++;
         }
     }
 
     /**
-     * Increment number of times the wifi on failed due to an error in wificond.
+     * Increment number of times the wifi on failed due to an error in supplicant.
      */
-    public void incrementNumWifiOnFailureDueToSupplicant() {
+    public void incrementNumSetupClientInterfaceFailureDueToSupplicant() {
         synchronized (mLock) {
-            // TODO(b/71720421): Add metrics for supplicant failure during startup.
-            mWifiLogProto.numWifiOnFailureDueToHal++;
+            mWifiLogProto.numSetupClientInterfaceFailureDueToSupplicant++;
+        }
+    }
+
+    /**
+     * Increment number of times the SoftAp on failed due to an error in HAL.
+     */
+    public void incrementNumSetupSoftApInterfaceFailureDueToHal() {
+        synchronized (mLock) {
+            mWifiLogProto.numSetupSoftApInterfaceFailureDueToHal++;
+        }
+    }
+
+    /**
+     * Increment number of times the SoftAp on failed due to an error in wificond.
+     */
+    public void incrementNumSetupSoftApInterfaceFailureDueToWificond() {
+        synchronized (mLock) {
+            mWifiLogProto.numSetupSoftApInterfaceFailureDueToWificond++;
+        }
+    }
+
+    /**
+     * Increment number of times the SoftAp on failed due to an error in hostapd.
+     */
+    public void incrementNumSetupSoftApInterfaceFailureDueToHostapd() {
+        synchronized (mLock) {
+            mWifiLogProto.numSetupSoftApInterfaceFailureDueToHostapd++;
+        }
+    }
+
+    /**
+     * Increment number of times we got client interface down.
+     */
+    public void incrementNumClientInterfaceDown() {
+        synchronized (mLock) {
+            mWifiLogProto.numClientInterfaceDown++;
+        }
+    }
+
+    /**
+     * Increment number of times we got client interface down.
+     */
+    public void incrementNumSoftApInterfaceDown() {
+        synchronized (mLock) {
+            mWifiLogProto.numSoftApInterfaceDown++;
         }
     }
 
@@ -1673,6 +1747,12 @@ public class WifiMetrics {
                         + mWifiLogProto.numOneshotScans);
                 pw.println("mWifiLogProto.numBackgroundScans="
                         + mWifiLogProto.numBackgroundScans);
+                pw.println("mWifiLogProto.numExternalAppOneshotScanRequests="
+                        + mWifiLogProto.numExternalAppOneshotScanRequests);
+                pw.println("mWifiLogProto.numExternalForegroundAppOneshotScanRequestsThrottled="
+                        + mWifiLogProto.numExternalForegroundAppOneshotScanRequestsThrottled);
+                pw.println("mWifiLogProto.numExternalBackgroundAppOneshotScanRequestsThrottled="
+                        + mWifiLogProto.numExternalBackgroundAppOneshotScanRequestsThrottled);
 
                 pw.println("mScanReturnEntries:");
                 pw.println("  SCAN_UNKNOWN: " + getScanReturnEntry(
@@ -1797,10 +1877,22 @@ public class WifiMetrics {
                         + mWifiLogProto.numHalCrashes);
                 pw.println("mWifiLogProto.numWificondCrashes="
                         + mWifiLogProto.numWificondCrashes);
-                pw.println("mWifiLogProto.numWifiOnFailureDueToHal="
-                        + mWifiLogProto.numWifiOnFailureDueToHal);
-                pw.println("mWifiLogProto.numWifiOnFailureDueToWificond="
-                        + mWifiLogProto.numWifiOnFailureDueToWificond);
+                pw.println("mWifiLogProto.numSupplicantCrashes="
+                        + mWifiLogProto.numSupplicantCrashes);
+                pw.println("mWifiLogProto.numHostapdCrashes="
+                        + mWifiLogProto.numHostapdCrashes);
+                pw.println("mWifiLogProto.numSetupClientInterfaceFailureDueToHal="
+                        + mWifiLogProto.numSetupClientInterfaceFailureDueToHal);
+                pw.println("mWifiLogProto.numSetupClientInterfaceFailureDueToWificond="
+                        + mWifiLogProto.numSetupClientInterfaceFailureDueToWificond);
+                pw.println("mWifiLogProto.numSetupClientInterfaceFailureDueToSupplicant="
+                        + mWifiLogProto.numSetupClientInterfaceFailureDueToSupplicant);
+                pw.println("mWifiLogProto.numSetupSoftApInterfaceFailureDueToHal="
+                        + mWifiLogProto.numSetupSoftApInterfaceFailureDueToHal);
+                pw.println("mWifiLogProto.numSetupSoftApInterfaceFailureDueToWificond="
+                        + mWifiLogProto.numSetupSoftApInterfaceFailureDueToWificond);
+                pw.println("mWifiLogProto.numSetupSoftApInterfaceFailureDueToHostapd="
+                        + mWifiLogProto.numSetupSoftApInterfaceFailureDueToHostapd);
                 pw.println("StaEventList:");
                 for (StaEventWithTime event : mStaEventList) {
                     pw.println(event);

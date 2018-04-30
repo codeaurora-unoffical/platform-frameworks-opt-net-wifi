@@ -54,11 +54,21 @@ public class ScoringParams {
         public static final String KEY_RSSI5 = "rssi5";
         public final int[] rssi5 = {-80, -77, -70, -57};
 
+        /** Guidelines based on packet rates (packets/sec) */
+        public static final String KEY_PPS = "pps";
+        public final int[] pps = {0, 1, 100};
+
         /** Number of seconds for RSSI forecast */
         public static final String KEY_HORIZON = "horizon";
         public static final int MIN_HORIZON = -9;
         public static final int MAX_HORIZON = 60;
         public int horizon = 15;
+
+        /** Number 0-10 influencing requests for network unreachability detection */
+        public static final String KEY_NUD = "nud";
+        public static final int MIN_NUD = 0;
+        public static final int MAX_NUD = 10;
+        public int nud = 8;
 
         Values() {
         }
@@ -70,13 +80,19 @@ public class ScoringParams {
             for (int i = 0; i < rssi5.length; i++) {
                 rssi5[i] = source.rssi5[i];
             }
+            for (int i = 0; i < pps.length; i++) {
+                pps[i] = source.pps[i];
+            }
             horizon = source.horizon;
+            nud = source.nud;
         }
 
         public void validate() throws IllegalArgumentException {
             validateRssiArray(rssi2);
             validateRssiArray(rssi5);
+            validateOrderedNonNegativeArray(pps);
             validateRange(horizon, MIN_HORIZON, MAX_HORIZON);
+            validateRange(nud, MIN_NUD, MAX_NUD);
         }
 
         private void validateRssiArray(int[] rssi) throws IllegalArgumentException {
@@ -94,6 +110,16 @@ public class ScoringParams {
             }
         }
 
+        private void validateOrderedNonNegativeArray(int[] a) throws IllegalArgumentException {
+            int low = 0;
+            for (int i = 0; i < a.length; i++) {
+                if (a[i] < low) {
+                    throw new IllegalArgumentException();
+                }
+                low = a[i];
+            }
+        }
+
         public void parseString(String kvList) throws IllegalArgumentException {
             KeyValueListParser parser = new KeyValueListParser(',');
             parser.setString(kvList);
@@ -102,7 +128,9 @@ public class ScoringParams {
             }
             updateIntArray(rssi2, parser, KEY_RSSI2);
             updateIntArray(rssi5, parser, KEY_RSSI5);
+            updateIntArray(pps, parser, KEY_PPS);
             horizon = updateInt(parser, KEY_HORIZON, horizon);
+            nud = updateInt(parser, KEY_NUD, nud);
         }
 
         private int updateInt(KeyValueListParser parser, String key, int defaultValue)
@@ -134,8 +162,12 @@ public class ScoringParams {
             appendInts(sb, rssi2);
             appendKey(sb, KEY_RSSI5);
             appendInts(sb, rssi5);
+            appendKey(sb, KEY_PPS);
+            appendInts(sb, pps);
             appendKey(sb, KEY_HORIZON);
             sb.append(horizon);
+            appendKey(sb, KEY_NUD);
+            sb.append(nud);
             return sb.toString();
         }
 
@@ -199,12 +231,10 @@ public class ScoringParams {
             public void onChange(boolean selfChange) {
                 String params = facade.getStringSetting(
                         context, Settings.Global.WIFI_SCORE_PARAMS);
-                if (params != null) {
-                    self.update(defaults);
-                    if (!self.update(params)) {
-                        Log.e(TAG, "Error in " + Settings.Global.WIFI_SCORE_PARAMS + ": "
-                                + sanitize(params));
-                    }
+                self.update(defaults);
+                if (!self.update(params)) {
+                    Log.e(TAG, "Error in " + Settings.Global.WIFI_SCORE_PARAMS + ": "
+                            + sanitize(params));
                 }
                 Log.i(TAG, self.toString());
             }
@@ -248,6 +278,7 @@ public class ScoringParams {
      * @return string with questionable characters replaced with question marks
      */
     public String sanitize(String params) {
+        if (params == null) return "";
         String printable = params.replaceAll("[^A-Za-z_0-9=,:.+-]", "?");
         if (printable.length() > 100) {
             printable = printable.substring(0, 98) + "...";
@@ -296,6 +327,29 @@ public class ScoringParams {
      */
     public int getHorizonSeconds() {
         return mVal.horizon;
+    }
+
+    /**
+     * Returns a packet rate that should be considered acceptable for staying on wifi,
+     * no matter how bad the RSSI gets (packets per second).
+     */
+    public int getYippeeSkippyPacketsPerSecond() {
+        return mVal.pps[2];
+    }
+
+    /**
+     * Returns a number between 0 and 10 inclusive that indicates
+     * how aggressive to be about asking for IP configuration checks
+     * (also known as Network Unreachabilty Detection, or NUD).
+     *
+     * 0 - no nud checks requested by scorer (framework still checks after roam)
+     * 1 - check when score becomes very low
+     *     ...
+     * 10 - check when score first breaches threshold, and again as it gets worse
+     *
+     */
+    public int getNudKnob() {
+        return mVal.nud;
     }
 
     private static final int MINIMUM_5GHZ_BAND_FREQUENCY_IN_MEGAHERTZ = 5000;

@@ -167,13 +167,14 @@ public class WifiInjector {
         mBatteryStats = IBatteryStats.Stub.asInterface(mFrameworkFacade.getService(
                 BatteryStats.SERVICE_NAME));
         mWifiStateTracker = new WifiStateTracker(mBatteryStats);
-        mCarrierNetworkConfig = new CarrierNetworkConfig(mContext);
         // Now create and start handler threads
         mWifiServiceHandlerThread = new HandlerThread("WifiService");
         mWifiServiceHandlerThread.start();
         mWifiStateMachineHandlerThread = new HandlerThread("WifiStateMachine");
         mWifiStateMachineHandlerThread.start();
         Looper wifiStateMachineLooper = mWifiStateMachineHandlerThread.getLooper();
+        mCarrierNetworkConfig = new CarrierNetworkConfig(mContext,
+            mWifiServiceHandlerThread.getLooper(), mFrameworkFacade);
         WifiAwareMetrics awareMetrics = new WifiAwareMetrics(mClock);
         mWifiMetrics = new WifiMetrics(mClock, wifiStateMachineLooper, awareMetrics);
         // Modules interacting with Native.
@@ -188,7 +189,7 @@ public class WifiInjector {
                 ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE));
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
-                mNwManagementService, mPropertyService, mWifiMetrics);
+                mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics);
         mWifiP2pMonitor = new WifiP2pMonitor(this);
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
         mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager);
@@ -213,7 +214,7 @@ public class WifiInjector {
         mWifiNetworkHistory = new WifiNetworkHistory(mContext, writer);
         mIpConfigStore = new IpConfigStore(writer);
         mWifiConfigStoreLegacy = new WifiConfigStoreLegacy(
-                mWifiNetworkHistory, mWifiNative, mIpConfigStore,
+                mWifiNetworkHistory, mWifiNative, new WifiConfigStoreLegacy.IpConfigStoreWrapper(),
                 new LegacyPasspointConfigParser());
         // Config Manager
         mWifiConfigManager = new WifiConfigManager(mContext, mClock,
@@ -246,7 +247,7 @@ public class WifiInjector {
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
                 (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE),
                 this, mWifiConfigManager,
-                mWifiPermissionsUtil, mClock);
+                mWifiPermissionsUtil, mWifiMetrics, mClock);
         // mWifiStateMachine has an implicit dependency on mJavaRuntime due to WifiDiagnostics.
         mJavaRuntime = Runtime.getRuntime();
         mWifiStateMachine = new WifiStateMachine(mContext, mFrameworkFacade,
@@ -272,7 +273,8 @@ public class WifiInjector {
                 mWifiStateMachineHandlerThread.getLooper(), mFrameworkFacade,
                 wakeupNotificationFactory);
         mWakeupController = new WakeupController(mContext,
-                mWifiStateMachineHandlerThread.getLooper(), new WakeupLock(mWifiConfigManager),
+                mWifiStateMachineHandlerThread.getLooper(),
+                new WakeupLock(mWifiConfigManager, mWifiMetrics.getWakeupMetrics(), mClock),
                 WakeupEvaluator.fromContext(mContext), wakeupOnboarding, mWifiConfigManager,
                 mWifiConfigStore, mWifiMetrics.getWakeupMetrics(), this, mFrameworkFacade);
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService());
