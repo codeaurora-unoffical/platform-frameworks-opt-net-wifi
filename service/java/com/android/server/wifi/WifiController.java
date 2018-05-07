@@ -862,6 +862,14 @@ public class WifiController extends StateMachine {
                     if (mSettingsStore.isScanAlwaysAvailable()) {
                         log("QcApDisablingState: CMD_AP_STOPPED->mStaDisabledWithScanState");
                         transitionTo(mStaDisabledWithScanState);
+                    } else if (mSettingsStore.isAirplaneModeOn()
+                            && (mWifiStateMachine.getOperationalMode()
+                                  != WifiStateMachine.CONNECT_MODE)) {
+                        // isScanAlwaysAvailable can be false if airplane on.
+                        // If Wi-Fi in scan mode, switch to connect mode & disable it.
+                        log("ApDisablingState: CMD_AP_STOPPED->mQcStaDisablingState");
+                        mWifiStateMachine.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+                        transitionTo(mQcStaDisablingState);
                     } else {
                         log("QcApDisablingState: CMD_AP_STOPPED->mApStaDisabledState");
                         transitionTo(mApStaDisabledState);
@@ -1281,12 +1289,12 @@ public class WifiController extends StateMachine {
                     }
                     break;
                 case CMD_SET_AP:
-                    if (mStaAndApConcurrency) {
-                        mSoftApStateMachine.setHostApRunning(((SoftApModeConfiguration) msg.obj), true);
-                        transitionTo(mQcApEnablingState);
-                    } else {
-                        // Before starting tethering, turn off supplicant for scan mode
-                        if (msg.arg1 == 1) {
+                    if (msg.arg1 == 1) {
+                        if (mStaAndApConcurrency) {
+                            /* For STA+SAP concurrency request to start SoftAP is handled in QcApEnablingState. */
+                            transitionTo(mQcApEnablingState);
+                        } else {
+                            // Before starting tethering, turn off supplicant for scan mode
                             mSettingsStore.setWifiSavedState(WifiSettingsStore.WIFI_DISABLED);
                             deferMessage(obtainMessage(msg.what, msg.arg1, 1, msg.obj));
                             transitionTo(mApStaDisabledState);
