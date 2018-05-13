@@ -20,6 +20,7 @@ import android.annotation.NonNull;
 import android.content.Context;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
+import android.os.SystemProperties;
 import android.os.Environment;
 import android.text.TextUtils;
 import android.util.Log;
@@ -75,6 +76,8 @@ public class WifiApConfigStore {
     private final BackupManagerProxy mBackupManagerProxy;
     private boolean mRequiresApBandConversion = false;
 
+    private String mBridgeInterfaceName = null;
+
     WifiApConfigStore(Context context, BackupManagerProxy backupManagerProxy) {
         this(context, backupManagerProxy, DEFAULT_AP_CONFIG_FILE);
     }
@@ -111,6 +114,13 @@ public class WifiApConfigStore {
             /* Save the default configuration to persistent storage. */
             writeApConfiguration(mApConfigFile, mWifiApConfig);
         }
+
+        mBridgeInterfaceName = SystemProperties
+                .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
+    }
+
+    public synchronized String getBridgeInterface() {
+        return mBridgeInterfaceName;
     }
 
     /**
@@ -361,13 +371,13 @@ public class WifiApConfigStore {
             return false;
         }
 
-        if (authType == KeyMgmt.NONE) {
+        if (authType == KeyMgmt.NONE || authType == KeyMgmt.OWE) {
             // open networks should not have a password
             if (hasPreSharedKey) {
-                Log.d(TAG, "open softap network should not have a password");
+                Log.d(TAG, "open or OWE softap network should not have a password");
                 return false;
             }
-        } else if (authType == KeyMgmt.WPA2_PSK) {
+        } else if (authType == KeyMgmt.WPA2_PSK || authType == KeyMgmt.SAE) {
             // this is a config that should have a password - check that first
             if (!hasPreSharedKey) {
                 Log.d(TAG, "softap network password must be set");
@@ -380,7 +390,7 @@ public class WifiApConfigStore {
             }
         } else {
             // this is not a supported security type
-            Log.d(TAG, "softap configs must either be open or WPA2 PSK networks");
+            Log.d(TAG, "softap configs must either be open or WPA2 PSK or OWE or SAE networks");
             return false;
         }
 

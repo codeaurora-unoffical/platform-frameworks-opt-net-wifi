@@ -78,6 +78,7 @@ public class SoftApManager implements ActiveModeManager {
     private final WifiManager.SoftApCallback mCallback;
 
     private String mApInterfaceName;
+    private String mApBrInterfaceName;
     private boolean mIfaceIsUp;
 
     private final WifiApConfigStore mWifiApConfigStore;
@@ -99,14 +100,30 @@ public class SoftApManager implements ActiveModeManager {
     private final SoftApListener mSoftApListener = new SoftApListener() {
         @Override
         public void onNumAssociatedStationsChanged(int numStations) {
+            // Mitegrate into onStaConnected/onStaDisconnected.
+            // Benifit is supports OWE-transition mode and provides sta mac address.
+/*
             mStateMachine.sendMessage(
                     SoftApStateMachine.CMD_NUM_ASSOCIATED_STATIONS_CHANGED, numStations);
+*/
         }
 
         @Override
         public void onSoftApChannelSwitched(int frequency, int bandwidth) {
             mStateMachine.sendMessage(
                     SoftApStateMachine.CMD_SOFT_AP_CHANNEL_SWITCHED, frequency, bandwidth);
+        }
+
+        @Override
+        public void onStaConnected(String Macaddr) {
+            mStateMachine.sendMessage(
+                    SoftApStateMachine.CMD_CONNECTED_STATIONS, Macaddr);
+        }
+
+        @Override
+        public void onStaDisconnected(String Macaddr) {
+            mStateMachine.sendMessage(
+                    SoftApStateMachine.CMD_DISCONNECTED_STATIONS, Macaddr);
         }
     };
 
@@ -213,7 +230,11 @@ public class SoftApManager implements ActiveModeManager {
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_FAILURE_REASON, reason);
         }
 
-        intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mApInterfaceName);
+        if (mApBrInterfaceName != null) {
+            intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mApBrInterfaceName);
+        } else {
+            intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mApInterfaceName);
+        }
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mMode);
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
     }
@@ -283,6 +304,8 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_INTERFACE_DESTROYED = 7;
         public static final int CMD_INTERFACE_DOWN = 8;
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
+        public static final int CMD_CONNECTED_STATIONS = 10;
+        public static final int CMD_DISCONNECTED_STATIONS = 11;
 
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
@@ -345,6 +368,18 @@ public class SoftApManager implements ActiveModeManager {
                         updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
                                 WifiManager.WIFI_AP_STATE_DISABLED, 0);
                         int result = startSoftAp((WifiConfiguration) message.obj);
+                        // OWE transition mode - setup bridge
+                        WifiConfiguration localConfig = (WifiConfiguration) message.obj;
+                        if (localConfig.getAuthType() == WifiConfiguration.KeyMgmt.OWE) {
+                            String bridgeName = mWifiNative.setupInterfaceForBridgeMode(
+                                                              mWifiNativeInterfaceCallback);
+                            if (TextUtils.isEmpty(bridgeName)) {
+                                result = ERROR_GENERIC;
+                            } else {
+                                mWifiNative.setHostapdParams("softap bridge up " +bridgeName);
+                                mApBrInterfaceName = bridgeName;
+                            }
+                        }
                         if (result != SUCCESS) {
                             int failureReason = WifiManager.SAP_START_FAILURE_GENERAL;
                             if (result == ERROR_NO_CHANNEL) {
@@ -435,10 +470,12 @@ public class SoftApManager implements ActiveModeManager {
              * @param numStations Number of connected stations
              */
             private void setNumAssociatedStations(int numStations) {
+                /*
                 if (mNumAssociatedStations == numStations) {
                     return;
                 }
                 mNumAssociatedStations = numStations;
+                */
                 Log.d(TAG, "Number of associated stations changed: " + mNumAssociatedStations);
 
                 if (mCallback != null) {
@@ -456,7 +493,31 @@ public class SoftApManager implements ActiveModeManager {
                 }
             }
 
-            private void onUpChanged(boolean isUp) {
+            /**
+             * Set New connected stations with this soft AP
+             * @param Macaddr Mac address of connected stations
+             */
+            private void setConnectedStations(String Macaddr) {
+                mNumAssociatedStations++;
+                Log.d(TAG, "AP-STA-CONNECTED " + Macaddr
+                        + " mNumAssociatedStations=" + mNumAssociatedStations);
+                setNumAssociatedStations(mNumAssociatedStations);
+            }
+
+            /**
+             * Set Disconnected stations with this soft AP
+             * @param Macaddr Mac address of Disconnected stations
+             */
+            private void setDisConnectedStations(String Macaddr) {
+                if (mNumAssociatedStations > 0)
+                     mNumAssociatedStations--;
+
+                Log.d(TAG, "AP-STA-DISCONNECTED " + Macaddr
+                        + " mNumAssociatedStations=" + mNumAssociatedStations);
+                setNumAssociatedStations(mNumAssociatedStations);
+            }
+
+           private void onUpChanged(boolean isUp) {
                 if (isUp == mIfaceIsUp) {
                     return;  // no change
                 }
@@ -479,7 +540,12 @@ public class SoftApManager implements ActiveModeManager {
             @Override
             public void enter() {
                 mIfaceIsUp = false;
-                onUpChanged(mWifiNative.isInterfaceUp(mApInterfaceName));
+
+                if (mApBrInterfaceName != null) {
+                    onUpChanged(mWifiNative.isInterfaceUp(mApBrInterfaceName));
+                } else {
+                    onUpChanged(mWifiNative.isInterfaceUp(mApInterfaceName));
+                }
 
                 mTimeoutDelay = getConfigSoftApTimeoutDelay();
                 Handler handler = mStateMachine.getHandler();
@@ -513,6 +579,7 @@ public class SoftApManager implements ActiveModeManager {
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLED,
                         WifiManager.WIFI_AP_STATE_DISABLING, 0);
                 mApInterfaceName = null;
+                mApBrInterfaceName = null;
                 mIfaceIsUp = false;
                 mStateMachine.quitNow();
             }
@@ -558,6 +625,20 @@ public class SoftApManager implements ActiveModeManager {
                                     + mReportedFrequency);
                             mWifiMetrics.incrementNumSoftApUserBandPreferenceUnsatisfied();
                         }
+                        break;
+                    case CMD_CONNECTED_STATIONS:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Invalid Macaddr of connected station: " + message.obj);
+                            break;
+                        }
+                        setConnectedStations((String) message.obj);
+                        break;
+                    case CMD_DISCONNECTED_STATIONS:
+                        if (message.obj == null) {
+                            Log.e(TAG, "Invalid Macaddr of disconnected station: " + message.obj);
+                            break;
+                        }
+                        setDisConnectedStations((String) message.obj);
                         break;
                     case CMD_TIMEOUT_TOGGLE_CHANGED:
                         boolean isEnabled = (message.arg1 == 1);
