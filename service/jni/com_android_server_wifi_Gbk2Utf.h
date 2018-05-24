@@ -39,7 +39,11 @@
 
 namespace android {
 
+#define BSSID_LEN 20
+
 struct accessPointObjectItem {
+    bool valid;
+    char bssid[BSSID_LEN];
     String8 *ssid_utf8;
     String8 *ssid;
     struct  accessPointObjectItem *pNext;
@@ -52,5 +56,7 @@ extern void constructSsid(String16& str, const char *reply);
 extern void constructEventSsid(char *eventstr);
 
 extern jboolean setNetworkVariable(char *buf);
+
+extern jboolean wifigbkCmd(char *buf);
 
 } //namespace android

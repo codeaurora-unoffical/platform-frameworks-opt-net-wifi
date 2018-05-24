@@ -16,19 +16,26 @@
 #define BUF_SIZE 256
 #define CONVERT_LINE_LEN 2048
 #define CHARSET_CN ("gbk")
+#define STRCMP(a, b) \
+  (!(strlen(a) == strlen(b) && 0 == strncmp(a, b, strlen(a))))
 
 namespace android {
 
 static jint DBG = false;
 
+// wifigbk++
+int tikk = 0;
+char setBssid[BSSID_LEN]= {0};
+// wifigbk--
 struct accessPointObjectItem *g_pItemList = NULL;
 struct accessPointObjectItem *g_pLastNode = NULL;
 pthread_mutex_t *g_pItemListMutex = NULL;
 
-static void addAPObjectItem(const char *ssid, const char *ssid_utf8)
+static void
+addAPObjectItem(char *bssid, const char *ssid, const char *ssid_utf8)
 {
-    if (NULL == ssid || NULL == ssid_utf8) {
-        ALOGE("ssid or ssid_utf8 is NULL");
+    if (NULL == bssid || NULL == ssid_utf8) {
+        ALOGE("addAPObjectItem fail - bssid or ssid_utf8 is NULL");
         return;
     }
 
@@ -39,15 +46,24 @@ static void addAPObjectItem(const char *ssid, const char *ssid_utf8)
     pthread_mutex_lock(g_pItemListMutex);
     pTmpItemNode = g_pItemList;
     while (pTmpItemNode) {
-        if (pTmpItemNode->ssid && (*(pTmpItemNode->ssid) == ssid)) {
+        // Match both ssid and bssid, in case AP changes its ssid.
+        if (0 == STRCMP(ssid_utf8, pTmpItemNode->ssid_utf8->string())
+              && 0 == STRCMP(bssid, pTmpItemNode->bssid)) {
             foundItem = true;
             break;
         }
         pTmpItemNode = pTmpItemNode->pNext;
     }
+
     if (foundItem) {
-        if (DBG)
-            ALOGD("Found AP %s", pTmpItemNode->ssid->string());
+        // TODO: Can AP change its encoding?
+        if (!pTmpItemNode->valid) {
+            ALOGD("addAPObjectItem new1: bssid=%s, ssid_utf8=%s, isGbk=%s",
+                    pTmpItemNode->bssid,
+                    pTmpItemNode->ssid_utf8->string(),
+                    pTmpItemNode->ssid ? "yes" : "no");
+        }
+        pTmpItemNode->valid = true;
     } else {
         pItemNode = new struct accessPointObjectItem();
         if (NULL == pItemNode) {
@@ -61,16 +77,23 @@ static void addAPObjectItem(const char *ssid, const char *ssid_utf8)
             delete pItemNode;
             goto EXIT;
         }
-        pItemNode->ssid = new String8(ssid);
-        if (NULL == pItemNode->ssid) {
-            ALOGE("Failed to allocate memory for new ssid!");
-            delete pItemNode;
-            goto EXIT;
+        if (ssid != NULL) {
+            pItemNode->ssid = new String8(ssid);
+            if (NULL == pItemNode->ssid) {
+                ALOGE("Failed to allocate memory for new ssid!");
+                delete pItemNode->ssid_utf8;
+                delete pItemNode;
+                goto EXIT;
+            }
         }
-
+        strncpy(pItemNode->bssid, bssid, BSSID_LEN);
+        pItemNode->valid = true;
         pItemNode->pNext = NULL;
-        if (DBG)
-            ALOGD("AP doesn't exist, new one for %s", ssid);
+        ALOGD("addAPObjectItem new2: bssid=%s, ssid_utf8=%s, isGbk=%s",
+                pItemNode->bssid,
+                pItemNode->ssid_utf8->string(),
+                pItemNode->ssid ? "yes" : "no");
+
         if (NULL == g_pItemList) {
             g_pItemList = pItemNode;
             g_pLastNode = g_pItemList;
@@ -83,6 +106,83 @@ static void addAPObjectItem(const char *ssid, const char *ssid_utf8)
 EXIT:
     pthread_mutex_unlock(g_pItemListMutex);
 }
+
+
+
+jboolean ageOutApObjectItem()
+{
+    struct accessPointObjectItem *pTmpItemNode = NULL;
+
+    pthread_mutex_lock(g_pItemListMutex);
+    pTmpItemNode = g_pItemList;
+    while (pTmpItemNode) {
+        pTmpItemNode->valid = false;
+        pTmpItemNode = pTmpItemNode->pNext;
+    }
+    pthread_mutex_unlock(g_pItemListMutex);
+
+    return true;
+}
+
+static struct accessPointObjectItem*
+    getApObjectItemByBssid(char *bssid)
+{
+    struct accessPointObjectItem *pTmpItemNode = NULL;
+
+    pTmpItemNode = g_pItemList;
+    while (pTmpItemNode) {
+        if (pTmpItemNode->valid) {
+            if (DBG) {
+               ALOGD("getApObjectItemByBssid: bssid=%s, ssid_utf8=%s, isGbk=%s",
+                       pTmpItemNode->bssid,
+                       pTmpItemNode->ssid_utf8->string(),
+                       pTmpItemNode->ssid ? "yes" : "no");
+            }
+            if (0 == STRCMP(bssid, pTmpItemNode->bssid)) {
+                break;
+            }
+        }
+        pTmpItemNode = pTmpItemNode->pNext;
+    }
+
+    return pTmpItemNode;
+}
+
+static struct accessPointObjectItem*
+    getApObjectItemBySsid(char *ssid, int *gbk_aps, int *utf_aps)
+{
+    struct accessPointObjectItem *pTmpItemNode = NULL;
+    struct accessPointObjectItem *pNode = NULL;
+    int gbk = 0;
+    int utf = 0;
+
+    pTmpItemNode = g_pItemList;
+    while (pTmpItemNode) {
+        if (pTmpItemNode->valid) {
+            if (DBG) {
+                ALOGD("getApObjectItemBySsid: bssid=%s, ssid_utf8=%s, isGbk=%s",
+                       pTmpItemNode->bssid,
+                       pTmpItemNode->ssid_utf8->string(),
+                       pTmpItemNode->ssid ? "yes" : "no");
+            }
+            if (0 == STRCMP(ssid, pTmpItemNode->ssid_utf8->string())) {
+                if (pTmpItemNode->ssid != NULL) {
+                    gbk ++;
+                    pNode = pTmpItemNode;
+                } else {
+                    utf ++;
+                }
+            }
+        }
+        pTmpItemNode = pTmpItemNode->pNext;
+    }
+
+    *gbk_aps = gbk;
+    *utf_aps = utf;
+
+    return pNode;
+}
+
 
 static int hex2num(char c)
 {
@@ -238,6 +338,21 @@ static void ssid_encode(char *txt, size_t maxlen, const char *data, unsigned int
     *txt = '\0';
 }
 
+
+static bool isASCIIString(const char* str, int length)
+{
+    unsigned char chr;
+    bool bAllAscii = true;
+    for (int i = 0; i < length; i++) {
+        chr = *(str+i);
+        if ((chr & 0x80) != 0) {
+            bAllAscii = false;
+        }
+    }
+    return bAllAscii;
+}
+
+
 /* check if the SSID string is UTF coded */
 static bool isUTF8String(const char* str, int length)
 {
@@ -370,10 +485,11 @@ void parseScanResults(String16& str, const char *reply)
 {
     unsigned int lineBeg = 0, lineEnd = 0;
     size_t  replyLen = strlen(reply);
+    char    bssid[BSSID_LEN] = {0};
     char    ssid[BUF_SIZE] = {0};
     char    ssid_utf8[BUF_SIZE] = {0};
     char    ssid_txt[BUF_SIZE] = {0};
-    bool    isUTF8 = false, isCh = false;
+    bool    isUTF8 = false, isCh = false, isAsc = false;
     char    buf[BUF_SIZE] = {0};
     String8 line;
 
@@ -397,6 +513,7 @@ void parseScanResults(String16& str, const char *reply)
                 ssid_decode(buf,BUF_SIZE,ssid);
                 isUTF8 = isUTF8String(buf,sizeof(buf));
                 isCh = isGBKString(buf, sizeof(buf));
+                isAsc = isASCIIString(buf, sizeof(buf));
                 if (DBG)
                     ALOGD("%s, ssid = %s, buf = %s,isUTF8= %d, isCh = %d",
                         __FUNCTION__, ssid, buf ,isUTF8, isCh);
@@ -418,17 +535,23 @@ void parseScanResults(String16& str, const char *reply)
                     memset(dest, 0, CONVERT_LINE_LEN);
                     memset(ssid_txt, 0, BUF_SIZE);
                 } else {
-                    memset(buf, 0, BUF_SIZE);
                     str += String16(line.string());
                 }
-            } else if (strncmp(line.string(), "====", 4) == 0) {
+            }
+            else if (strncmp(line.string(), "bssid=", 6) == 0) {
+                 sscanf(line.string() + 6, "%[^\n]", bssid);
+            }
+            else if (strncmp(line.string(), "====", 4) == 0) {
                 if (DBG)
                     ALOGD("After sscanf,ssid:%s, isCh:%d",
                         ssid, isCh);
                 if( !isUTF8 && isCh){
-                    addAPObjectItem(buf, ssid_utf8);
-                    memset(buf, 0, BUF_SIZE);
+                    addAPObjectItem(bssid, buf, ssid_utf8); // GBK AP
+                } else if (!isAsc) {
+                    addAPObjectItem(bssid, NULL, buf); // UTF AP
                 }
+                memset(buf, 0, BUF_SIZE);
+                memset(bssid, 0, BSSID_LEN);
             }
             if (strncmp(line.string(), "ssid=", 5) != 0)
                 str += String16(line.string());
@@ -486,10 +609,63 @@ EXIT:
     ucnv_close(pConverter);
 }
 
+// IFNAME=wlan0 WIFIGBK_CMD <subcmd> <value>
+jboolean wifigbkCmd(char *buf)
+{
+    char *p;
+
+    ALOGI("wifigbkCmd - %s", buf);
+
+    p = strtok(buf, " ");  // 1: "IFNAME=wlan0"
+    p = strtok(NULL, " "); // 2: "WIFIGBK_CMD"
+    if (p == NULL ||
+      strncmp("WIFIGBK_CMD", p, strlen("WIFIGBK_CMD") != 0)) {
+        ALOGE("wifigbkCmd error - invalid cmd %s", p);
+        return JNI_FALSE;
+    }
+
+    p = strtok(NULL, " "); // 3: "<subcmd>"
+    if (p == NULL) {
+        ALOGE("wifigbkCmd error - invalid subcmd null");
+        return JNI_FALSE;
+    }
+
+    if (strncmp("NEWSCAN", p , strlen("NEWSCAN")) == 0) {
+        ageOutApObjectItem();
+    }
+    else if (strncmp("SETBSSID", p , strlen("SETBSSID")) == 0) {
+        p = strtok(NULL, " "); // 4: "<value>"
+        strncpy(setBssid, p, BSSID_LEN);
+    }
+    else if (strncmp("CLEARBSSID", p , strlen("CLEARBSSID")) == 0) {
+        memset(setBssid, 0, BSSID_LEN);
+    }
+
+    return JNI_TRUE;
+}
+
+static bool isPreferGbk(struct accessPointObjectItem *pItemNode, int gbk_aps, int utf_aps)
+{
+    // Only GBK Aps.
+    if (gbk_aps > 0 && utf_aps == 0) {
+        return true;
+    }
+    // Mixed environment - Run Robin.
+    else if (gbk_aps > 0 && utf_aps > 0) {
+        tikk ++;
+        ALOGI("Mixed Environment -> Run Robin: tikk=%d preferGbk=%d",
+                tikk, (tikk % 2 == 1));
+        if (tikk % 2 == 1) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 jboolean setNetworkVariable(char *buf)
 {
     struct accessPointObjectItem *pTmpItemNode = NULL;
-    bool gbk_found = false;
 
     unsigned int netId;
     char name[BUF_SIZE] = {0};
@@ -519,23 +695,32 @@ jboolean setNetworkVariable(char *buf)
                netId, name, value, strlen(value));
 
     pthread_mutex_lock(g_pItemListMutex);
-    pTmpItemNode = g_pItemList;
-    while (pTmpItemNode) {
-        if (pTmpItemNode->ssid_utf8) {
-            ALOGD("ssid_utf8 = %s, length=%d, value =%s, length=%d",
-                   pTmpItemNode->ssid_utf8->string(),strlen(pTmpItemNode->ssid_utf8->string()), ssid, strlen(ssid));
+    // if bssid set, match bssid.
+    if (strlen(setBssid) != 0) {
+        pTmpItemNode = getApObjectItemByBssid(setBssid);
+        if (pTmpItemNode){
+            ALOGI("Matched bssid %s - isGbk=%d",
+                    setBssid, (pTmpItemNode->ssid != NULL));
 
-            if (0 == strcmp(pTmpItemNode->ssid_utf8->string(), ssid)) {
-            gbk_found = true;
-            break;
+            if (pTmpItemNode->ssid) {
+                snprintf(buf, BUF_SIZE, "%s SET_NETWORK %d ssid \"%s\"",
+                    interface, netId, pTmpItemNode->ssid->string());
             }
         }
-        pTmpItemNode = pTmpItemNode->pNext;
     }
+    // else match ssid
+    else {
+        int gbk_aps = 0, utf_aps = 0;
+        pTmpItemNode = getApObjectItemBySsid(ssid, &gbk_aps, &utf_aps);
+        if (pTmpItemNode){
+            ALOGI("Matched ssid %s - utf_aps=%d gbk_aps=%d",
+                    ssid, utf_aps, gbk_aps);
 
-    if (0 == strncmp(name, "ssid", 4) && gbk_found) {
-        snprintf(buf, BUF_SIZE, "%s SET_NETWORK %d ssid \"%s\"", interface, netId, pTmpItemNode->ssid->string());
-        ALOGI("new command is: %s", buf);
+            if (isPreferGbk(pTmpItemNode, gbk_aps, utf_aps)){
+                snprintf(buf, BUF_SIZE, "%s SET_NETWORK %d ssid \"%s\"",
+                    interface, netId, pTmpItemNode->ssid->string());
+            }
+        }
     }
     pthread_mutex_unlock(g_pItemListMutex);
 
