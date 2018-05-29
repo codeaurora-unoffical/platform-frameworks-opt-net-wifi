@@ -56,6 +56,7 @@ import com.android.server.wifi.hotspot2.PasspointObjectFactory;
 import com.android.server.wifi.p2p.SupplicantP2pIfaceHal;
 import com.android.server.wifi.p2p.WifiP2pMonitor;
 import com.android.server.wifi.p2p.WifiP2pNative;
+import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
 
@@ -131,11 +132,12 @@ public class WifiInjector {
     private HalDeviceManager mHalDeviceManager;
     private final IBatteryStats mBatteryStats;
     private final WifiStateTracker mWifiStateTracker;
-    private final Runtime mJavaRuntime;
     private final SelfRecovery mSelfRecovery;
     private final WakeupController mWakeupController;
     private final INetworkManagementService mNwManagementService;
     private final ScanRequestProxy mScanRequestProxy;
+    private final SarManager mSarManager;
+    private final BaseWifiDiagnostics mWifiDiagnostics;
 
     private final boolean mUseRealLogger;
 
@@ -176,7 +178,8 @@ public class WifiInjector {
         mCarrierNetworkConfig = new CarrierNetworkConfig(mContext,
             mWifiServiceHandlerThread.getLooper(), mFrameworkFacade);
         WifiAwareMetrics awareMetrics = new WifiAwareMetrics(mClock);
-        mWifiMetrics = new WifiMetrics(mClock, wifiStateMachineLooper, awareMetrics);
+        RttMetrics rttMetrics = new RttMetrics(mClock);
+        mWifiMetrics = new WifiMetrics(mClock, wifiStateMachineLooper, awareMetrics, rttMetrics);
         // Modules interacting with Native.
         mWifiMonitor = new WifiMonitor(this);
         mHalDeviceManager = new HalDeviceManager(mClock);
@@ -248,14 +251,21 @@ public class WifiInjector {
                 (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE),
                 this, mWifiConfigManager,
                 mWifiPermissionsUtil, mWifiMetrics, mClock);
-        // mWifiStateMachine has an implicit dependency on mJavaRuntime due to WifiDiagnostics.
-        mJavaRuntime = Runtime.getRuntime();
+        mSarManager = new SarManager(mContext, makeTelephonyManager(), wifiStateMachineLooper,
+                mWifiNative);
+        if (mUseRealLogger) {
+            mWifiDiagnostics = new WifiDiagnostics(
+                    mContext, this, mWifiNative, mBuildProperties,
+                    new LastMileLogger(this));
+        } else {
+            mWifiDiagnostics = new BaseWifiDiagnostics(mWifiNative);
+        }
         mWifiStateMachine = new WifiStateMachine(mContext, mFrameworkFacade,
                 wifiStateMachineLooper, UserManager.get(mContext),
                 this, mBackupManagerProxy, mCountryCode, mWifiNative,
-                new WrongPasswordNotifier(mContext, mFrameworkFacade));
-        IBinder b = mFrameworkFacade.getService(Context.NETWORKMANAGEMENT_SERVICE);
-        mWifiStateMachinePrime = new WifiStateMachinePrime(this, wifiStateMachineLooper,
+                new WrongPasswordNotifier(mContext, mFrameworkFacade),
+                mSarManager);
+        mWifiStateMachinePrime = new WifiStateMachinePrime(this, mContext, wifiStateMachineLooper,
                 mWifiNative, new DefaultModeManager(mContext, wifiStateMachineLooper),
                 mBatteryStats);
         mOpenNetworkNotifier = new OpenNetworkNotifier(mContext,
@@ -277,13 +287,15 @@ public class WifiInjector {
                 new WakeupLock(mWifiConfigManager, mWifiMetrics.getWakeupMetrics(), mClock),
                 WakeupEvaluator.fromContext(mContext), wakeupOnboarding, mWifiConfigManager,
                 mWifiConfigStore, mWifiMetrics.getWakeupMetrics(), this, mFrameworkFacade);
+        if (mWifiStateMachine != null)
+            mWifiStateMachine.setWifiDiagnostics(mWifiDiagnostics);
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService());
         mWifiController = new WifiController(mContext, mWifiStateMachine, wifiStateMachineLooper,
                 mSettingsStore, mWifiServiceHandlerThread.getLooper(), mFrameworkFacade,
                 mWifiStateMachinePrime);
         mSelfRecovery = new SelfRecovery(mWifiController, mClock);
-        mWifiLastResortWatchdog = new WifiLastResortWatchdog(mSelfRecovery, mWifiMetrics,
-                mWifiStateMachine, wifiStateMachineLooper);
+        mWifiLastResortWatchdog = new WifiLastResortWatchdog(mSelfRecovery, mClock,
+                mWifiMetrics, mWifiStateMachine, wifiStateMachineLooper);
         mWifiMulticastLockManager = new WifiMulticastLockManager(
                 mWifiStateMachine.getMcastLockManagerFilterController(),
                 BatteryStatsService.getService());
@@ -354,6 +366,10 @@ public class WifiInjector {
 
     public WifiApConfigStore getWifiApConfigStore() {
         return mWifiApConfigStore;
+    }
+
+    public SarManager getSarManager() {
+        return mSarManager;
     }
 
     public WifiStateMachine getWifiStateMachine() {
@@ -472,7 +488,7 @@ public class WifiInjector {
      */
     public ClientModeManager makeClientModeManager(ClientModeManager.Listener listener) {
         return new ClientModeManager(mContext, mWifiStateMachineHandlerThread.getLooper(),
-                mWifiNative, listener, mWifiMetrics, mScanRequestProxy);
+                mWifiNative, listener, mWifiMetrics, mScanRequestProxy, mWifiStateMachine);
     }
 
     /**
@@ -483,14 +499,8 @@ public class WifiInjector {
         return new LogcatLog(tag);
     }
 
-    public BaseWifiDiagnostics makeWifiDiagnostics(WifiNative wifiNative) {
-        if (mUseRealLogger) {
-            return new WifiDiagnostics(
-                    mContext, this, mWifiStateMachine, wifiNative, mBuildProperties,
-                    new LastMileLogger(this));
-        } else {
-            return new BaseWifiDiagnostics(wifiNative);
-        }
+    public BaseWifiDiagnostics getWifiDiagnostics() {
+        return mWifiDiagnostics;
     }
 
     /**
@@ -568,10 +578,6 @@ public class WifiInjector {
         return mHalDeviceManager;
     }
 
-    public Runtime getJavaRuntime() {
-        return mJavaRuntime;
-    }
-
     public WifiNative getWifiNative() {
         return mWifiNative;
     }
@@ -598,6 +604,10 @@ public class WifiInjector {
 
     public ScanRequestProxy getScanRequestProxy() {
         return mScanRequestProxy;
+    }
+
+    public Runtime getJavaRuntime() {
+        return Runtime.getRuntime();
     }
 
     public ActivityManagerService getActivityManagerService() {

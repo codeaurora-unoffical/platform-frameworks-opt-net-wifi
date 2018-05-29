@@ -68,10 +68,12 @@ import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.WorkSource;
 import android.os.test.TestLooper;
+import android.provider.Settings;
 import android.util.Pair;
 
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.FrameworkFacade;
+import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import org.junit.After;
@@ -93,6 +95,9 @@ import java.util.Set;
  * Unit test harness for the RttServiceImpl class.
  */
 public class RttServiceImplTest {
+
+    private static final long BACKGROUND_PROCESS_EXEC_GAP_MS = 10 * 60 * 1000;  // 10 minutes.
+
     private RttServiceImplSpy mDut;
     private TestLooper mMockLooper;
     private TestAlarmManager mAlarmManager;
@@ -102,6 +107,7 @@ public class RttServiceImplTest {
 
     private final String mPackageName = "some.package.name.for.rtt.app";
     private int mDefaultUid = 1500;
+    private WorkSource mDefaultWs = new WorkSource(mDefaultUid);
 
     private ArgumentCaptor<Integer> mIntCaptor = ArgumentCaptor.forClass(Integer.class);
     private ArgumentCaptor<IBinder.DeathRecipient> mDeathRecipientCaptor = ArgumentCaptor
@@ -129,6 +135,9 @@ public class RttServiceImplTest {
 
     @Mock
     public RttNative mockNative;
+
+    @Mock
+    public RttMetrics mockMetrics;
 
     @Mock
     public IWifiAwareManager mockAwareManagerBinder;
@@ -181,6 +190,11 @@ public class RttServiceImplTest {
         mAlarmManager = new TestAlarmManager();
         doNothing().when(mFrameworkFacade).registerContentObserver(eq(mockContext), any(),
                 anyBoolean(), any());
+        when(mFrameworkFacade.getLongSetting(
+            eq(mockContext),
+            eq(Settings.Global.WIFI_RTT_BACKGROUND_EXEC_GAP_MS),
+            anyLong()))
+            .thenReturn(BACKGROUND_PROCESS_EXEC_GAP_MS);
         when(mockLocationManager.isLocationEnabled()).thenReturn(true);
         when(mockContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
@@ -210,7 +224,7 @@ public class RttServiceImplTest {
         doAnswer(mBinderUnlinkToDeathCounter).when(mockIbinder).unlinkToDeath(any(), anyInt());
 
         mDut.start(mMockLooper.getLooper(), mockClock, mockAwareManagerBinder, mockNative,
-                mockPermissionUtil, mFrameworkFacade);
+                mockMetrics, mockPermissionUtil, mFrameworkFacade);
         mMockLooper.dispatchAll();
         ArgumentCaptor<BroadcastReceiver> bcastRxCaptor = ArgumentCaptor.forClass(
                 BroadcastReceiver.class);
@@ -270,8 +284,17 @@ public class RttServiceImplTest {
             mMockLooper.dispatchAll();
         }
 
+        // verify metrics
+        for (int i = 0; i < numIter; ++i) {
+            verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(requests[i]));
+            verify(mockMetrics).recordResult(eq(requests[i]), eq(results.get(i).first));
+        }
+        verify(mockMetrics, times(numIter)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -328,8 +351,14 @@ public class RttServiceImplTest {
 
         assertTrue(compareListContentsNoOrdering(results.second, mListCaptor.getValue()));
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordResult(eq(finalRequest), eq(results.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -381,8 +410,20 @@ public class RttServiceImplTest {
             }
         }
 
+        // verify metrics
+        for (int i = 0; i < numIter; ++i) {
+            verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(requests[i]));
+            if (i != 0) {
+                verify(mockMetrics).recordResult(eq(requests[i]), eq(results.get(i).first));
+            }
+        }
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_HAL_FAILURE);
+        verify(mockMetrics, times(numIter - 1)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -412,8 +453,14 @@ public class RttServiceImplTest {
         verify(mockCallback).onRangingFailure(eq(RangingResultCallback.STATUS_CODE_FAIL));
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_LOCATION_PERMISSION_MISSING);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -479,8 +526,21 @@ public class RttServiceImplTest {
             }
         }
 
+        // verify metrics
+        WorkSource oddWs = new WorkSource(mDefaultUid + 1);
+        for (int i = 0; i < numIter; ++i) {
+            verify(mockMetrics).recordRequest(eq((i % 2) == 0 ? mDefaultWs : oddWs),
+                    eq(requests[i]));
+            if (i % 2 == 1) {
+                verify(mockMetrics).recordResult(eq(requests[i]), eq(results.get(i).first));
+            }
+        }
+        verify(mockMetrics, times(numIter / 2)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -514,8 +574,12 @@ public class RttServiceImplTest {
         mDut.onRangingResults(mIntCaptor.getValue(), results.first);
         mMockLooper.dispatchAll();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(ws), eq(request));
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -560,8 +624,12 @@ public class RttServiceImplTest {
         mDut.onRangingResults(mIntCaptor.getValue(), results.first);
         mMockLooper.dispatchAll();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(worksourceRequest), eq(request));
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -601,8 +669,14 @@ public class RttServiceImplTest {
         verify(mockCallback).onRangingResults(results.second);
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(worksourceRequest), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(results.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -636,8 +710,14 @@ public class RttServiceImplTest {
         verify(mockCallback).onRangingResults(results.second);
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(results.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -677,8 +757,14 @@ public class RttServiceImplTest {
         assertTrue(compareListContentsNoOrdering(results.second, mListCaptor.getValue()));
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(results.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -714,8 +800,14 @@ public class RttServiceImplTest {
         assertTrue(compareListContentsNoOrdering(allFailResults, mListCaptor.getValue()));
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(new ArrayList<RttResult>()));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -761,8 +853,14 @@ public class RttServiceImplTest {
         assertTrue(compareListContentsNoOrdering(results.second, mListCaptor.getValue()));
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(results.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -807,8 +905,16 @@ public class RttServiceImplTest {
         verify(mockCallback).onRangingResults(result2.second);
         verifyWakeupCancelled();
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request1));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request2));
+        verify(mockMetrics).recordResult(eq(request2), eq(result2.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_TIMEOUT);
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -857,14 +963,14 @@ public class RttServiceImplTest {
         verifyWakeupCancelled();
 
         // (2) issue a request at time t2 = t1 + 0.5 gap: should be rejected (throttled)
-        clock.time = 100 + RttServiceImpl.BACKGROUND_PROCESS_EXEC_GAP_MS / 2;
+        clock.time = 100 + BACKGROUND_PROCESS_EXEC_GAP_MS / 2;
         mDut.startRanging(mockIbinder, mPackageName, null, request2, mockCallback);
         mMockLooper.dispatchAll();
 
         cbInorder.verify(mockCallback).onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
 
         // (3) issue a request at time t3 = t1 + 1.1 gap: should be dispatched since enough time
-        clock.time = 100 + RttServiceImpl.BACKGROUND_PROCESS_EXEC_GAP_MS * 11 / 10;
+        clock.time = 100 + BACKGROUND_PROCESS_EXEC_GAP_MS * 11 / 10;
         mDut.startRanging(mockIbinder, mPackageName, null, request3, mockCallback);
         mMockLooper.dispatchAll();
 
@@ -906,8 +1012,23 @@ public class RttServiceImplTest {
 
         cbInorder.verify(mockCallback).onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request1));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request2));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request3));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request4));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request5));
+        verify(mockMetrics).recordResult(eq(request1), eq(result1.first));
+        verify(mockMetrics).recordResult(eq(request3), eq(result3.first));
+        verify(mockMetrics).recordResult(eq(request4), eq(result4.first));
+        verify(mockMetrics, times(2)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_THROTTLE);
+        verify(mockMetrics, times(3)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -974,7 +1095,7 @@ public class RttServiceImplTest {
 
         // (2) issue a request at time t2 = t1 + 0.5 gap for {10,20}: should be dispatched since
         //     uid=20 should not be throttled
-        clock.time = 100 + RttServiceImpl.BACKGROUND_PROCESS_EXEC_GAP_MS / 2;
+        clock.time = 100 + BACKGROUND_PROCESS_EXEC_GAP_MS / 2;
         mDut.startRanging(mockIbinder, mPackageName, wsReq2, request2, mockCallback);
         mMockLooper.dispatchAll();
 
@@ -989,14 +1110,25 @@ public class RttServiceImplTest {
         verifyWakeupCancelled();
 
         // (3) issue a request at t3 = t1 + 1.1 * gap for {10}: should be rejected (throttled)
-        clock.time = 100 + RttServiceImpl.BACKGROUND_PROCESS_EXEC_GAP_MS * 11 / 10;
+        clock.time = 100 + BACKGROUND_PROCESS_EXEC_GAP_MS * 11 / 10;
         mDut.startRanging(mockIbinder, mPackageName, wsReq1, request3, mockCallback);
         mMockLooper.dispatchAll();
 
         cbInorder.verify(mockCallback).onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(wsReq1), eq(request1));
+        verify(mockMetrics).recordRequest(eq(wsReq2), eq(request2));
+        verify(mockMetrics).recordRequest(eq(wsReq1), eq(request3));
+        verify(mockMetrics).recordResult(eq(request1), eq(result1.first));
+        verify(mockMetrics).recordResult(eq(request2), eq(result2.first));
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_THROTTLE);
+        verify(mockMetrics, times(2)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -1056,8 +1188,20 @@ public class RttServiceImplTest {
         verify(mockCallback, times(RttServiceImpl.MAX_QUEUED_PER_UID + 11)).onRangingFailure(
                 RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE);
 
+        // verify metrics
+        for (int i = 0; i < RttServiceImpl.MAX_QUEUED_PER_UID + 11; ++i) {
+            WorkSource wsExtra = new WorkSource(10);
+            if (i != 0) {
+                wsExtra.add(10 + i);
+            }
+            verify(mockMetrics).recordRequest(eq(wsExtra), eq(request));
+        }
+        verify(mockMetrics, times(RttServiceImpl.MAX_QUEUED_PER_UID + 11)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -1126,8 +1270,19 @@ public class RttServiceImplTest {
         cbInorder.verify(mockCallback, times(RttServiceImpl.MAX_QUEUED_PER_UID)).onRangingFailure(
                 RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE);
 
+        // verify metrics
+        verify(mockMetrics, times(RttServiceImpl.MAX_QUEUED_PER_UID + 12)).recordRequest(
+                eq(useUids ? mDefaultWs : ws), eq(request));
+        verify(mockMetrics).recordResult(eq(request), eq(result.first));
+        verify(mockMetrics, times(11)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_THROTTLE);
+        verify(mockMetrics, times(RttServiceImpl.MAX_QUEUED_PER_UID)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
+        verify(mockMetrics).recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback,
+                mAlarmManager.getAlarmManager());
     }
 
     /**
@@ -1225,9 +1380,15 @@ public class RttServiceImplTest {
         assertTrue(mDut.isAvailable());
         validateCorrectRttStatusChangeBroadcast(true);
 
+        // verify metrics
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request1));
+        verify(mockMetrics).recordRequest(eq(mDefaultWs), eq(request2));
+        verify(mockMetrics, times(3)).recordOverallStatus(
+                WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
+
         verify(mockNative, atLeastOnce()).isReady();
-        verifyNoMoreInteractions(mockNative, mockCallback, mockCallback2, mockCallback3,
-                mAlarmManager.getAlarmManager());
+        verifyNoMoreInteractions(mockNative, mockMetrics, mockCallback, mockCallback2,
+                mockCallback3, mAlarmManager.getAlarmManager());
     }
 
     /*

@@ -37,14 +37,16 @@ import android.util.Log;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.IState;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 import com.android.internal.util.WakeupMessage;
 import com.android.server.wifi.WifiNative.InterfaceCallback;
 import com.android.server.wifi.WifiNative.SoftApListener;
-import com.android.server.wifi.WifiNative.StatusListener;
 import com.android.server.wifi.util.ApConfigUtil;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 import java.util.Locale;
 
 /**
@@ -72,6 +74,7 @@ public class SoftApManager implements ActiveModeManager {
     private final WifiManager.SoftApCallback mCallback;
 
     private String mApInterfaceName;
+    private boolean mIfaceIsUp;
 
     private final WifiApConfigStore mWifiApConfigStore;
 
@@ -79,6 +82,12 @@ public class SoftApManager implements ActiveModeManager {
 
     private final int mMode;
     private WifiConfiguration mApConfig;
+
+    private int mReportedFrequency = -1;
+    private int mReportedBandwidth = -1;
+
+    private int mNumAssociatedStations = 0;
+    private boolean mTimeoutEnabled = false;
 
     /**
      * Listener for soft AP events.
@@ -134,7 +143,51 @@ public class SoftApManager implements ActiveModeManager {
      * Stop soft AP.
      */
     public void stop() {
-        mStateMachine.sendMessage(SoftApStateMachine.CMD_STOP);
+        Log.d(TAG, " currentstate: " + getCurrentStateName());
+        if (mApInterfaceName != null) {
+            if (mIfaceIsUp) {
+                updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
+                        WifiManager.WIFI_AP_STATE_ENABLED, 0);
+            } else {
+                updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
+                        WifiManager.WIFI_AP_STATE_ENABLING, 0);
+            }
+        }
+        mStateMachine.quitNow();
+    }
+
+    /**
+     * Dump info about this softap manager.
+     */
+    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        pw.println("--Dump of SoftApManager--");
+
+        pw.println("current StateMachine mode: " + getCurrentStateName());
+        pw.println("mApInterfaceName: " + mApInterfaceName);
+        pw.println("mIfaceIsUp: " + mIfaceIsUp);
+        pw.println("mMode: " + mMode);
+        pw.println("mCountryCode: " + mCountryCode);
+        if (mApConfig != null) {
+            pw.println("mApConfig.SSID: " + mApConfig.SSID);
+            pw.println("mApConfig.apBand: " + mApConfig.apBand);
+            pw.println("mApConfig.hiddenSSID: " + mApConfig.hiddenSSID);
+        } else {
+            pw.println("mApConfig: null");
+        }
+        pw.println("mNumAssociatedStations: " + mNumAssociatedStations);
+        pw.println("mTimeoutEnabled: " + mTimeoutEnabled);
+        pw.println("mReportedFrequency: " + mReportedFrequency);
+        pw.println("mReportedBandwidth: " + mReportedBandwidth);
+    }
+
+    private String getCurrentStateName() {
+        IState currentState = mStateMachine.getCurrentState();
+
+        if (currentState != null) {
+            return currentState.getName();
+        }
+
+        return "StateMachine not active";
     }
 
     /**
@@ -219,8 +272,6 @@ public class SoftApManager implements ActiveModeManager {
     private class SoftApStateMachine extends StateMachine {
         // Commands for the state machine.
         public static final int CMD_START = 0;
-        public static final int CMD_STOP = 1;
-        public static final int CMD_WIFINATIVE_FAILURE = 2;
         public static final int CMD_INTERFACE_STATUS_CHANGED = 3;
         public static final int CMD_NUM_ASSOCIATED_STATIONS_CHANGED = 4;
         public static final int CMD_NO_ASSOCIATED_STATIONS_TIMEOUT = 5;
@@ -231,12 +282,6 @@ public class SoftApManager implements ActiveModeManager {
 
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
-
-        private final StatusListener mWifiNativeStatusListener = (boolean isReady) -> {
-            if (!isReady) {
-                sendMessage(CMD_WIFINATIVE_FAILURE);
-            }
-        };
 
         private final InterfaceCallback mWifiNativeInterfaceCallback = new InterfaceCallback() {
             @Override
@@ -274,8 +319,8 @@ public class SoftApManager implements ActiveModeManager {
         private class IdleState extends State {
             @Override
             public void enter() {
-                mWifiNative.registerStatusListener(mWifiNativeStatusListener);
                 mApInterfaceName = null;
+                mIfaceIsUp = false;
             }
 
             @Override
@@ -320,11 +365,6 @@ public class SoftApManager implements ActiveModeManager {
         }
 
         private class StartedState extends State {
-            private boolean mIfaceIsUp;
-
-            private int mNumAssociatedStations;
-
-            private boolean mTimeoutEnabled;
             private int mTimeoutDelay;
             private WakeupMessage mSoftApTimeoutMessage;
             private SoftApTimeoutEnabledSettingObserver mSettingObserver;
@@ -454,8 +494,9 @@ public class SoftApManager implements ActiveModeManager {
 
             @Override
             public void exit() {
-                // will trigger interface teardown when interface management is dynamic
-                // stopSoftAp();
+                if (mApInterfaceName != null) {
+                    stopSoftAp();
+                }
                 if (mSettingObserver != null) {
                     mSettingObserver.unregister();
                 }
@@ -467,6 +508,8 @@ public class SoftApManager implements ActiveModeManager {
                 mWifiMetrics.addSoftApUpChangedEvent(false, mMode);
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLED,
                         WifiManager.WIFI_AP_STATE_DISABLING, 0);
+                mApInterfaceName = null;
+                mIfaceIsUp = false;
             }
 
             @Override
@@ -481,10 +524,12 @@ public class SoftApManager implements ActiveModeManager {
                         setNumAssociatedStations(message.arg1);
                         break;
                     case CMD_SOFT_AP_CHANNEL_SWITCHED:
-                        Log.d(TAG, "Channel switched. Frequency: " + message.arg1 + " Bandwidth: "
-                                + message.arg2);
-                        mWifiMetrics.addSoftApChannelSwitchedEvent(message.arg1, message.arg2,
-                                mMode);
+                        mReportedFrequency = message.arg1;
+                        mReportedBandwidth = message.arg2;
+                        Log.d(TAG, "Channel switched. Frequency: " + mReportedFrequency
+                                + " Bandwidth: " + mReportedBandwidth);
+                        mWifiMetrics.addSoftApChannelSwitchedEvent(mReportedFrequency,
+                                mReportedBandwidth, mMode);
                         break;
                     case CMD_TIMEOUT_TOGGLE_CHANGED:
                         boolean isEnabled = (message.arg1 == 1);
@@ -517,12 +562,6 @@ public class SoftApManager implements ActiveModeManager {
                             break;
                         }
                         Log.i(TAG, "Timeout message received. Stopping soft AP.");
-                        stopSoftAp();
-                        updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
-                                WifiManager.WIFI_AP_STATE_ENABLED, 0);
-                        transitionTo(mIdleState);
-                        break;
-                    case CMD_STOP:
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
                         transitionTo(mIdleState);
@@ -531,11 +570,11 @@ public class SoftApManager implements ActiveModeManager {
                         Log.d(TAG, "Interface was cleanly destroyed.");
                         updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
                                 WifiManager.WIFI_AP_STATE_ENABLED, 0);
+                        mApInterfaceName = null;
                         transitionTo(mIdleState);
                         break;
-                    case CMD_WIFINATIVE_FAILURE:
                     case CMD_INTERFACE_DOWN:
-                        Log.w(TAG, "native/interface error, stop and report failure");
+                        Log.w(TAG, "interface error, stop and report failure");
                         updateApState(WifiManager.WIFI_AP_STATE_FAILED,
                                 WifiManager.WIFI_AP_STATE_ENABLED,
                                 WifiManager.SAP_START_FAILURE_GENERAL);

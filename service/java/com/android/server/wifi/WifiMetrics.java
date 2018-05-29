@@ -46,6 +46,7 @@ import com.android.server.wifi.nano.WifiMetricsProto.SoftApConnectedClientsEvent
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent;
 import com.android.server.wifi.nano.WifiMetricsProto.StaEvent.ConfigInfo;
 import com.android.server.wifi.nano.WifiMetricsProto.WpsMetrics;
+import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -104,6 +105,7 @@ public class WifiMetrics {
     private boolean mScreenOn;
     private int mWifiState;
     private WifiAwareMetrics mWifiAwareMetrics;
+    private RttMetrics mRttMetrics;
     private final PnoScanMetrics mPnoScanMetrics = new PnoScanMetrics();
     private final WpsMetrics mWpsMetrics = new WpsMetrics();
     private Handler mHandler;
@@ -195,6 +197,8 @@ public class WifiMetrics {
 
     /** Wifi Wake metrics */
     private final WifiWakeMetrics mWifiWakeMetrics = new WifiWakeMetrics();
+
+    private boolean mIsMacRandomizationOn = false;
 
     class RouterFingerPrint {
         private WifiMetricsProto.RouterFingerPrint mRouterFingerPrintProto;
@@ -429,13 +433,15 @@ public class WifiMetrics {
         }
     }
 
-    public WifiMetrics(Clock clock, Looper looper, WifiAwareMetrics awareMetrics) {
+    public WifiMetrics(Clock clock, Looper looper, WifiAwareMetrics awareMetrics,
+            RttMetrics rttMetrics) {
         mClock = clock;
         mCurrentConnectionEvent = null;
         mScreenOn = true;
         mWifiState = WifiMetricsProto.WifiLog.WIFI_DISABLED;
         mRecordStartTimeSec = mClock.getElapsedSinceBootMillis() / 1000;
         mWifiAwareMetrics = awareMetrics;
+        mRttMetrics = rttMetrics;
 
         mHandler = new Handler(looper) {
             public void handleMessage(Message msg) {
@@ -1130,6 +1136,26 @@ public class WifiMetrics {
     }
 
     /**
+     * Increment the count of network connection failures that happened after watchdog has been
+     * triggered.
+     */
+    public void incrementWatchdogTotalConnectionFailureCountAfterTrigger() {
+        synchronized (mLock) {
+            mWifiLogProto.watchdogTotalConnectionFailureCountAfterTrigger++;
+        }
+    }
+
+    /**
+     * Sets the time taken for wifi to connect after a watchdog triggers a restart.
+     * @param milliseconds
+     */
+    public void setWatchdogSuccessTimeDurationMs(long ms) {
+        synchronized (mLock) {
+            mWifiLogProto.watchdogTriggerToConnectionSuccessDurationMs = ms;
+        }
+    }
+
+    /**
      * Increments the count of alerts by alert reason.
      *
      * @param reason The cause of the alert. The reason values are driver-specific.
@@ -1487,6 +1513,42 @@ public class WifiMetrics {
     }
 
     /**
+     * Increment number of times we detected a radio mode change to MCC.
+     */
+    public void incrementNumRadioModeChangeToMcc() {
+        synchronized (mLock) {
+            mWifiLogProto.numRadioModeChangeToMcc++;
+        }
+    }
+
+    /**
+     * Increment number of times we detected a radio mode change to SCC.
+     */
+    public void incrementNumRadioModeChangeToScc() {
+        synchronized (mLock) {
+            mWifiLogProto.numRadioModeChangeToScc++;
+        }
+    }
+
+    /**
+     * Increment number of times we detected a radio mode change to SBS.
+     */
+    public void incrementNumRadioModeChangeToSbs() {
+        synchronized (mLock) {
+            mWifiLogProto.numRadioModeChangeToSbs++;
+        }
+    }
+
+    /**
+     * Increment number of times we detected a radio mode change to DBS.
+     */
+    public void incrementNumRadioModeChangeToDbs() {
+        synchronized (mLock) {
+            mWifiLogProto.numRadioModeChangeToDbs++;
+        }
+    }
+
+    /**
      * Increment N-Way network selection decision histograms:
      * Counts the size of various sets of scanDetails within a scan, and increment the occurrence
      * of that size for the associated histogram. There are ten histograms generated for each
@@ -1523,9 +1585,12 @@ public class WifiMetrics {
             for (ScanDetail scanDetail : scanDetails) {
                 NetworkDetail networkDetail = scanDetail.getNetworkDetail();
                 ScanResult scanResult = scanDetail.getScanResult();
-                if (mWifiNetworkSelector.isSignalTooWeak(scanResult)) {
-                    continue;
+
+                // statistics to be collected for ALL APs (irrespective of signal power)
+                if (networkDetail.is80211McResponderSupport()) {
+                    supporting80211mcAps++;
                 }
+
                 ScanResultMatchInfo matchInfo = ScanResultMatchInfo.fromScanResult(scanResult);
                 Pair<PasspointProvider, PasspointMatch> providerMatch = null;
                 PasspointProvider passpointProvider = null;
@@ -1564,6 +1629,13 @@ public class WifiMetrics {
                     }
 
                 }
+
+                if (mWifiNetworkSelector.isSignalTooWeak(scanResult)) {
+                    continue;
+                }
+
+                // statistics to be collected ONLY for those APs with sufficient signal power
+
                 ssids.add(matchInfo);
                 bssids++;
                 boolean isOpen = matchInfo.networkType == ScanResultMatchInfo.NETWORK_TYPE_OPEN;
@@ -1587,9 +1659,6 @@ public class WifiMetrics {
                 if (isSavedPasspoint) {
                     savedPasspointProviderProfiles.add(passpointProvider);
                     savedPasspointProviderBssids++;
-                }
-                if (networkDetail.is80211McResponderSupport()) {
-                    supporting80211mcAps++;
                 }
             }
             mWifiLogProto.fullBandAllSingleScanListenerResults++;
@@ -1673,6 +1742,13 @@ public class WifiMetrics {
     public void incrementNumNetworkConnectMessageFailedToSend(String notifierTag) {
         synchronized (mLock) {
             mNumOpenNetworkConnectMessageFailedToSend++;
+        }
+    }
+
+    /** Sets if Connected MAC Randomization feature is enabled */
+    public void setIsMacRandomizationOn(boolean enabled) {
+        synchronized (mLock) {
+            mIsMacRandomizationOn = enabled;
         }
     }
 
@@ -1910,6 +1986,14 @@ public class WifiMetrics {
                         + mWifiLogProto.numPasspointProviderUninstallSuccess);
                 pw.println("mWifiLogProto.numPasspointProvidersSuccessfullyConnected="
                         + mWifiLogProto.numPasspointProvidersSuccessfullyConnected);
+                pw.println("mWifiLogProto.numRadioModeChangeToMcc="
+                        + mWifiLogProto.numRadioModeChangeToMcc);
+                pw.println("mWifiLogProto.numRadioModeChangeToScc="
+                        + mWifiLogProto.numRadioModeChangeToScc);
+                pw.println("mWifiLogProto.numRadioModeChangeToSbs="
+                        + mWifiLogProto.numRadioModeChangeToSbs);
+                pw.println("mWifiLogProto.numRadioModeChangeToDbs="
+                        + mWifiLogProto.numRadioModeChangeToDbs);
                 pw.println("mTotalSsidsInScanHistogram:"
                         + mTotalSsidsInScanHistogram.toString());
                 pw.println("mTotalBssidsInScanHistogram:"
@@ -1936,6 +2020,8 @@ public class WifiMetrics {
                         + mWifiLogProto.fullBandAllSingleScanListenerResults);
                 pw.println("mWifiAwareMetrics:");
                 mWifiAwareMetrics.dump(fd, pw, args);
+                pw.println("mRttMetrics:");
+                mRttMetrics.dump(fd, pw, args);
 
                 pw.println("mPnoScanMetrics.numPnoScanAttempts="
                         + mPnoScanMetrics.numPnoScanAttempts);
@@ -2017,6 +2103,8 @@ public class WifiMetrics {
 
                 mWifiPowerMetrics.dump(pw);
                 mWifiWakeMetrics.dump(pw);
+
+                pw.println("mWifiLogProto.isMacRandomizationOn=" + mIsMacRandomizationOn);
             }
         }
     }
@@ -2225,6 +2313,7 @@ public class WifiMetrics {
                     makeNumConnectableNetworksBucketArray(
                     mAvailableSavedPasspointProviderBssidsInScanHistogram);
             mWifiLogProto.wifiAwareLog = mWifiAwareMetrics.consolidateProto();
+            mWifiLogProto.wifiRttLog = mRttMetrics.consolidateProto();
 
             mWifiLogProto.pnoScanMetrics = mPnoScanMetrics;
 
@@ -2307,6 +2396,7 @@ public class WifiMetrics {
             mWifiLogProto.wpsMetrics = mWpsMetrics;
             mWifiLogProto.wifiPowerStats = mWifiPowerMetrics.buildProto();
             mWifiLogProto.wifiWakeStats = mWifiWakeMetrics.buildProto();
+            mWifiLogProto.isMacRandomizationOn = mIsMacRandomizationOn;
         }
     }
 
@@ -2346,6 +2436,7 @@ public class WifiMetrics {
             mSoftApManagerReturnCodeCounts.clear();
             mStaEventList.clear();
             mWifiAwareMetrics.clear();
+            mRttMetrics.clear();
             mTotalSsidsInScanHistogram.clear();
             mTotalBssidsInScanHistogram.clear();
             mAvailableOpenSsidsInScanHistogram.clear();
@@ -2497,6 +2588,7 @@ public class WifiMetrics {
             case StaEvent.TYPE_NETWORK_AGENT_VALID_NETWORK:
             case StaEvent.TYPE_FRAMEWORK_DISCONNECT:
             case StaEvent.TYPE_SCORE_BREACH:
+            case StaEvent.TYPE_MAC_CHANGE:
                 break;
             default:
                 Log.e(TAG, "Unknown StaEvent:" + type);
@@ -2558,6 +2650,10 @@ public class WifiMetrics {
 
     public WifiWakeMetrics getWakeupMetrics() {
         return mWifiWakeMetrics;
+    }
+
+    public RttMetrics getRttMetrics() {
+        return mRttMetrics;
     }
 
     // Rather than generate a StaEvent for each SUPPLICANT_STATE_CHANGE, cache these in a bitmask
@@ -2684,6 +2780,9 @@ public class WifiMetrics {
                 break;
             case StaEvent.TYPE_SCORE_BREACH:
                 sb.append("SCORE_BREACH");
+                break;
+            case StaEvent.TYPE_MAC_CHANGE:
+                sb.append("MAC_CHANGE");
                 break;
             default:
                 sb.append("UNKNOWN " + event.type + ":");

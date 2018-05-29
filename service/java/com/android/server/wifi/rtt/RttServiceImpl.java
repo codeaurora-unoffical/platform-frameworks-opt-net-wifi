@@ -57,6 +57,7 @@ import android.util.SparseIntArray;
 import com.android.internal.util.WakeupMessage;
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.FrameworkFacade;
+import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
@@ -83,11 +84,13 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
     private Clock mClock;
     private IWifiAwareManager mAwareBinder;
     private RttNative mRttNative;
+    private RttMetrics mRttMetrics;
     private WifiPermissionsUtil mWifiPermissionsUtil;
     private ActivityManager mActivityManager;
     private PowerManager mPowerManager;
     private LocationManager mLocationManager;
     private FrameworkFacade mFrameworkFacade;
+    private long mBackgroundProcessExecGapMs;
 
     private RttServiceSynchronized mRttServiceSynchronized;
 
@@ -97,8 +100,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
 
     private static final long HAL_RANGING_TIMEOUT_MS = 5_000; // 5 sec
 
-    // TODO: b/69323456 convert to a settable value
-    /* package */ static final long BACKGROUND_PROCESS_EXEC_GAP_MS = 1_800_000; // 30 min
+    // Default value for RTT background throttling interval.
+    private static final long DEFAULT_BACKGROUND_PROCESS_EXEC_GAP_MS = 1_800_000; // 30 min
 
     // arbitrary, larger than anything reasonable
     /* package */ static final int MAX_QUEUED_PER_UID = 20;
@@ -214,15 +217,17 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
      * @param clock A mockable clock.
      * @param awareBinder The Wi-Fi Aware service (binder) if supported on the system.
      * @param rttNative The Native interface to the HAL.
+     * @param rttMetrics The Wi-Fi RTT metrics object.
      * @param wifiPermissionsUtil Utility for permission checks.
      * @param frameworkFacade Facade for framework classes, allows mocking.
      */
     public void start(Looper looper, Clock clock, IWifiAwareManager awareBinder,
-            RttNative rttNative, WifiPermissionsUtil wifiPermissionsUtil,
+            RttNative rttNative, RttMetrics rttMetrics, WifiPermissionsUtil wifiPermissionsUtil,
             FrameworkFacade frameworkFacade) {
         mClock = clock;
         mAwareBinder = awareBinder;
         mRttNative = rttNative;
+        mRttMetrics = rttMetrics;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mFrameworkFacade = frameworkFacade;
         mRttServiceSynchronized = new RttServiceSynchronized(looper, rttNative);
@@ -257,8 +262,21 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                                 Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED, 0));
                     }
                 });
+
         enableVerboseLogging(frameworkFacade.getIntegerSetting(mContext,
                 Settings.Global.WIFI_VERBOSE_LOGGING_ENABLED, 0));
+
+        frameworkFacade.registerContentObserver(mContext,
+                Settings.Global.getUriFor(Settings.Global.WIFI_RTT_BACKGROUND_EXEC_GAP_MS),
+                true,
+                new ContentObserver(mRttServiceSynchronized.mHandler) {
+                    @Override
+                    public void onChange(boolean selfChange) {
+                        updateBackgroundThrottlingInterval(frameworkFacade);
+                    }
+                });
+
+        updateBackgroundThrottlingInterval(frameworkFacade);
 
         intentFilter = new IntentFilter();
         intentFilter.addAction(LocationManager.MODE_CHANGED_ACTION);
@@ -289,6 +307,13 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             mDbg = true; // just override
         }
         mRttNative.mDbg = mDbg;
+        mRttMetrics.mDbg = mDbg;
+    }
+
+    private void updateBackgroundThrottlingInterval(FrameworkFacade frameworkFacade) {
+        mBackgroundProcessExecGapMs = frameworkFacade.getLongSetting(mContext,
+            Settings.Global.WIFI_RTT_BACKGROUND_EXEC_GAP_MS,
+            DEFAULT_BACKGROUND_PROCESS_EXEC_GAP_MS);
     }
 
     /*
@@ -372,6 +397,11 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
         if (request == null || request.mRttPeers == null || request.mRttPeers.size() == 0) {
             throw new IllegalArgumentException("Request must not be null or empty");
         }
+        for (ResponderConfig responder : request.mRttPeers) {
+            if (responder == null) {
+                throw new IllegalArgumentException("Request must not contain null Responders");
+            }
+        }
         if (callback == null) {
             throw new IllegalArgumentException("Callback must not be null");
         }
@@ -379,6 +409,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
 
         if (!isAvailable()) {
             try {
+                mRttMetrics.recordOverallStatus(
+                        WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
                 callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE);
             } catch (RemoteException e) {
                 Log.e(TAG, "startRanging: disabled, callback failed -- " + e);
@@ -546,6 +578,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                         // but Wi-Fi still up). Doesn't hurt - worst case will fail.
                         cancelRanging(rri);
                     }
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
                     rri.callback.onRangingFailure(
                             RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE);
                 } catch (RemoteException e) {
@@ -626,6 +660,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             }
             cancelRanging(rri);
             try {
+                mRttMetrics.recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_TIMEOUT);
                 rri.callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
             } catch (RemoteException e) {
                 Log.e(TAG, "RttServiceSynchronized.timeoutRangingRequest: callback failed: " + e);
@@ -636,11 +671,14 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
         private void queueRangingRequest(int uid, WorkSource workSource, IBinder binder,
                 IBinder.DeathRecipient dr, String callingPackage, RangingRequest request,
                 IRttCallback callback, boolean isCalledFromPrivilegedContext) {
+            mRttMetrics.recordRequest(workSource, request);
+
             if (isRequestorSpamming(workSource)) {
                 Log.w(TAG,
                         "Work source " + workSource + " is spamming, dropping request: " + request);
                 binder.unlinkToDeath(dr, 0);
                 try {
+                    mRttMetrics.recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_THROTTLE);
                     callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
                 } catch (RemoteException e) {
                     Log.e(TAG, "RttServiceSynchronized.queueRangingRequest: spamming, callback "
@@ -748,6 +786,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             if (!isAvailable()) {
                 Log.d(TAG, "RttServiceSynchronized.startRanging: disabled");
                 try {
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_RTT_NOT_AVAILABLE);
                     nextRequest.callback.onRangingFailure(
                             RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE);
                 } catch (RemoteException e) {
@@ -770,6 +810,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                 Log.w(TAG, "RttServiceSynchronized.startRanging: execution throttled - nextRequest="
                         + nextRequest + ", mRttRequesterInfo=" + mRttRequesterInfo);
                 try {
+                    mRttMetrics.recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_THROTTLE);
                     nextRequest.callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
                 } catch (RemoteException e) {
                     Log.e(TAG, "RttServiceSynchronized.startRanging: throttled, callback failed -- "
@@ -787,6 +828,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             } else {
                 Log.w(TAG, "RttServiceSynchronized.startRanging: native rangeRequest call failed");
                 try {
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_HAL_FAILURE);
                     nextRequest.callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
                 } catch (RemoteException e) {
                     Log.e(TAG, "RttServiceSynchronized.startRanging: HAL request failed, callback "
@@ -843,7 +886,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             // any is permitted (infrequent enough)
             boolean allowExecution = false;
             long mostRecentExecutionPermitted =
-                    mClock.getElapsedSinceBootMillis() - BACKGROUND_PROCESS_EXEC_GAP_MS;
+                    mClock.getElapsedSinceBootMillis() - mBackgroundProcessExecGapMs;
             if (allUidsInBackground) {
                 for (int i = 0; i < ws.size(); ++i) {
                     RttRequesterInfo info = mRttRequesterInfo.get(ws.get(i));
@@ -922,6 +965,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                 Log.w(TAG, "processAwarePeerHandles: request=" + request
                         + ": PeerHandles translated - but information still missing!?");
                 try {
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_AWARE_TRANSLATION_FAILURE);
                     request.callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
                 } catch (RemoteException e) {
                     Log.e(TAG, "processAwarePeerHandles: onRangingResults failure -- " + e);
@@ -948,6 +993,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                         "processAwarePeerHandles: exception while calling requestMacAddresses -- "
                                 + e1 + ", aborting request=" + request);
                 try {
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_AWARE_TRANSLATION_FAILURE);
                     request.callback.onRangingFailure(RangingResultCallback.STATUS_CODE_FAIL);
                 } catch (RemoteException e2) {
                     Log.e(TAG, "processAwarePeerHandles: onRangingResults failure -- " + e2);
@@ -1012,6 +1059,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                 if (permissionGranted) {
                     List<RangingResult> finalResults = postProcessResults(topOfQueueRequest.request,
                             results, topOfQueueRequest.isCalledFromPrivilegedContext);
+                    mRttMetrics.recordOverallStatus(WifiMetricsProto.WifiRttLog.OVERALL_SUCCESS);
+                    mRttMetrics.recordResult(topOfQueueRequest.request, results);
                     if (VDBG) {
                         Log.v(TAG, "RttServiceSynchronized.onRangingResults: finalResults="
                                 + finalResults);
@@ -1020,6 +1069,8 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
                 } else {
                     Log.w(TAG, "RttServiceSynchronized.onRangingResults: location permission "
                             + "revoked - not forwarding results");
+                    mRttMetrics.recordOverallStatus(
+                            WifiMetricsProto.WifiRttLog.OVERALL_LOCATION_PERMISSION_MISSING);
                     topOfQueueRequest.callback.onRangingFailure(
                             RangingResultCallback.STATUS_CODE_FAIL);
                 }
@@ -1112,6 +1163,7 @@ public class RttServiceImpl extends IWifiRttManager.Stub {
             pw.println("  mRttRequesterInfo: " + mRttRequesterInfo);
             pw.println("  mRttRequestQueue: " + mRttRequestQueue);
             pw.println("  mRangingTimeoutMessage: " + mRangingTimeoutMessage);
+            mRttMetrics.dump(fd, pw, args);
             mRttNative.dump(fd, pw, args);
         }
     }

@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import android.annotation.NonNull;
 import android.content.Context;
 import android.util.Base64;
 
@@ -78,6 +79,7 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     public static final int REPORT_REASON_SCAN_FAILURE              = 6;
     public static final int REPORT_REASON_USER_ACTION               = 7;
     public static final int REPORT_REASON_WIFINATIVE_FAILURE        = 8;
+    public static final int REPORT_REASON_NUD_FAILURE               = 9;
 
     /** number of bug reports to hold */
     public static final int MAX_BUG_REPORTS                         = 4;
@@ -101,30 +103,30 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     private boolean mIsLoggingEventHandlerRegistered;
     private WifiNative.RingBufferStatus[] mRingBuffers;
     private WifiNative.RingBufferStatus mPerPacketRingBuffer;
-    private WifiStateMachine mWifiStateMachine;
     private final BuildProperties mBuildProperties;
     private final WifiLog mLog;
     private final LastMileLogger mLastMileLogger;
     private final Runtime mJavaRuntime;
+    private final WifiMetrics mWifiMetrics;
     private int mMaxRingBufferSizeBytes;
     private WifiInjector mWifiInjector;
 
     public WifiDiagnostics(Context context, WifiInjector wifiInjector,
-                           WifiStateMachine wifiStateMachine, WifiNative wifiNative,
-                           BuildProperties buildProperties, LastMileLogger lastMileLogger) {
+                           WifiNative wifiNative, BuildProperties buildProperties,
+                           LastMileLogger lastMileLogger) {
         super(wifiNative);
         RING_BUFFER_BYTE_LIMIT_SMALL = context.getResources().getInteger(
                 R.integer.config_wifi_logger_ring_buffer_default_size_limit_kb) * 1024;
         RING_BUFFER_BYTE_LIMIT_LARGE = context.getResources().getInteger(
                 R.integer.config_wifi_logger_ring_buffer_verbose_size_limit_kb) * 1024;
 
-        mWifiStateMachine = wifiStateMachine;
         mBuildProperties = buildProperties;
         mIsLoggingEventHandlerRegistered = false;
         mMaxRingBufferSizeBytes = RING_BUFFER_BYTE_LIMIT_SMALL;
         mLog = wifiInjector.makeLog(TAG);
         mLastMileLogger = lastMileLogger;
         mJavaRuntime = wifiInjector.getJavaRuntime();
+        mWifiMetrics = wifiInjector.getWifiMetrics();
         mWifiInjector = wifiInjector;
     }
 
@@ -409,11 +411,9 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
         }
     }
 
-    synchronized void onWifiAlert(int errorCode, byte[] buffer) {
-        if (mWifiStateMachine != null) {
-            mWifiStateMachine.sendMessage(
-                    WifiStateMachine.CMD_FIRMWARE_ALERT, errorCode, 0, buffer);
-        }
+    synchronized void onWifiAlert(int errorCode, @NonNull byte[] buffer) {
+        captureAlertData(errorCode, buffer);
+        mWifiMetrics.incrementAlertReasonCount(errorCode);
     }
 
     private boolean isVerboseLoggingEnabled() {
@@ -548,6 +548,11 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     @VisibleForTesting
     LimitedCircularArray<BugReport> getBugReports() {
         return mLastBugReports;
+    }
+
+    @VisibleForTesting
+    LimitedCircularArray<BugReport> getAlertReports() {
+        return mLastAlerts;
     }
 
     private String compressToBase64(byte[] input) {

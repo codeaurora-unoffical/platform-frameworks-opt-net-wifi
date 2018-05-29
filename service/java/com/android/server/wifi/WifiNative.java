@@ -31,6 +31,7 @@ import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiWakeReasonAndCounts;
 import android.os.INetworkManagementService;
 import android.os.RemoteException;
+import android.net.wifi.WifiDppConfig;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
@@ -581,13 +582,22 @@ public class WifiNative {
         }
 
         // TODO(b/76219766): We may need to listen for link state changes in SoftAp mode.
+        /**
+         * Note: We should ideally listen to
+         * {@link BaseNetworkObserver#interfaceStatusChanged(String, boolean)} here. But, that
+         * callback is not working currently (broken in netd). So, instead listen to link state
+         * change callbacks as triggers to query the real interface state. We should get rid of
+         * this workaround if we get the |interfaceStatusChanged| callback to work in netd.
+         * Also, this workaround will not detect an interface up event, if the link state is
+         * still down.
+         */
         @Override
-        public void interfaceStatusChanged(String ifaceName, boolean isUp) {
+        public void interfaceLinkStateChanged(String ifaceName, boolean unusedIsLinkUp) {
             synchronized (mLock) {
                 final Iface ifaceWithId = mIfaceMgr.getIface(mInterfaceId);
                 if (ifaceWithId == null) {
                     if (mVerboseLoggingEnabled) {
-                        Log.v(TAG, "Received iface up/down notification on an invalid iface="
+                        Log.v(TAG, "Received iface link up/down notification on an invalid iface="
                                 + mInterfaceId);
                     }
                     return;
@@ -595,12 +605,47 @@ public class WifiNative {
                 final Iface ifaceWithName = mIfaceMgr.getIface(ifaceName);
                 if (ifaceWithName == null || ifaceWithName != ifaceWithId) {
                     if (mVerboseLoggingEnabled) {
-                        Log.v(TAG, "Received iface up/down notification on an invalid iface="
+                        Log.v(TAG, "Received iface link up/down notification on an invalid iface="
                                 + ifaceName);
                     }
                     return;
                 }
-                onInterfaceStateChanged(ifaceWithName, isUp);
+                onInterfaceStateChanged(ifaceWithName, isInterfaceUp(ifaceName));
+            }
+        }
+    }
+
+    /**
+     * Radio mode change handler for the Vendor HAL daemon.
+     */
+    private class VendorHalRadioModeChangeHandlerInternal
+            implements VendorHalRadioModeChangeEventHandler {
+        @Override
+        public void onMcc(int band) {
+            synchronized (mLock) {
+                Log.i(TAG, "Device is in MCC mode now");
+                mWifiMetrics.incrementNumRadioModeChangeToMcc();
+            }
+        }
+        @Override
+        public void onScc(int band) {
+            synchronized (mLock) {
+                Log.i(TAG, "Device is in SCC mode now");
+                mWifiMetrics.incrementNumRadioModeChangeToScc();
+            }
+        }
+        @Override
+        public void onSbs(int band) {
+            synchronized (mLock) {
+                Log.i(TAG, "Device is in SBS mode now");
+                mWifiMetrics.incrementNumRadioModeChangeToSbs();
+            }
+        }
+        @Override
+        public void onDbs() {
+            synchronized (mLock) {
+                Log.i(TAG, "Device is in DBS mode now");
+                mWifiMetrics.incrementNumRadioModeChangeToDbs();
             }
         }
     }
@@ -711,6 +756,8 @@ public class WifiNative {
                 Log.e(TAG, "Failed to initialize wificond");
                 return false;
             }
+            mWifiVendorHal.registerRadioModeChangeHandler(
+                    new VendorHalRadioModeChangeHandlerInternal());
             return true;
         }
     }
@@ -902,6 +949,7 @@ public class WifiNative {
     }
 
     /**
+     *
      * Check if the interface is up or down.
      *
      * @param ifaceName Name of the interface.
@@ -1439,6 +1487,17 @@ public class WifiNative {
     }
 
     /**
+     * Get capabilities from driver
+     *
+     * @param ifaceName Name of the interface.
+     * @param capaType which driver capability to get, ex. key_mgmt
+     * @return String of capabilities fetched from driver.
+     */
+     public String getCapabilities(@NonNull String ifaceName, String capaType) {
+         return mSupplicantStaIfaceHal.getCapabilities(ifaceName, capaType);
+    }
+
+    /**
      * Set country code.
      *
      * @param ifaceName Name of the interface.
@@ -1447,6 +1506,26 @@ public class WifiNative {
      */
     public boolean setCountryCode(@NonNull String ifaceName, String countryCode) {
         return mSupplicantStaIfaceHal.setCountryCode(ifaceName, countryCode);
+    }
+
+    /**
+     * Flush all previously configured HLPs.
+     *
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean flushAllHlp(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.flushAllHlp(ifaceName);
+    }
+
+    /**
+     * Set FILS HLP packet.
+     *
+     * @param dst Destination MAC address.
+     * @param hlpPacket Hlp Packet data in hex.
+     * @return true if request is sent successfully, false otherwise.
+     */
+    public boolean addHlpReq(@NonNull String ifaceName, String dst, String hlpPacket) {
+        return mSupplicantStaIfaceHal.addHlpReq(ifaceName, dst, hlpPacket);
     }
 
     /**
@@ -1871,6 +1950,45 @@ public class WifiNative {
     }
 
     /**
+     * Callback to notify when vendor HAL detects that a change in radio mode.
+     */
+    public interface VendorHalRadioModeChangeEventHandler {
+        /**
+         * Invoked when the vendor HAL detects a change to MCC mode.
+         * MCC (Multi channel concurrency) = Multiple interfaces are active on the same band,
+         * different channels, same radios.
+         *
+         * @param band Band on which MCC is detected (specified by one of the
+         *             WifiScanner.WIFI_BAND_* constants)
+         */
+        void onMcc(int band);
+        /**
+         * Invoked when the vendor HAL detects a change to SCC mode.
+         * SCC (Single channel concurrency) = Multiple interfaces are active on the same band, same
+         * channels, same radios.
+         *
+         * @param band Band on which SCC is detected (specified by one of the
+         *             WifiScanner.WIFI_BAND_* constants)
+         */
+        void onScc(int band);
+        /**
+         * Invoked when the vendor HAL detects a change to SBS mode.
+         * SBS (Single Band Simultaneous) = Multiple interfaces are active on the same band,
+         * different channels, different radios.
+         *
+         * @param band Band on which SBS is detected (specified by one of the
+         *             WifiScanner.WIFI_BAND_* constants)
+         */
+        void onSbs(int band);
+        /**
+         * Invoked when the vendor HAL detects a change to DBS mode.
+         * DBS (Dual Band Simultaneous) = Multiple interfaces are active on the different bands,
+         * different channels, different radios.
+         */
+        void onDbs();
+    }
+
+    /**
      * Tests whether the HAL is running or not
      */
     public boolean isHalStarted() {
@@ -2185,12 +2303,22 @@ public class WifiNative {
     /**
      * Installs an APF program on this iface, replacing any existing program.
      *
-     * @param ifaceName Name of the interface.
+     * @param ifaceName Name of the interface
      * @param filter is the android packet filter program
      * @return true for success
      */
     public boolean installPacketFilter(@NonNull String ifaceName, byte[] filter) {
         return mWifiVendorHal.installPacketFilter(ifaceName, filter);
+    }
+
+    /**
+     * Reads the APF program and data buffer for this iface.
+     *
+     * @param ifaceName Name of the interface
+     * @return the buffer returned by the driver, or null in case of an error
+     */
+    public byte[] readPacketFilter(@NonNull String ifaceName) {
+        return mWifiVendorHal.readPacketFilter(ifaceName);
     }
 
     /**
@@ -2771,5 +2899,131 @@ public class WifiNative {
         } else {
             return "*** failed to read kernel log ***";
         }
+    }
+
+    /**
+     * Add the DPP bootstrap info obtained from QR code.
+     *
+     * @param ifaceName Name of the interface.
+     * @param channel Channel for communicating with the state machine
+     * @param uri:The URI obtained from the QR code.
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int dppAddBootstrapQrCode(@NonNull String ifaceName, String uri) {
+        return mSupplicantStaIfaceHal.dppAddBootstrapQrCode(ifaceName, uri);
+    }
+
+    /**
+     * Generate bootstrap URI based on the passed arguments
+     *
+     * @param ifaceName Name of the interface.
+     * @param config – bootstrap generate config
+     *
+     * @return: Handle to strored URI info else -1 on failure
+     */
+    public int dppBootstrapGenerate(@NonNull String ifaceName, WifiDppConfig config) {
+        return mSupplicantStaIfaceHal.dppBootstrapGenerate(ifaceName, config);
+    }
+
+    /**
+     * Get bootstrap URI based on bootstrap ID
+     *
+     * @param ifaceName Name of the interface.
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: URI string else -1 on failure
+     */
+    public String dppGetUri(@NonNull String ifaceName, int bootstrap_id) {
+        return mSupplicantStaIfaceHal.dppGetUri(ifaceName, bootstrap_id);
+    }
+
+    /**
+     * Remove bootstrap URI based on bootstrap ID.
+     *
+     * @param ifaceName Name of the interface.
+     * @param bootstrap_id: Stored bootstrap ID
+     *
+     * @return: 0 – Success or -1 on failure
+     */
+    public int dppBootstrapRemove(@NonNull String ifaceName, int bootstrap_id) {
+        return mSupplicantStaIfaceHal.dppBootstrapRemove(ifaceName, bootstrap_id);
+    }
+
+    /**
+     * start listen on the channel specified waiting to receive
+     * the DPP Authentication request.
+     *
+     * @param ifaceName Name of the interface.
+     * @param frequency: DPP listen frequency
+     * @param dpp_role: Configurator/Enrollee role
+     * @param qr_mutual: Mutual authentication required
+     * @param netrole_ap: network role
+     *
+     * @return: Returns 0 if a DPP-listen work is successfully
+     *  queued and -1 on failure.
+     */
+    public int dppListen(@NonNull String ifaceName, String frequency, int dpp_role,
+                         boolean qr_mutual, boolean netrole_ap) {
+        return mSupplicantStaIfaceHal.dppListen(ifaceName, frequency, dpp_role, qr_mutual, netrole_ap);
+    }
+
+    /**
+     * stop ongoing dpp listen.
+     *
+     * @param ifaceName Name of the interface.
+     */
+    public boolean dppStopListen(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.dppStopListen(ifaceName);
+    }
+
+    /**
+     * Adds the DPP configurator
+     *
+     * @param ifaceName Name of the interface.
+     * @param curve curve used for dpp encryption
+     * @param key private key
+     * @param expiry timeout in seconds
+     *
+     * @return: Identifier of the added configurator or -1 on failure
+     */
+    public int dppConfiguratorAdd(@NonNull String ifaceName, String curve, String key, int expiry) {
+        return mSupplicantStaIfaceHal.dppConfiguratorAdd(ifaceName, curve, key, expiry);
+    }
+
+    /**
+     * Remove the added configurator through dppConfiguratorAdd.
+     *
+     * @param ifaceName Name of the interface.
+     * @param config_id: DPP Configurator ID
+     *
+     * @return: Handle to strored info else -1 on failure
+     */
+    public int dppConfiguratorRemove(@NonNull String ifaceName, int config_id) {
+        return mSupplicantStaIfaceHal.dppConfiguratorRemove(ifaceName, config_id);
+    }
+
+    /**
+     * Start DPP authentication and provisioning with the specified peer
+     *
+     * @param ifaceName Name of the interface.
+     * @param config – dpp auth init config
+     *
+     * @return: 0 if DPP Authentication request was transmitted and -1 on failure
+     */
+    public int  dppStartAuth(@NonNull String ifaceName, WifiDppConfig config) {
+        return mSupplicantStaIfaceHal.dppStartAuth(ifaceName, config);
+    }
+
+    /**
+     * Retrieve Private key to be used for configurator
+     *
+     * @param ifaceName Name of the interface.
+     * @param id: id of configurator object
+     *
+     * @return: Key string else -1 on failure
+     */
+    public String dppConfiguratorGetKey(@NonNull String ifaceName, int id) {
+        return mSupplicantStaIfaceHal.dppConfiguratorGetKey(ifaceName, id);
     }
 }
