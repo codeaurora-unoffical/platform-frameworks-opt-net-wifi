@@ -38,6 +38,9 @@ import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintWriter;
+
 /**
  * Unit tests for {@link com.android.server.wifi.WifiStateMachinePrime}.
  */
@@ -62,6 +65,7 @@ public class WifiStateMachinePrimeTest {
     @Mock IBatteryStats mBatteryStats;
     @Mock SelfRecovery mSelfRecovery;
     @Mock BaseWifiDiagnostics mWifiDiagnostics;
+    @Mock ScanRequestProxy mScanRequestProxy;
     ClientModeManager.Listener mClientListener;
     ScanOnlyModeManager.Listener mScanOnlyListener;
     ScanOnlyModeCallback mScanOnlyCallback = new ScanOnlyModeCallback();
@@ -85,7 +89,8 @@ public class WifiStateMachinePrimeTest {
         mLooper = new TestLooper();
 
         when(mWifiInjector.getSelfRecovery()).thenReturn(mSelfRecovery);
-        when(mWifiInjector.makeWifiDiagnostics(eq(mWifiNative))).thenReturn(mWifiDiagnostics);
+        when(mWifiInjector.getWifiDiagnostics()).thenReturn(mWifiDiagnostics);
+        when(mWifiInjector.getScanRequestProxy()).thenReturn(mScanRequestProxy);
 
         mWifiStateMachinePrime = createWifiStateMachinePrime();
         mLooper.dispatchAll();
@@ -580,5 +585,94 @@ public class WifiStateMachinePrimeTest {
         verify(mWifiDiagnostics, never()).captureBugReportData(
                 WifiDiagnostics.REPORT_REASON_WIFINATIVE_FAILURE);
         verify(mSelfRecovery, never()).trigger(eq(SelfRecovery.REASON_WIFINATIVE_FAILURE));
+    }
+
+    /**
+     * Verify that mode stop is safe even if the underlying Client mode exited already.
+     */
+    @Test
+    public void shutdownWifiDoesNotCrashWhenClientModeExitsOnDestroyed() throws Exception {
+        enterClientModeActiveState();
+
+        mClientListener.onStateChanged(WifiManager.WIFI_STATE_DISABLED);
+        mLooper.dispatchAll();
+
+        mWifiStateMachinePrime.shutdownWifi();
+
+        assertEquals(WifiManager.WIFI_STATE_DISABLED, mClientModeCallback.currentState);
+    }
+
+    /**
+     * Verify that an interface destruction callback is safe after already having been stopped.
+     */
+    @Test
+    public void onDestroyedCallbackDoesNotCrashWhenClientModeAlreadyStopped() throws Exception {
+        enterClientModeActiveState();
+
+        mWifiStateMachinePrime.shutdownWifi();
+
+        mClientListener.onStateChanged(WifiManager.WIFI_STATE_DISABLED);
+        mLooper.dispatchAll();
+
+        assertEquals(WifiManager.WIFI_STATE_DISABLED, mClientModeCallback.currentState);
+    }
+
+    /**
+     * Verify that mode stop is safe even if the underlying softap mode exited already.
+     */
+    @Test
+    public void shutdownWifiDoesNotCrashWhenSoftApExitsOnDestroyed() throws Exception {
+        enterSoftApActiveMode();
+
+        mSoftApManagerCallback.onStateChanged(WifiManager.WIFI_AP_STATE_DISABLED, 0);
+        mLooper.dispatchAll();
+
+        mWifiStateMachinePrime.shutdownWifi();
+
+        verify(mSoftApStateMachineCallback).onStateChanged(WifiManager.WIFI_AP_STATE_DISABLED, 0);
+    }
+
+    /**
+     * Verify that an interface destruction callback is safe after already having been stopped.
+     */
+    @Test
+    public void onDestroyedCallbackDoesNotCrashWhenSoftApModeAlreadyStopped() throws Exception {
+        enterSoftApActiveMode();
+
+        mWifiStateMachinePrime.shutdownWifi();
+
+        mSoftApManagerCallback.onStateChanged(WifiManager.WIFI_AP_STATE_DISABLED, 0);
+        mLooper.dispatchAll();
+
+        verify(mSoftApStateMachineCallback).onStateChanged(WifiManager.WIFI_AP_STATE_DISABLED, 0);
+    }
+
+    /**
+     * Verify that we do not crash when calling dump and wifi is fully disabled.
+     */
+    @Test
+    public void dumpWhenWifiFullyOffDoesNotCrash() throws Exception {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        PrintWriter writer = new PrintWriter(stream);
+        mWifiStateMachinePrime.dump(null, writer, null);
+    }
+
+    /**
+     * Verify that we trigger dump on active mode managers.
+     */
+    @Test
+    public void dumpCallsActiveModeManagers() throws Exception {
+        enterSoftApActiveMode();
+        enterClientModeActiveState();
+        enterScanOnlyModeActiveState();
+
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        PrintWriter writer = new PrintWriter(stream);
+        mWifiStateMachinePrime.dump(null, writer, null);
+
+        verify(mSoftApManager).dump(eq(null), eq(writer), eq(null));
+        // can only be in scan or client, so we should not have a client mode active
+        verify(mClientModeManager, never()).dump(eq(null), eq(writer), eq(null));
+        verify(mScanOnlyModeManager).dump(eq(null), eq(writer), eq(null));
     }
 }

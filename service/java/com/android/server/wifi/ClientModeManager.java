@@ -31,6 +31,9 @@ import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
 import com.android.server.wifi.WifiNative.InterfaceCallback;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
+
 /**
  * Manager WiFi in Client Mode where we connect to configured networks.
  */
@@ -48,7 +51,7 @@ public class ClientModeManager implements ActiveModeManager {
     private final WifiStateMachine mWifiStateMachine;
 
     private String mClientInterfaceName;
-    private boolean mIfaceIsUp;
+    private boolean mIfaceIsUp = false;
 
     ClientModeManager(Context context, @NonNull Looper looper, WifiNative wifiNative,
             Listener listener, WifiMetrics wifiMetrics, ScanRequestProxy scanRequestProxy,
@@ -73,8 +76,7 @@ public class ClientModeManager implements ActiveModeManager {
      * Disconnect from any currently connected networks and stop client mode.
      */
     public void stop() {
-        IState currentState = mStateMachine.getCurrentState();
-        Log.d(TAG, " currentstate: " + currentState);
+        Log.d(TAG, " currentstate: " + getCurrentStateName());
         if (mClientInterfaceName != null) {
             if (mIfaceIsUp) {
                 updateWifiState(WifiManager.WIFI_STATE_DISABLING,
@@ -88,6 +90,17 @@ public class ClientModeManager implements ActiveModeManager {
     }
 
     /**
+     * Dump info about this ClientMode manager.
+     */
+    public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
+        pw.println("--Dump of ClientModeManager--");
+
+        pw.println("current StateMachine mode: " + getCurrentStateName());
+        pw.println("mClientInterfaceName: " + mClientInterfaceName);
+        pw.println("mIfaceIsUp: " + mIfaceIsUp);
+    }
+
+    /**
      * Listener for ClientMode state changes.
      */
     public interface Listener {
@@ -96,6 +109,16 @@ public class ClientModeManager implements ActiveModeManager {
          * @param state new wifi state
          */
         void onStateChanged(int state);
+    }
+
+    private String getCurrentStateName() {
+        IState currentState = mStateMachine.getCurrentState();
+
+        if (currentState != null) {
+            return currentState.getName();
+        }
+
+        return "StateMachine not active";
     }
 
     /**
@@ -133,6 +156,13 @@ public class ClientModeManager implements ActiveModeManager {
             @Override
             public void onDestroyed(String ifaceName) {
                 if (mClientInterfaceName != null && mClientInterfaceName.equals(ifaceName)) {
+                    Log.d(TAG, "STA iface " + ifaceName + " was destroyed, stopping client mode");
+
+                    // we must immediately clean up state in WSM to unregister all client mode
+                    // related objects
+                    // Note: onDestroyed is only called from the WSM thread
+                    mWifiStateMachine.handleIfaceDestroyed();
+
                     sendMessage(CMD_INTERFACE_DESTROYED);
                 }
             }
@@ -189,6 +219,8 @@ public class ClientModeManager implements ActiveModeManager {
                             break;
                         }
                         sendScanAvailableBroadcast(false);
+                        mScanRequestProxy.enableScanningForHiddenNetworks(false);
+                        mScanRequestProxy.clearScanResults();
                         transitionTo(mStartedState);
                         break;
                     default:
@@ -258,6 +290,7 @@ public class ClientModeManager implements ActiveModeManager {
 
                         updateWifiState(WifiManager.WIFI_STATE_DISABLING,
                                         WifiManager.WIFI_STATE_ENABLED);
+                        mClientInterfaceName = null;
                         transitionTo(mIdleState);
                         break;
                     default:
@@ -267,24 +300,20 @@ public class ClientModeManager implements ActiveModeManager {
             }
 
             /**
-             * Clean up state, unregister listeners and send broadcast to tell WifiScanner
-             * that wifi is disabled.
+             * Clean up state, unregister listeners and update wifi state.
              */
             @Override
             public void exit() {
-                if (mClientInterfaceName == null) {
-                    return;
-                }
                 mWifiStateMachine.setOperationalMode(WifiStateMachine.DISABLED_MODE, null);
-                mWifiNative.teardownInterface(mClientInterfaceName);
-                // let WifiScanner know that wifi is down.
-                sendScanAvailableBroadcast(false);
+
+                if (mClientInterfaceName != null) {
+                    mWifiNative.teardownInterface(mClientInterfaceName);
+                    mClientInterfaceName = null;
+                    mIfaceIsUp = false;
+                }
+
                 updateWifiState(WifiManager.WIFI_STATE_DISABLED,
                                 WifiManager.WIFI_STATE_DISABLING);
-                mScanRequestProxy.enableScanningForHiddenNetworks(false);
-                mScanRequestProxy.clearScanResults();
-                mClientInterfaceName = null;
-                mIfaceIsUp = false;
             }
         }
 
