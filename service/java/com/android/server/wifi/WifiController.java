@@ -680,6 +680,7 @@ public class WifiController extends StateMachine {
             if (DBG) {
                 Slog.d(TAG, "QcStaEnablingState enter");
             }
+            mWifiStateMachine.setOperationalMode(WifiStateMachine.CONNECT_MODE);
             mWifiStateMachine.setSupplicantRunning(true);
         }
 
