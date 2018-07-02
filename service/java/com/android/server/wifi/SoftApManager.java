@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.database.ContentObserver;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -37,6 +38,7 @@ import android.util.Log;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.IState;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
@@ -47,7 +49,9 @@ import com.android.server.wifi.util.ApConfigUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.stream.Stream;
 
 /**
  * Manage WiFi in AP mode.
@@ -88,6 +92,7 @@ public class SoftApManager implements ActiveModeManager {
 
     private int mNumAssociatedStations = 0;
     private boolean mTimeoutEnabled = false;
+    private String[] mdualApInterfaces;
 
     /**
      * Listener for soft AP events.
@@ -129,6 +134,7 @@ public class SoftApManager implements ActiveModeManager {
             mApConfig = config;
         }
         mWifiMetrics = wifiMetrics;
+        mdualApInterfaces = new String[2];
         mStateMachine = new SoftApStateMachine(looper);
     }
 
@@ -265,6 +271,10 @@ public class SoftApManager implements ActiveModeManager {
      * Teardown soft AP and teardown the interface.
      */
     private void stopSoftAp() {
+        if (mWifiApConfigStore.getDualSapStatus()) {
+            mWifiNative.teardownInterface(mdualApInterfaces[0]);
+            mWifiNative.teardownInterface(mdualApInterfaces[1]);
+        }
         mWifiNative.teardownInterface(mApInterfaceName);
         Log.d(TAG, "Soft AP is stopped");
     }
@@ -306,6 +316,75 @@ public class SoftApManager implements ActiveModeManager {
             }
         };
 
+        private final InterfaceCallback mWifiNativeDualIfaceCallback = new InterfaceCallback() {
+            @Override
+            public void onDestroyed(String ifaceName) { }
+
+            @Override
+            public void onUp(String ifaceName) { }
+
+            @Override
+            public void onDown(String ifaceName) { }
+        };
+
+        /**
+         * Start Dual soft AP.
+         */
+        private boolean setupForDualSoftApMode(WifiConfiguration config) {
+            mdualApInterfaces[0] = mWifiNative.setupInterfaceForSoftApMode(
+                    mWifiNativeDualIfaceCallback);
+            mdualApInterfaces[1] = mWifiNative.setupInterfaceForSoftApMode(
+                    mWifiNativeDualIfaceCallback);
+
+            String bridgeIfacename = mWifiNative.setupInterfaceForBridgeMode(
+                    mWifiNativeInterfaceCallback);
+
+            mApInterfaceName = bridgeIfacename;
+            if (TextUtils.isEmpty(mdualApInterfaces[0]) ||
+                    TextUtils.isEmpty(mdualApInterfaces[1]) ||
+                    TextUtils.isEmpty(mApInterfaceName)) {
+                Log.e(TAG, "setup failure when creating dual ap interface(s).");
+                updateApState(WifiManager.WIFI_AP_STATE_FAILED,
+                        WifiManager.WIFI_AP_STATE_DISABLED,
+                        WifiManager.SAP_START_FAILURE_GENERAL);
+                mWifiMetrics.incrementSoftApStartResult(false,
+                        WifiManager.SAP_START_FAILURE_GENERAL);
+                return false;
+            }
+            updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
+                    WifiManager.WIFI_AP_STATE_DISABLED, 0);
+
+            WifiConfiguration localConfig = new WifiConfiguration(config);
+            mApInterfaceName = mdualApInterfaces[0];
+            localConfig.apBand =  WifiConfiguration.AP_BAND_2GHZ;
+            int result = startSoftAp(localConfig);
+            if (result == SUCCESS) {
+                localConfig.apBand =  WifiConfiguration.AP_BAND_5GHZ;
+                mApInterfaceName = mdualApInterfaces[1];
+                result = startSoftAp(localConfig);
+            }
+
+            mApInterfaceName = bridgeIfacename;
+            if (result != SUCCESS) {
+                int failureReason = WifiManager.SAP_START_FAILURE_GENERAL;
+                if (result == ERROR_NO_CHANNEL) {
+                    failureReason = WifiManager.SAP_START_FAILURE_NO_CHANNEL;
+                }
+                updateApState(WifiManager.WIFI_AP_STATE_FAILED,
+                              WifiManager.WIFI_AP_STATE_ENABLING,
+                              failureReason);
+                stopSoftAp();
+                mWifiMetrics.incrementSoftApStartResult(false, failureReason);
+                return false;
+            }
+            if (!mWifiNative.setHostapdParams("softap bridge up " +mApInterfaceName)) {
+               Log.e(TAG, "Failed to set interface up " +mApInterfaceName);
+               return false;
+            }
+
+            return true;
+        }
+
         SoftApStateMachine(Looper looper) {
             super(TAG, looper);
 
@@ -327,6 +406,16 @@ public class SoftApManager implements ActiveModeManager {
             public boolean processMessage(Message message) {
                 switch (message.what) {
                     case CMD_START:
+                        WifiConfiguration config = (WifiConfiguration) message.obj;
+                        if (config != null && config.apBand == WifiConfiguration.AP_BAND_DUAL) {
+                            if (!setupForDualSoftApMode(config)) {
+                                Log.d(TAG, "Dual Sap start failed");
+                                break;
+                            }
+                            transitionTo(mStartedState);
+                            break;
+                        }
+
                         mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
                                 mWifiNativeInterfaceCallback);
                         if (TextUtils.isEmpty(mApInterfaceName)) {
@@ -510,6 +599,7 @@ public class SoftApManager implements ActiveModeManager {
                         WifiManager.WIFI_AP_STATE_DISABLING, 0);
                 mApInterfaceName = null;
                 mIfaceIsUp = false;
+                mStateMachine.quitNow();
             }
 
             @Override
@@ -530,6 +620,29 @@ public class SoftApManager implements ActiveModeManager {
                                 + " Bandwidth: " + mReportedBandwidth);
                         mWifiMetrics.addSoftApChannelSwitchedEvent(mReportedFrequency,
                                 mReportedBandwidth, mMode);
+                        int[] allowedChannels = new int[0];
+                        if (mApConfig.apBand == WifiConfiguration.AP_BAND_2GHZ) {
+                            allowedChannels =
+                                    mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_24_GHZ);
+                        } else if (mApConfig.apBand == WifiConfiguration.AP_BAND_5GHZ) {
+                            allowedChannels =
+                                    mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
+                        } else if (mApConfig.apBand == WifiConfiguration.AP_BAND_ANY) {
+                            int[] allowed2GChannels =
+                                    mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_24_GHZ);
+                            int[] allowed5GChannels =
+                                    mWifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
+                            allowedChannels = Stream.concat(
+                                    Arrays.stream(allowed2GChannels).boxed(),
+                                    Arrays.stream(allowed5GChannels).boxed())
+                                    .mapToInt(Integer::valueOf)
+                                    .toArray();
+                        }
+                        if (!ArrayUtils.contains(allowedChannels, mReportedFrequency)) {
+                            Log.e(TAG, "Channel does not satisfy user band preference: "
+                                    + mReportedFrequency);
+                            mWifiMetrics.incrementNumSoftApUserBandPreferenceUnsatisfied();
+                        }
                         break;
                     case CMD_TIMEOUT_TOGGLE_CHANGED:
                         boolean isEnabled = (message.arg1 == 1);
