@@ -21,6 +21,7 @@ import android.content.Context;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.KeyMgmt;
 import android.os.Environment;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -63,6 +64,9 @@ public class WifiApConfigStore {
     @VisibleForTesting
     static final int PSK_MAX_LEN = 63;
 
+    @VisibleForTesting
+    static final int AP_CHANNEL_DEFAULT = 0;
+
     private WifiConfiguration mWifiApConfig = null;
 
     private ArrayList<Integer> mAllowed2GChannel = null;
@@ -70,6 +74,12 @@ public class WifiApConfigStore {
     private final Context mContext;
     private final String mApConfigFile;
     private final BackupManagerProxy mBackupManagerProxy;
+    private boolean mRequiresApBandConversion = false;
+
+    // Dual SAP config
+    private String mBridgeInterfaceName = null;
+    private boolean mDualSapStatus = false;
+
 
     WifiApConfigStore(Context context, BackupManagerProxy backupManagerProxy) {
         this(context, backupManagerProxy, DEFAULT_AP_CONFIG_FILE);
@@ -94,6 +104,9 @@ public class WifiApConfigStore {
             }
         }
 
+        mRequiresApBandConversion = mContext.getResources().getBoolean(
+                R.bool.config_wifi_convert_apband_5ghz_to_any);
+
         /* Load AP configuration from persistent storage. */
         mWifiApConfig = loadApConfiguration(mApConfigFile);
         if (mWifiApConfig == null) {
@@ -104,12 +117,36 @@ public class WifiApConfigStore {
             /* Save the default configuration to persistent storage. */
             writeApConfiguration(mApConfigFile, mWifiApConfig);
         }
+
+        mBridgeInterfaceName = SystemProperties
+                .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
     }
+
+   /* Additional APIs(get/set) to support SAP + SAP Feature */
+
+    public synchronized String getBridgeInterface() {
+        return mBridgeInterfaceName;
+    }
+
+    public synchronized boolean getDualSapStatus() {
+        return mDualSapStatus;
+    }
+
+    public synchronized void setDualSapStatus(boolean enable) {
+        mDualSapStatus = enable;
+    }
+
 
     /**
      * Return the current soft access point configuration.
      */
     public synchronized WifiConfiguration getApConfiguration() {
+        WifiConfiguration config = apBandCheckConvert(mWifiApConfig);
+        if (mWifiApConfig != config) {
+            Log.d(TAG, "persisted config was converted, need to resave it");
+            mWifiApConfig = config;
+            persistConfigAndTriggerBackupManagerProxy(mWifiApConfig);
+        }
         return mWifiApConfig;
     }
 
@@ -123,16 +160,43 @@ public class WifiApConfigStore {
         if (config == null) {
             mWifiApConfig = getDefaultApConfiguration();
         } else {
-            mWifiApConfig = config;
+            mWifiApConfig = apBandCheckConvert(config);
         }
-        writeApConfiguration(mApConfigFile, mWifiApConfig);
-
-        // Stage the backup of the SettingsProvider package which backs this up
-        mBackupManagerProxy.notifyDataChanged();
+        persistConfigAndTriggerBackupManagerProxy(mWifiApConfig);
     }
 
     public ArrayList<Integer> getAllowed2GChannel() {
         return mAllowed2GChannel;
+    }
+
+    private WifiConfiguration apBandCheckConvert(WifiConfiguration config) {
+        if (mRequiresApBandConversion) {
+            // some devices are unable to support 5GHz only operation, check for 5GHz and
+            // move to ANY if apBand conversion is required.
+            if (config.apBand == WifiConfiguration.AP_BAND_5GHZ) {
+                Log.w(TAG, "Supplied ap config band was 5GHz only, converting to ANY");
+                WifiConfiguration convertedConfig = new WifiConfiguration(config);
+                convertedConfig.apBand = WifiConfiguration.AP_BAND_ANY;
+                convertedConfig.apChannel = AP_CHANNEL_DEFAULT;
+                return convertedConfig;
+            }
+        } else {
+            // this is a single mode device, we do not support ANY.  Convert all ANY to 5GHz
+            if (config.apBand == WifiConfiguration.AP_BAND_ANY) {
+                Log.w(TAG, "Supplied ap config band was ANY, converting to 5GHz");
+                WifiConfiguration convertedConfig = new WifiConfiguration(config);
+                convertedConfig.apBand = WifiConfiguration.AP_BAND_5GHZ;
+                convertedConfig.apChannel = AP_CHANNEL_DEFAULT;
+                return convertedConfig;
+            }
+        }
+        return config;
+    }
+
+    private void persistConfigAndTriggerBackupManagerProxy(WifiConfiguration config) {
+        writeApConfiguration(mApConfigFile, mWifiApConfig);
+        // Stage the backup of the SettingsProvider package which backs this up
+        mBackupManagerProxy.notifyDataChanged();
     }
 
     /**

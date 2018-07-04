@@ -51,7 +51,8 @@ public class WifiConfigurationUtil {
      */
     private static final int ENCLOSING_QUTOES_LEN = 2;
     private static final int SSID_UTF_8_MIN_LEN = 1 + ENCLOSING_QUTOES_LEN;
-    private static final int SSID_UTF_8_MAX_LEN = 32 + ENCLOSING_QUTOES_LEN;
+    private static final int SSID_UTF_8_MAX_LEN = // wifigbk++
+                        WifiGbk.MAX_SSID_UTF_LENGTH + ENCLOSING_QUTOES_LEN;
     private static final int SSID_HEX_MIN_LEN = 2;
     private static final int SSID_HEX_MAX_LEN = 64;
     private static final int PSK_ASCII_MIN_LEN = 8 + ENCLOSING_QUTOES_LEN;
@@ -202,6 +203,9 @@ public class WifiConfigurationUtil {
                     != newEnterpriseConfig.getPhase2Method()) {
                 return true;
             }
+            if (getEapSimNum(existingEnterpriseConfig) != getEapSimNum(newEnterpriseConfig)){
+                return true;
+            }
             if (!TextUtils.equals(existingEnterpriseConfig.getIdentity(),
                                   newEnterpriseConfig.getIdentity())
                     || !TextUtils.equals(existingEnterpriseConfig.getAnonymousIdentity(),
@@ -224,6 +228,15 @@ public class WifiConfigurationUtil {
             }
         }
         return false;
+    }
+
+    public static int getEapSimNum(WifiEnterpriseConfig enterpriseConfig){
+        int mSimNum =0;
+        if (enterpriseConfig.getSimNum() != null
+                             && !enterpriseConfig.getSimNum().isEmpty()) {
+            mSimNum = Integer.parseInt(enterpriseConfig.getSimNum());
+        }
+        return mSimNum;
     }
 
     /**
