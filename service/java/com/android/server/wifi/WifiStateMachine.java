@@ -273,6 +273,27 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
     private boolean mDisconnectOnlyOnInitialIpReachability = false;
     private boolean mDriverRoaming = false;
 
+    private final BroadcastReceiver br = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            Log.d(TAG, "delayed disconnect cancelled. disconnecting...");
+            if (hasMessages(CMD_STOP_SUPPLICANT)) {
+                /* remove delayed CMD_STOP_SUPPLICANT */
+                removeMessages(CMD_STOP_SUPPLICANT);
+                /* send CMD_STOP_SUPPLICANT message with no delay */
+                sendMessage(CMD_STOP_SUPPLICANT);
+            } else if (hasMessages(CMD_DISCONNECT)) {
+                /* remove delayed CMD_DISCONNECT */
+                removeMessages(CMD_DISCONNECT);
+                /* send CMD_DISCONNECT message with no delay */
+                sendMessage(CMD_DISCONNECT);
+                /* Need this to transition the State Machine to ScanOnlyMode state */
+                deferMessage(obtainMessage(CMD_SET_OPERATIONAL_MODE,
+                                 SCAN_ONLY_WITH_WIFI_OFF_MODE, 0));
+            }
+        }
+    };
+
     @Override
     public void onRssiThresholdBreached(byte curRssi) {
         if (mVerboseLoggingEnabled) {
@@ -1810,24 +1831,34 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
         if (enable) {
             sendMessage(CMD_START_SUPPLICANT);
         } else {
-            mDisconnectDelayDuration = -1;
-            try {
-                mDisconnectDelayDuration = Settings.Secure.getInt(mContext.getContentResolver(),
-                        WIFI_DISCONNECT_DELAY_DURATION,0) ;
-            } catch (NumberFormatException ex) {
-                mDisconnectDelayDuration = 0;
-                Log.e(TAG, " get mDisconnectDelayDuration caught exception ");
-            }
-            if ((mDisconnectDelayDuration > 0) && (mNetworkInfo.getState()
-                    == NetworkInfo.State.CONNECTED)) {
-                Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
-                mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-                Log.e(TAG, " Disconnection delayed by  " + mDisconnectDelayDuration + " seconds");
+            if (advertiseDelayDisconnect()) {
                 sendMessageDelayed(CMD_STOP_SUPPLICANT, mDisconnectDelayDuration * 1000);
             } else {
                 sendMessage(CMD_STOP_SUPPLICANT);
             }
         }
+    }
+
+    private boolean advertiseDelayDisconnect() {
+        mDisconnectDelayDuration = -1;
+        try {
+            mDisconnectDelayDuration = Settings.Secure.getInt(mContext.getContentResolver(),
+                    WIFI_DISCONNECT_DELAY_DURATION,0) ;
+        } catch (NumberFormatException ex) {
+            mDisconnectDelayDuration = 0;
+            Log.e(TAG, " get mDisconnectDelayDuration caught exception ");
+        }
+
+        if ((mDisconnectDelayDuration > 0) && (mNetworkInfo.getState()
+                == NetworkInfo.State.CONNECTED)) {
+            Intent intent = new Intent(WifiManager.ACTION_WIFI_DISCONNECT_IN_PROGRESS);
+            mContext.sendOrderedBroadcastAsUser(intent,
+                     UserHandle.ALL, null, br, getHandler(), 0, null, null);
+            Log.d(TAG, " Disconnection delayed by  " + mDisconnectDelayDuration + " seconds");
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -6205,8 +6236,13 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
                     if (message.arg1 != CONNECT_MODE) {
-                        sendMessage(CMD_DISCONNECT);
-                        deferMessage(message);
+                        if ((message.arg1 == SCAN_ONLY_WITH_WIFI_OFF_MODE)
+                                && advertiseDelayDisconnect()) {
+                            sendMessageDelayed(CMD_DISCONNECT, mDisconnectDelayDuration * 1000);
+                        } else {
+                            sendMessage(CMD_DISCONNECT);
+                            deferMessage(message);
+                        }
                     }
                     break;
                     /* Ignore connection to same network */
