@@ -174,6 +174,8 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private WifiTrafficPoller mTrafficPoller;
     /* Tracks the persisted states for wi-fi & airplane mode */
     final WifiSettingsStore mSettingsStore;
+
+    private boolean mIsControllerStarted = false;
     /* Logs connection events and some general router and scan stats */
     private final WifiMetrics mWifiMetrics;
 
@@ -619,6 +621,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
             Log.wtf(TAG, "Failed to initialize ClientModeImpl");
         }
         mWifiController.start();
+        mIsControllerStarted = true;
 
         // If we are already disabled (could be due to airplane mode), avoid changing persist
         // state here
@@ -912,6 +915,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
         if (enable && mWifiApConfigStore.getDualSapStatus())
             stopSoftAp();
+
+        if (!mIsControllerStarted) {
+            Slog.e(TAG,"WifiController is not yet started, abort setWifiEnabled");
+            return false;
+        }
 
         mWifiController.sendMessage(CMD_WIFI_TOGGLED);
         return true;
@@ -2496,12 +2504,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (action.equals(Intent.ACTION_USER_PRESENT)) {
-                // TLS networks can't connect until user unlocks keystore. KeyStore
-                // unlocks when the user punches PIN after the reboot. So use this
-                // trigger to get those networks connected.
-                mClientModeImpl.reloadTlsNetworksAndReconnect();
-            } else if (action.equals(Intent.ACTION_USER_REMOVED)) {
+            if (action.equals(Intent.ACTION_USER_REMOVED)) {
                 int userHandle = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, 0);
                 mClientModeImpl.removeUserConfigs(userHandle);
             } else if (action.equals(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)) {
@@ -2760,7 +2763,6 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
     @Override
     public int getVerboseLoggingLevel() {
-        enforceAccessPermission();
         if (mVerboseLoggingEnabled) {
             mLog.info("getVerboseLoggingLevel uid=%").c(Binder.getCallingUid()).flush();
         }

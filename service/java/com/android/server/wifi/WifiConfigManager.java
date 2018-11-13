@@ -2494,21 +2494,22 @@ public class WifiConfigManager {
      */
     public void resetSimNetworks(boolean simPresent) {
         if (mVerboseLoggingEnabled) localLog("resetSimNetworks");
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (TelephonyUtil.isSimConfig(config)) {
-                Pair<String, String> currentIdentity = null;
-                if (simPresent) {
-                    currentIdentity = TelephonyUtil.getSimIdentity(mTelephonyManager,
-                        new TelephonyUtil(), config);
-                }
-                // Update the loaded config
-                if (currentIdentity == null) {
-                    Log.d(TAG, "Identity is null");
-                    return;
-                }
-                config.enterpriseConfig.setIdentity(currentIdentity.first);
-                if (config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.PEAP) {
-                    config.enterpriseConfig.setAnonymousIdentity("");
+        if (simPresent) {
+            for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+                if (TelephonyUtil.isSimConfig(config)) {
+                    Pair<String, String> currentIdentity =
+                            TelephonyUtil.getSimIdentity(mTelephonyManager,
+                                    new TelephonyUtil(), config);
+
+                    // Update the loaded config
+                    if (currentIdentity == null) {
+                        Log.d(TAG, "Identity is null");
+                        break;
+                    }
+                    config.enterpriseConfig.setIdentity(currentIdentity.first);
+                    if (config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.PEAP) {
+                        config.enterpriseConfig.setAnonymousIdentity("");
+                    }
                 }
             }
         }
@@ -2522,23 +2523,6 @@ public class WifiConfigManager {
      */
     public boolean isSimPresent() {
         return mSimPresent;
-    }
-
-    /**
-     * Any network using certificates to authenticate access requires unlocked key store; unless
-     * the certificates can be stored with hardware encryption
-     *
-     * @return true if we need an unlocked keystore, false otherwise.
-     */
-    public boolean needsUnlockedKeyStore() {
-        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (WifiConfigurationUtil.isConfigForEapNetwork(config)) {
-                if (mWifiKeyStore.needsSoftwareBackedKeyStore(config.enterpriseConfig)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     /**
@@ -2586,7 +2570,11 @@ public class WifiConfigManager {
             return new HashSet<>();
         }
         if (mPendingStoreRead) {
-            Log.wtf(TAG, "Unexpected user switch before store is read!");
+            Log.w(TAG, "User switch before store is read!");
+            mConfiguredNetworks.setNewUser(userId);
+            mCurrentUserId = userId;
+            // Cannot read data from new user's CE store file before they log-in.
+            mPendingUnlockStoreRead = true;
             return new HashSet<>();
         }
         if (mUserManager.isUserUnlockingOrUnlocked(mCurrentUserId)) {
@@ -2763,6 +2751,8 @@ public class WifiConfigManager {
         if (mConfiguredNetworks.sizeForAllUsers() == 0) {
             Log.w(TAG, "No stored networks found.");
         }
+        // resetSimNetworks may already have been called. Call it again to reset loaded SIM configs.
+        resetSimNetworks(mSimPresent);
         sendConfiguredNetworksChangedBroadcast();
         mPendingStoreRead = false;
     }

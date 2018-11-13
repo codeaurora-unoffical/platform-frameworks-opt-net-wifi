@@ -48,19 +48,14 @@ import android.hardware.wifi.V1_0.IWifiApIface;
 import android.hardware.wifi.V1_0.IWifiChip;
 import android.hardware.wifi.V1_0.IWifiChipEventCallback;
 import android.hardware.wifi.V1_0.IWifiIface;
-import android.hardware.wifi.V1_0.IWifiRttController;
-import android.hardware.wifi.V1_0.IWifiRttControllerEventCallback;
 import android.hardware.wifi.V1_0.IWifiStaIface;
 import android.hardware.wifi.V1_0.IWifiStaIfaceEventCallback;
 import android.hardware.wifi.V1_0.IfaceType;
-import android.hardware.wifi.V1_0.RttBw;
-import android.hardware.wifi.V1_0.RttCapabilities;
-import android.hardware.wifi.V1_0.RttConfig;
-import android.hardware.wifi.V1_0.RttPreamble;
 import android.hardware.wifi.V1_0.StaApfPacketFilterCapabilities;
 import android.hardware.wifi.V1_0.StaBackgroundScanCapabilities;
 import android.hardware.wifi.V1_0.StaBackgroundScanParameters;
 import android.hardware.wifi.V1_0.StaLinkLayerIfacePacketStats;
+import android.hardware.wifi.V1_0.StaLinkLayerIfaceStats;
 import android.hardware.wifi.V1_0.StaLinkLayerRadioStats;
 import android.hardware.wifi.V1_0.StaLinkLayerStats;
 import android.hardware.wifi.V1_0.StaRoamingCapabilities;
@@ -85,7 +80,6 @@ import android.hardware.wifi.V1_2.IWifiChipEventCallback.RadioModeInfo;
 import android.net.KeepalivePacketData;
 import android.net.MacAddress;
 import android.net.apf.ApfCapabilities;
-import android.net.wifi.RttManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
@@ -152,7 +146,7 @@ public class WifiVendorHalTest {
     @Mock
     private android.hardware.wifi.V1_2.IWifiStaIface mIWifiStaIfaceV12;
     @Mock
-    private IWifiRttController mIWifiRttController;
+    private android.hardware.wifi.V1_3.IWifiStaIface mIWifiStaIfaceV13;
     private IWifiStaIfaceEventCallback mIWifiStaIfaceEventCallback;
     private IWifiChipEventCallback mIWifiChipEventCallback;
     private android.hardware.wifi.V1_2.IWifiChipEventCallback mIWifiChipEventCallbackV12;
@@ -185,6 +179,12 @@ public class WifiVendorHalTest {
                 String ifaceName) {
             return null;
         }
+
+        @Override
+        protected android.hardware.wifi.V1_3.IWifiStaIface getWifiStaIfaceForV1_3Mockable(
+                String ifaceName) {
+            return null;
+        }
     }
 
     /**
@@ -210,6 +210,44 @@ public class WifiVendorHalTest {
         protected android.hardware.wifi.V1_2.IWifiStaIface getWifiStaIfaceForV1_2Mockable(
                 String ifaceName) {
             return mIWifiStaIfaceV12;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_3.IWifiStaIface getWifiStaIfaceForV1_3Mockable(
+                String ifaceName) {
+            return null;
+        }
+    }
+
+    /**
+     * Spy used to return the V1_2 IWifiChip and V1_3 IWifiStaIface mock objects to simulate
+     * the 1.3 HAL running on the device.
+     */
+    private class WifiVendorHalSpyV1_3 extends WifiVendorHal {
+        WifiVendorHalSpyV1_3(HalDeviceManager halDeviceManager, Looper looper) {
+            super(halDeviceManager, looper);
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_1.IWifiChip getWifiChipForV1_1Mockable() {
+            return null;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_2.IWifiChip getWifiChipForV1_2Mockable() {
+            return mIWifiChipV12;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_2.IWifiStaIface getWifiStaIfaceForV1_2Mockable(
+                String ifaceName) {
+            return mIWifiStaIfaceV12;
+        }
+
+        @Override
+        protected android.hardware.wifi.V1_3.IWifiStaIface getWifiStaIfaceForV1_3Mockable(
+                String ifaceName) {
+            return mIWifiStaIfaceV13;
         }
     }
 
@@ -263,7 +301,6 @@ public class WifiVendorHalTest {
         when(mHalDeviceManager.removeIface(any())).thenReturn(true);
         when(mHalDeviceManager.getChip(any(IWifiIface.class)))
                 .thenReturn(mIWifiChip);
-        when(mHalDeviceManager.createRttController()).thenReturn(mIWifiRttController);
         when(mIWifiChip.registerEventCallback(any(IWifiChipEventCallback.class)))
                 .thenReturn(mWifiStatusSuccess);
         mIWifiStaIfaceEventCallback = null;
@@ -287,9 +324,6 @@ public class WifiVendorHalTest {
                             (android.hardware.wifi.V1_2.IWifiChipEventCallback) args[0];
                     return (mWifiStatusSuccess);
                 }));
-
-        when(mIWifiRttController.registerEventCallback(any(IWifiRttControllerEventCallback.class)))
-                .thenReturn(mWifiStatusSuccess);
 
         doAnswer(new AnswerWithArguments() {
             public void answer(IWifiIface.getNameCallback cb)
@@ -328,7 +362,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager).start();
         verify(mHalDeviceManager).createStaIface(eq(false), any(), eq(null));
         verify(mHalDeviceManager).getChip(eq(mIWifiStaIface));
-        verify(mHalDeviceManager).createRttController();
         verify(mHalDeviceManager).isReady();
         verify(mHalDeviceManager).isStarted();
         verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
@@ -353,7 +386,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager).isStarted();
 
         verify(mHalDeviceManager, never()).createStaIface(anyBoolean(), any(), eq(null));
-        verify(mHalDeviceManager, never()).createRttController();
     }
 
     /**
@@ -377,7 +409,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager, never()).createStaIface(anyBoolean(), any(), eq(null));
         verify(mHalDeviceManager, never()).createApIface(any(), eq(null));
         verify(mHalDeviceManager, never()).getChip(any(IWifiIface.class));
-        verify(mHalDeviceManager, never()).createRttController();
         verify(mIWifiStaIface, never())
                 .registerEventCallback(any(IWifiStaIfaceEventCallback.class));
     }
@@ -398,29 +429,8 @@ public class WifiVendorHalTest {
 
         verify(mHalDeviceManager, never()).createApIface(any(), eq(null));
         verify(mHalDeviceManager, never()).getChip(any(IWifiIface.class));
-        verify(mHalDeviceManager, never()).createRttController();
         verify(mIWifiStaIface, never())
                 .registerEventCallback(any(IWifiStaIfaceEventCallback.class));
-    }
-
-    /**
-     * Tests the failure to start HAL in STA mode using
-     * {@link WifiVendorHal#startVendorHalSta()}.
-     */
-    @Test
-    public void testStartHalFailureInRttControllerCreationInStaMode() throws Exception {
-        when(mHalDeviceManager.createRttController()).thenReturn(null);
-        assertFalse(mWifiVendorHal.startVendorHalSta());
-        assertFalse(mWifiVendorHal.isHalStarted());
-
-        verify(mHalDeviceManager).start();
-        verify(mHalDeviceManager).createStaIface(eq(false), any(), eq(null));
-        verify(mHalDeviceManager).createRttController();
-        verify(mHalDeviceManager).stop();
-        verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
-
-        verify(mHalDeviceManager, never()).createApIface(any(), eq(null));
-        verify(mHalDeviceManager, never()).getChip(any(IWifiIface.class));
     }
 
     /**
@@ -435,7 +445,6 @@ public class WifiVendorHalTest {
 
         verify(mHalDeviceManager).start();
         verify(mHalDeviceManager).createStaIface(eq(false), any(), eq(null));
-        verify(mHalDeviceManager).createRttController();
         verify(mHalDeviceManager).getChip(any(IWifiIface.class));
         verify(mHalDeviceManager).stop();
         verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
@@ -459,7 +468,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager).stop();
         verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
 
-        verify(mHalDeviceManager, never()).createRttController();
         verify(mHalDeviceManager, never()).getChip(any(IWifiIface.class));
         verify(mHalDeviceManager, never()).createApIface(any(), eq(null));
     }
@@ -477,7 +485,6 @@ public class WifiVendorHalTest {
 
         verify(mHalDeviceManager).start();
         verify(mHalDeviceManager).createStaIface(eq(false), any(), eq(null));
-        verify(mHalDeviceManager).createRttController();
         verify(mHalDeviceManager).getChip(any(IWifiIface.class));
         verify(mHalDeviceManager).stop();
         verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
@@ -502,7 +509,6 @@ public class WifiVendorHalTest {
 
         verify(mHalDeviceManager, never()).createStaIface(anyBoolean(), any(), eq(null));
         verify(mHalDeviceManager, never()).getChip(any(IWifiIface.class));
-        verify(mHalDeviceManager, never()).createRttController();
     }
 
     /**
@@ -521,7 +527,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager).stop();
         verify(mHalDeviceManager).createStaIface(eq(false), any(), eq(null));
         verify(mHalDeviceManager).getChip(eq(mIWifiStaIface));
-        verify(mHalDeviceManager).createRttController();
         verify(mHalDeviceManager, times(2)).isReady();
         verify(mHalDeviceManager, times(2)).isStarted();
 
@@ -548,7 +553,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager, times(2)).isStarted();
 
         verify(mHalDeviceManager, never()).createStaIface(anyBoolean(), any(), eq(null));
-        verify(mHalDeviceManager, never()).createRttController();
     }
 
     /**
@@ -568,7 +572,6 @@ public class WifiVendorHalTest {
         verify(mHalDeviceManager).createStaIface(eq(false), internalListenerCaptor.capture(),
                 eq(null));
         verify(mHalDeviceManager).getChip(eq(mIWifiStaIface));
-        verify(mHalDeviceManager).createRttController();
         verify(mHalDeviceManager).isReady();
         verify(mHalDeviceManager).isStarted();
         verify(mIWifiStaIface).registerEventCallback(any(IWifiStaIfaceEventCallback.class));
@@ -797,6 +800,16 @@ public class WifiVendorHalTest {
     }
 
     /**
+     * Test getLinkLayerStats_1_3 gets called when the hal version is V1_3.
+     */
+    @Test
+    public void testLinkLayerStatsCorrectVersionWithHalV1_3() throws Exception {
+        mWifiVendorHal = new WifiVendorHalSpyV1_3(mHalDeviceManager, mLooper.getLooper());
+        mWifiVendorHal.getWifiLinkLayerStats(TEST_IFACE_NAME);
+        verify(mIWifiStaIfaceV13).getLinkLayerStats_1_3(any());
+    }
+
+    /**
      * Test that link layer stats are not enabled and harmless in AP mode
      *
      * Start the HAL in AP mode
@@ -821,11 +834,9 @@ public class WifiVendorHalTest {
     /**
      * Test that the link layer stats fields are populated correctly.
      *
-     * This is done by filling with random values and then using toString on the
-     * original and converted values, comparing just the numerics in the result.
-     * This makes the assumption that the fields are in the same order in both string
-     * representations, which is not quite true. So apply some fixups before the final
-     * comparison.
+     * This is done by filling Hal LinkLayerStats (V1_0) with random values, converting it to
+     * WifiLinkLayerStats and then asserting the values in the original structure are equal to the
+     * values in the converted structure.
      */
     @Test
     public void testLinkLayerStatsAssignment() throws Exception {
@@ -836,37 +847,105 @@ public class WifiVendorHalTest {
         randomizePacketStats(r, stats.iface.wmeViPktStats);
         randomizePacketStats(r, stats.iface.wmeVoPktStats);
         randomizeRadioStats(r, stats.radios);
-
         stats.timeStampInMs = r.nextLong() & 0xFFFFFFFFFFL;
-
-        String expected = numbersOnly(stats.toString() + " ");
 
         WifiLinkLayerStats converted = WifiVendorHal.frameworkFromHalLinkLayerStats(stats);
 
-        String actual = numbersOnly(converted.toString() + " ");
-
-        // Do the required fixups to the both expected and actual
-        expected = rmValue(expected, stats.radios.get(0).rxTimeInMs);
-        expected = rmValue(expected, stats.radios.get(0).onTimeInMsForScan);
-
-        actual = rmValue(actual, stats.radios.get(0).rxTimeInMs);
-        actual = rmValue(actual, stats.radios.get(0).onTimeInMsForScan);
-
-        // The remaining fields should agree
-        assertEquals(expected, actual);
+        verifyIFaceStats(stats.iface, converted);
+        verifyRadioStats(stats.radios, converted);
+        assertEquals(stats.timeStampInMs, converted.timeStampInMs);
+        assertEquals(WifiLinkLayerStats.V1_0, converted.version);
     }
 
-    /** Just the digits with delimiting spaces, please */
-    private static String numbersOnly(String s) {
-        return s.replaceAll("[^0-9]+", " ");
+    /**
+     * Test that the link layer stats V1_3 fields are populated correctly.
+     *
+     * This is done by filling Hal LinkLayerStats (V1_3) with random values, converting it to
+     * WifiLinkLayerStats and then asserting the values in the original structure are equal to the
+     * values in the converted structure.
+     */
+    @Test
+    public void testLinkLayerStatsAssignment_1_3() throws Exception {
+        Random r = new Random(1775968256);
+        android.hardware.wifi.V1_3.StaLinkLayerStats stats =
+                new android.hardware.wifi.V1_3.StaLinkLayerStats();
+        randomizePacketStats(r, stats.iface.wmeBePktStats);
+        randomizePacketStats(r, stats.iface.wmeBkPktStats);
+        randomizePacketStats(r, stats.iface.wmeViPktStats);
+        randomizePacketStats(r, stats.iface.wmeVoPktStats);
+        randomizeRadioStats_1_3(r, stats.radios);
+        stats.timeStampInMs = r.nextLong() & 0xFFFFFFFFFFL;
+
+        WifiLinkLayerStats converted = WifiVendorHal.frameworkFromHalLinkLayerStats_1_3(stats);
+
+        verifyIFaceStats(stats.iface, converted);
+        verifyRadioStats_1_3(stats.radios, converted);
+        assertEquals(stats.timeStampInMs, converted.timeStampInMs);
+        assertEquals(WifiLinkLayerStats.V1_3, converted.version);
     }
 
-    /** Remove the given value from the space-delimited string, or die trying. */
-    private static String rmValue(String s, long value) throws Exception {
-        String ans = s.replaceAll(" " + value + " ", " ");
-        assertNotEquals(s, ans);
-        return ans;
+    private void verifyIFaceStats(StaLinkLayerIfaceStats iface,
+            WifiLinkLayerStats wifiLinkLayerStats) {
+        assertEquals(iface.beaconRx, wifiLinkLayerStats.beacon_rx);
+        assertEquals(iface.avgRssiMgmt, wifiLinkLayerStats.rssi_mgmt);
+
+        assertEquals(iface.wmeBePktStats.rxMpdu, wifiLinkLayerStats.rxmpdu_be);
+        assertEquals(iface.wmeBePktStats.txMpdu, wifiLinkLayerStats.txmpdu_be);
+        assertEquals(iface.wmeBePktStats.lostMpdu, wifiLinkLayerStats.lostmpdu_be);
+        assertEquals(iface.wmeBePktStats.retries, wifiLinkLayerStats.retries_be);
+
+        assertEquals(iface.wmeBkPktStats.rxMpdu, wifiLinkLayerStats.rxmpdu_bk);
+        assertEquals(iface.wmeBkPktStats.txMpdu, wifiLinkLayerStats.txmpdu_bk);
+        assertEquals(iface.wmeBkPktStats.lostMpdu, wifiLinkLayerStats.lostmpdu_bk);
+        assertEquals(iface.wmeBkPktStats.retries, wifiLinkLayerStats.retries_bk);
+
+        assertEquals(iface.wmeViPktStats.rxMpdu, wifiLinkLayerStats.rxmpdu_vi);
+        assertEquals(iface.wmeViPktStats.txMpdu, wifiLinkLayerStats.txmpdu_vi);
+        assertEquals(iface.wmeViPktStats.lostMpdu, wifiLinkLayerStats.lostmpdu_vi);
+        assertEquals(iface.wmeViPktStats.retries, wifiLinkLayerStats.retries_vi);
+
+        assertEquals(iface.wmeVoPktStats.rxMpdu, wifiLinkLayerStats.rxmpdu_vo);
+        assertEquals(iface.wmeVoPktStats.txMpdu, wifiLinkLayerStats.txmpdu_vo);
+        assertEquals(iface.wmeVoPktStats.lostMpdu, wifiLinkLayerStats.lostmpdu_vo);
+        assertEquals(iface.wmeVoPktStats.retries, wifiLinkLayerStats.retries_vo);
     }
+
+    private void verifyRadioStats(List<StaLinkLayerRadioStats> radios,
+            WifiLinkLayerStats wifiLinkLayerStats) {
+        StaLinkLayerRadioStats radio = radios.get(0);
+        assertEquals(radio.onTimeInMs, wifiLinkLayerStats.on_time);
+        assertEquals(radio.txTimeInMs, wifiLinkLayerStats.tx_time);
+        assertEquals(radio.rxTimeInMs, wifiLinkLayerStats.rx_time);
+        assertEquals(radio.onTimeInMsForScan, wifiLinkLayerStats.on_time_scan);
+        assertEquals(radio.txTimeInMsPerLevel.size(),
+                wifiLinkLayerStats.tx_time_per_level.length);
+        for (int i = 0; i < radio.txTimeInMsPerLevel.size(); i++) {
+            assertEquals((int) radio.txTimeInMsPerLevel.get(i),
+                    wifiLinkLayerStats.tx_time_per_level[i]);
+        }
+    }
+
+    private void verifyRadioStats_1_3(
+            List<android.hardware.wifi.V1_3.StaLinkLayerRadioStats> radios,
+            WifiLinkLayerStats wifiLinkLayerStats) {
+        android.hardware.wifi.V1_3.StaLinkLayerRadioStats radio = radios.get(0);
+        assertEquals(radio.V1_0.onTimeInMs, wifiLinkLayerStats.on_time);
+        assertEquals(radio.V1_0.txTimeInMs, wifiLinkLayerStats.tx_time);
+        assertEquals(radio.V1_0.rxTimeInMs, wifiLinkLayerStats.rx_time);
+        assertEquals(radio.V1_0.onTimeInMsForScan, wifiLinkLayerStats.on_time_scan);
+        assertEquals(radio.V1_0.txTimeInMsPerLevel.size(),
+                wifiLinkLayerStats.tx_time_per_level.length);
+        for (int i = 0; i < radio.V1_0.txTimeInMsPerLevel.size(); i++) {
+            assertEquals((int) radio.V1_0.txTimeInMsPerLevel.get(i),
+                    wifiLinkLayerStats.tx_time_per_level[i]);
+        }
+        assertEquals(radio.onTimeInMsForNanScan, wifiLinkLayerStats.on_time_nan_scan);
+        assertEquals(radio.onTimeInMsForBgScan, wifiLinkLayerStats.on_time_background_scan);
+        assertEquals(radio.onTimeInMsForRoamScan, wifiLinkLayerStats.on_time_roam_scan);
+        assertEquals(radio.onTimeInMsForPnoScan, wifiLinkLayerStats.on_time_pno_scan);
+        assertEquals(radio.onTimeInMsForHs20Scan, wifiLinkLayerStats.on_time_hs20_scan);
+    }
+
 
     /**
      * Populate packet stats with non-negative random values
@@ -878,7 +957,7 @@ public class WifiVendorHalTest {
         pstats.retries = r.nextLong() & 0xFFFFFFFFFFL;
     }
 
-   /**
+    /**
      * Populate radio stats with non-negative random values
      */
     private static void randomizeRadioStats(Random r, ArrayList<StaLinkLayerRadioStats> rstats) {
@@ -891,6 +970,29 @@ public class WifiVendorHalTest {
         }
         rstat.rxTimeInMs = r.nextInt() & 0xFFFFFF;
         rstat.onTimeInMsForScan = r.nextInt() & 0xFFFFFF;
+        rstats.add(rstat);
+    }
+
+    /**
+     * Populate radio stats with non-negative random values
+     */
+    private static void randomizeRadioStats_1_3(Random r,
+            ArrayList<android.hardware.wifi.V1_3.StaLinkLayerRadioStats> rstats) {
+        android.hardware.wifi.V1_3.StaLinkLayerRadioStats rstat =
+                new android.hardware.wifi.V1_3.StaLinkLayerRadioStats();
+        rstat.V1_0.onTimeInMs = r.nextInt() & 0xFFFFFF;
+        rstat.V1_0.txTimeInMs = r.nextInt() & 0xFFFFFF;
+        for (int i = 0; i < 4; i++) {
+            Integer v = r.nextInt() & 0xFFFFFF;
+            rstat.V1_0.txTimeInMsPerLevel.add(v);
+        }
+        rstat.V1_0.rxTimeInMs = r.nextInt() & 0xFFFFFF;
+        rstat.V1_0.onTimeInMsForScan = r.nextInt() & 0xFFFFFF;
+        rstat.onTimeInMsForNanScan = r.nextInt() & 0xFFFFFF;
+        rstat.onTimeInMsForBgScan = r.nextInt() & 0xFFFFFF;
+        rstat.onTimeInMsForRoamScan = r.nextInt() & 0xFFFFFF;
+        rstat.onTimeInMsForPnoScan = r.nextInt() & 0xFFFFFF;
+        rstat.onTimeInMsForHs20Scan = r.nextInt() & 0xFFFFFF;
         rstats.add(rstat);
     }
 
@@ -955,137 +1057,6 @@ public class WifiVendorHalTest {
             ex++;
         }
         assertEquals(2, ex);
-    }
-
-
-    /**
-     * Test translations of RTT type
-     */
-    @Test
-    public void testRttTypeTranslation() throws Exception {
-        checkRoundTripIntTranslation(
-                (y) -> WifiVendorHal.halRttTypeFromFrameworkRttType(y),
-                (x) -> WifiVendorHal.frameworkRttTypeFromHalRttType(x),
-                1, 3);
-    }
-
-    /**
-     * Test translations of peer type
-     */
-    @Test
-    public void testPeerTranslation() throws Exception {
-        checkRoundTripIntTranslation(
-                (y) -> WifiVendorHal.halPeerFromFrameworkPeer(y),
-                (x) -> WifiVendorHal.frameworkPeerFromHalPeer(x),
-                1, 6);
-    }
-
-    /**
-     * Test translations of channel width
-     */
-    @Test
-    public void testChannelWidth() throws Exception {
-        checkRoundTripIntTranslation(
-                (y) -> WifiVendorHal.halChannelWidthFromFrameworkChannelWidth(y),
-                (x) -> WifiVendorHal.frameworkChannelWidthFromHalChannelWidth(x),
-                0, 5);
-    }
-
-    /**
-     * Test translations of preamble type mask
-     */
-    @Test
-    public void testPreambleTranslation() throws Exception {
-        checkRoundTripIntTranslation(
-                (y) -> WifiVendorHal.halPreambleFromFrameworkPreamble(y),
-                (x) -> WifiVendorHal.frameworkPreambleFromHalPreamble(x),
-                0, 8);
-    }
-
-    /**
-     * Test translations of bandwidth mask
-     */
-    @Test
-    public void testBandwidthTranslations() throws Exception {
-        checkRoundTripIntTranslation(
-                (y) -> WifiVendorHal.halBwFromFrameworkBw(y),
-                (x) -> WifiVendorHal.frameworkBwFromHalBw(x),
-                0, 64);
-    }
-
-    /**
-     * Test translation of framwork RttParams to hal RttConfig
-     */
-    @Test
-    public void testGetRttStuff() throws Exception {
-        RttManager.RttParams params = new RttManager.RttParams();
-        params.bssid = "03:01:04:01:05:09";
-        params.frequency = 2420;
-        params.channelWidth = ScanResult.CHANNEL_WIDTH_40MHZ;
-        params.centerFreq0 = 2440;
-        params.centerFreq1 = 1;
-        params.num_samples = 2;
-        params.num_retries = 3;
-        params.numberBurst = 4;
-        params.interval = 5;
-        params.numSamplesPerBurst = 8;
-        params.numRetriesPerMeasurementFrame = 6;
-        params.numRetriesPerFTMR = 7;
-        params.LCIRequest = false;
-        params.LCRRequest = false;
-        params.burstTimeout = 15;
-        String frameish = params.toString();
-        assertFalse(frameish.contains("=0,")); // make sure all fields are initialized
-        RttConfig config = WifiVendorHal.halRttConfigFromFrameworkRttParams(params);
-        String halish = config.toString();
-        StringBuffer expect = new StringBuffer(200);
-        expect.append("{.addr = [3, 1, 4, 1, 5, 9], .type = ONE_SIDED, .peer = AP, ");
-        expect.append(".channel = {.width = WIDTH_40, .centerFreq = 2420, ");
-        expect.append(".centerFreq0 = 2440, .centerFreq1 = 1}, ");
-        expect.append(".burstPeriod = 5, .numBurst = 4, .numFramesPerBurst = 8, ");
-        expect.append(".numRetriesPerRttFrame = 6, .numRetriesPerFtmr = 7, ");
-        expect.append(".mustRequestLci = false, .mustRequestLcr = false, .burstDuration = 15, ");
-        expect.append(".preamble = HT, .bw = BW_20MHZ}");
-        assertEquals(expect.toString(), halish);
-    }
-
-    /**
-     * Test that RTT capabilities are plumbed through
-     */
-    @Test
-    public void testGetRttCapabilities() throws Exception {
-        RttCapabilities capabilities = new RttCapabilities();
-        capabilities.lcrSupported = true;
-        capabilities.preambleSupport = RttPreamble.LEGACY | RttPreamble.VHT;
-        capabilities.bwSupport = RttBw.BW_5MHZ | RttBw.BW_20MHZ;
-        capabilities.mcVersion = 43;
-        doAnswer(new AnswerWithArguments() {
-            public void answer(IWifiRttController.getCapabilitiesCallback cb)
-                    throws RemoteException {
-                cb.onValues(mWifiStatusSuccess, capabilities);
-            }
-        }).when(mIWifiRttController).getCapabilities(any(
-                IWifiRttController.getCapabilitiesCallback.class));
-
-        assertNull(mWifiVendorHal.getRttCapabilities());
-
-        assertTrue(mWifiVendorHal.startVendorHalSta());
-
-        RttManager.RttCapabilities actual = mWifiVendorHal.getRttCapabilities();
-        assertTrue(actual.lcrSupported);
-        assertEquals(RttManager.PREAMBLE_LEGACY | RttManager.PREAMBLE_VHT,
-                actual.preambleSupported);
-        assertEquals(RttManager.RTT_BW_5_SUPPORT | RttManager.RTT_BW_20_SUPPORT,
-                actual.bwSupported);
-        assertEquals(43, (int) capabilities.mcVersion);
-    }
-
-    /**
-     * Negative test of disableRttResponder
-     */
-    @Test
-    public void testDisableOfUnstartedRtt() throws Exception {
-        assertFalse(mWifiVendorHal.disableRttResponder());
     }
 
     /**

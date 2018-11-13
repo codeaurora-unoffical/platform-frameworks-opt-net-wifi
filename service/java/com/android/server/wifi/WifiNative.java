@@ -18,13 +18,10 @@ package com.android.server.wifi;
 
 import android.annotation.IntDef;
 import android.annotation.NonNull;
-import android.annotation.Nullable;
 import android.net.InterfaceConfiguration;
 import android.net.MacAddress;
 import android.net.TrafficStats;
 import android.net.apf.ApfCapabilities;
-import android.net.wifi.RttManager;
-import android.net.wifi.RttManager.ResponderConfig;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
@@ -473,6 +470,7 @@ public class WifiNative {
     /** Helper method invoked to teardown client iface (for scan) and perform necessary cleanup */
     private void onClientInterfaceForScanDestroyed(@NonNull Iface iface) {
         synchronized (mLock) {
+            mWifiMonitor.stopMonitoring(iface.name);
             if (!unregisterNetworkObserver(iface.networkObserver)) {
                 Log.e(TAG, "Failed to unregister network observer on " + iface);
             }
@@ -1092,6 +1090,7 @@ public class WifiNative {
                 teardownInterface(iface.name);
                 return null;
             }
+            mWifiMonitor.startMonitoring(iface.name);
             // Just to avoid any race conditions with interface state change callbacks,
             // update the interface state before we exit.
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
@@ -1457,6 +1456,11 @@ public class WifiNative {
      */
     public interface SoftApListener {
         /**
+         * Invoked when there is some fatal failure in the lower layers.
+         */
+        void onFailure();
+
+        /**
          * Invoked when the number of associated stations changes.
          */
         void onNumAssociatedStationsChanged(int numStations);
@@ -1531,7 +1535,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
                 return false;
             }
-        } else if (!mHostapdHal.addAccessPoint(ifaceName, config)) {
+        } else if (!mHostapdHal.addAccessPoint(ifaceName, config, listener)) {
             Log.e(TAG, "Failed to add acccess point");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
@@ -2480,51 +2484,6 @@ public class WifiNative {
         return mWifiVendorHal.getSupportedFeatureSet(ifaceName);
     }
 
-    public static interface RttEventHandler {
-        void onRttResults(RttManager.RttResult[] result);
-    }
-
-    /**
-     * Starts a new rtt request
-     *
-     * @param params RTT request params. Refer to {@link RttManager#RttParams}.
-     * @param handler Callback to be invoked to notify any results.
-     * @return true if the request was successful, false otherwise.
-     */
-    public boolean requestRtt(
-            RttManager.RttParams[] params, RttEventHandler handler) {
-        return mWifiVendorHal.requestRtt(params, handler);
-    }
-
-    /**
-     * Cancels an outstanding rtt request
-     *
-     * @param params RTT request params. Refer to {@link RttManager#RttParams}
-     * @return true if there was an outstanding request and it was successfully cancelled
-     */
-    public boolean cancelRtt(RttManager.RttParams[] params) {
-        return mWifiVendorHal.cancelRtt(params);
-    }
-
-    /**
-     * Enable RTT responder role on the device. Returns {@link ResponderConfig} if the responder
-     * role is successfully enabled, {@code null} otherwise.
-     *
-     * @param timeoutSeconds timeout to use for the responder.
-     */
-    @Nullable
-    public ResponderConfig enableRttResponder(int timeoutSeconds) {
-        return mWifiVendorHal.enableRttResponder(timeoutSeconds);
-    }
-
-    /**
-     * Disable RTT responder role. Returns {@code true} if responder role is successfully disabled,
-     * {@code false} otherwise.
-     */
-    public boolean disableRttResponder() {
-        return mWifiVendorHal.disableRttResponder();
-    }
-
     /**
      * Set the MAC OUI during scanning.
      * An OUI {Organizationally Unique Identifier} is a 24-bit number that
@@ -2536,13 +2495,6 @@ public class WifiNative {
      */
     public boolean setScanningMacOui(@NonNull String ifaceName, byte[] oui) {
         return mWifiVendorHal.setScanningMacOui(ifaceName, oui);
-    }
-
-    /**
-     * RTT (Round Trip Time) measurement capabilities of the device.
-     */
-    public RttManager.RttCapabilities getRttCapabilities() {
-        return mWifiVendorHal.getRttCapabilities();
     }
 
     /**

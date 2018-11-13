@@ -178,13 +178,13 @@ public class ClientModeImpl extends StateMachine {
     protected void log(String s) {
         Log.d(getName(), s);
     }
-    private WifiMetrics mWifiMetrics;
-    private WifiInjector mWifiInjector;
-    private WifiMonitor mWifiMonitor;
-    private WifiNative mWifiNative;
-    private WifiPermissionsUtil mWifiPermissionsUtil;
-    private WifiConfigManager mWifiConfigManager;
-    private WifiConnectivityManager mWifiConnectivityManager;
+    private final WifiMetrics mWifiMetrics;
+    private final WifiInjector mWifiInjector;
+    private final WifiMonitor mWifiMonitor;
+    private final WifiNative mWifiNative;
+    private final WifiPermissionsUtil mWifiPermissionsUtil;
+    private final WifiConfigManager mWifiConfigManager;
+    private final WifiConnectivityManager mWifiConnectivityManager;
     private ConnectivityManager mCm;
     private BaseWifiDiagnostics mWifiDiagnostics;
     private WifiP2pServiceImpl wifiP2pServiceImpl;
@@ -561,9 +561,6 @@ public class ClientModeImpl extends StateMachine {
     /* Supplicant is trying to associate to a given BSSID */
     static final int CMD_TARGET_BSSID                                   = BASE + 141;
 
-    /* Reload all networks and reconnect */
-    static final int CMD_RELOAD_TLS_AND_RECONNECT                       = BASE + 142;
-
     static final int CMD_START_CONNECT                                  = BASE + 143;
 
     private static final int NETWORK_STATUS_UNWANTED_DISCONNECT         = 0;
@@ -776,11 +773,6 @@ public class ClientModeImpl extends StateMachine {
      */
     private final WorkSource mLastRunningWifiUids = new WorkSource();
 
-    /*
-     * Note if we have seen the user sign in
-     */
-    private boolean mFirstUserSignOnSeen = false;
-
     private TelephonyManager mTelephonyManager;
     private TelephonyManager getTelephonyManager() {
         if (mTelephonyManager == null) {
@@ -843,6 +835,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiInfo = new ExtendedWifiInfo();
         mSupplicantStateTracker =
                 mFacade.makeSupplicantStateTracker(context, mWifiConfigManager, getHandler());
+        mWifiConnectivityManager = mWifiInjector.makeWifiConnectivityManager(this);
 
         mLinkProperties = new LinkProperties();
         mMcastLockManagerFilterController = new McastLockManagerFilterController();
@@ -1666,13 +1659,6 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Reload networks and then reconnect; helps load correct data for TLS networks
-     */
-    public void reloadTlsNetworksAndReconnect() {
-        sendMessage(CMD_RELOAD_TLS_AND_RECONNECT);
-    }
-
-    /**
      * Add a network synchronously
      *
      * @return network id of the new network
@@ -1828,9 +1814,9 @@ public class ClientModeImpl extends StateMachine {
         int supportedFeatureSet = resultMsg.arg1;
         resultMsg.recycle();
 
-        // Mask the feature set against system properties.
-        boolean disableRtt = mPropertyService.getBoolean("config.disable_rtt", false);
-        if (disableRtt) {
+        boolean checkRtt = mContext.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_RTT);
+        if (!checkRtt) {
             supportedFeatureSet &=
                     ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
         }
@@ -2044,11 +2030,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiDiagnostics.captureBugReportData(WifiDiagnostics.REPORT_REASON_USER_ACTION);
         mWifiDiagnostics.dump(fd, pw, args);
         dumpIpClient(fd, pw, args);
-        if (mWifiConnectivityManager != null) {
-            mWifiConnectivityManager.dump(fd, pw, args);
-        } else {
-            pw.println("mWifiConnectivityManager is not initialized");
-        }
+        mWifiConnectivityManager.dump(fd, pw, args);
         mWifiInjector.getWakeupController().dump(fd, pw, args);
     }
 
@@ -2547,9 +2529,7 @@ public class ClientModeImpl extends StateMachine {
 
         mWifiMetrics.setScreenState(screenOn);
 
-        if (mWifiConnectivityManager != null) {
-            mWifiConnectivityManager.handleScreenStateChanged(screenOn);
-        }
+        mWifiConnectivityManager.handleScreenStateChanged(screenOn);
 
         if (mVerboseLoggingEnabled) log("handleScreenStateChanged Exit: " + screenOn);
     }
@@ -3295,7 +3275,7 @@ public class ClientModeImpl extends StateMachine {
         protected void needNetworkFor(NetworkRequest networkRequest, int score) {
             synchronized (mWifiReqCountLock) {
                 if (++mConnectionReqCount == 1) {
-                    if (mWifiConnectivityManager != null && mUntrustedReqCount == 0) {
+                    if (mUntrustedReqCount == 0) {
                         mWifiConnectivityManager.enable(true);
                     }
                 }
@@ -3306,7 +3286,7 @@ public class ClientModeImpl extends StateMachine {
         protected void releaseNetworkFor(NetworkRequest networkRequest) {
             synchronized (mWifiReqCountLock) {
                 if (--mConnectionReqCount == 0) {
-                    if (mWifiConnectivityManager != null && mUntrustedReqCount == 0) {
+                    if (mUntrustedReqCount == 0) {
                         mWifiConnectivityManager.enable(false);
                     }
                 }
@@ -3331,12 +3311,10 @@ public class ClientModeImpl extends StateMachine {
                     NetworkCapabilities.NET_CAPABILITY_TRUSTED)) {
                 synchronized (mWifiReqCountLock) {
                     if (++mUntrustedReqCount == 1) {
-                        if (mWifiConnectivityManager != null) {
-                            if (mConnectionReqCount == 0) {
-                                mWifiConnectivityManager.enable(true);
-                            }
-                            mWifiConnectivityManager.setUntrustedConnectionAllowed(true);
+                        if (mConnectionReqCount == 0) {
+                            mWifiConnectivityManager.enable(true);
                         }
+                        mWifiConnectivityManager.setUntrustedConnectionAllowed(true);
                     }
                 }
             }
@@ -3348,11 +3326,9 @@ public class ClientModeImpl extends StateMachine {
                     NetworkCapabilities.NET_CAPABILITY_TRUSTED)) {
                 synchronized (mWifiReqCountLock) {
                     if (--mUntrustedReqCount == 0) {
-                        if (mWifiConnectivityManager != null) {
-                            mWifiConnectivityManager.setUntrustedConnectionAllowed(false);
-                            if (mConnectionReqCount == 0) {
-                                mWifiConnectivityManager.enable(false);
-                            }
+                        mWifiConnectivityManager.setUntrustedConnectionAllowed(false);
+                        if (mConnectionReqCount == 0) {
+                            mWifiConnectivityManager.enable(false);
                         }
                     }
                 }
@@ -3604,9 +3580,6 @@ public class ClientModeImpl extends StateMachine {
                 case WifiMonitor.DPP_EVENT:
                 case CMD_IP_REACHABILITY_SESSION_END:
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
-                    break;
-                case CMD_RELOAD_TLS_AND_RECONNECT:
-                    mFirstUserSignOnSeen = true;
                     break;
                 case CMD_SET_OPERATIONAL_MODE:
                     // using the CMD_SET_OPERATIONAL_MODE (sent at front of queue) to trigger the
@@ -3896,16 +3869,6 @@ public class ClientModeImpl extends StateMachine {
         setHighPerfModeEnabled(false);
 
         mWifiStateTracker.updateState(WifiStateTracker.INVALID);
-
-        if (mWifiConnectivityManager == null) {
-            synchronized (mWifiReqCountLock) {
-                mWifiConnectivityManager =
-                        mWifiInjector.makeWifiConnectivityManager(mWifiInfo,
-                                                                  hasConnectionRequests());
-                mWifiConnectivityManager.setUntrustedConnectionAllowed(mUntrustedReqCount > 0);
-                mWifiConnectivityManager.handleScreenStateChanged(mScreenOn);
-            }
-        }
 
         updateDataInterface();
         registerForWifiMonitorEvents();
@@ -4351,20 +4314,6 @@ public class ClientModeImpl extends StateMachine {
                 case CMD_REASSOCIATE:
                     mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
                     mWifiNative.reassociate(mInterfaceName);
-                    break;
-                case CMD_RELOAD_TLS_AND_RECONNECT:
-                    // TODO(b/64033284): determine if this code is still necessary
-                    if (mFirstUserSignOnSeen) {
-                        // a user has already been seen, nothing to do
-                        break;
-                    }
-                    if (mWifiConfigManager.needsUnlockedKeyStore()) {
-                        logd("Reconnecting to give a chance to un-connected TLS networks");
-                        mWifiNative.disconnect(mInterfaceName);
-                        mLastConnectAttemptTimestamp = mClock.getWallClockMillis();
-                        mWifiNative.reconnect(mInterfaceName);
-                    }
-                    mFirstUserSignOnSeen = true;
                     break;
                 case CMD_START_ROAM:
                     mMessageHandlingStatus = MESSAGE_HANDLING_STATUS_DISCARD;
@@ -5206,11 +5155,13 @@ public class ClientModeImpl extends StateMachine {
                         sendNetworkStateChangeBroadcast(mLastBssid);
                     }
                     mIpReachabilityMonitorActive = true;
+                    sendMessageDelayed(obtainMessage(CMD_IP_REACHABILITY_SESSION_END, 0, 0), 10000);
                     break;
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
                         WifiLinkLayerStats stats = getWifiLinkLayerStats();
                         mWifiDataStall.checkForDataStall(mLastLinkLayerStats, stats);
+                        mWifiMetrics.incrementWifiLinkLayerUsageStats(stats);
                         mLastLinkLayerStats = stats;
 
                         // Get Info and continue polling
@@ -5879,6 +5830,7 @@ public class ClientModeImpl extends StateMachine {
             /** clear the roaming state, if we were roaming, we failed */
             mIsAutoRoaming = false;
             mIpReachabilityMonitorActive = false;
+            removeMessages(CMD_IP_REACHABILITY_SESSION_END);
 
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_DISCONNECTED);

@@ -16,6 +16,8 @@
 
 package com.android.server.wifi.hotspot2;
 
+import static android.net.NetworkCapabilities.NET_CAPABILITY_TRUSTED;
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -69,7 +71,7 @@ public class OsuNetworkConnection {
         void onDisconnected();
 
         /**
-         * Invoked when a timer tracking connection request is not reset by successfull connection.
+         * Invoked when a timer tracking connection request is not reset by successful connection.
          */
         void onTimeOut();
 
@@ -84,10 +86,6 @@ public class OsuNetworkConnection {
         void onWifiDisabled();
     }
 
-    /**
-     * Create an instance of {@link NetworkConnection} for the specified Wi-Fi network.
-     * @param context The application context
-     */
     public OsuNetworkConnection(Context context) {
         mContext = context;
     }
@@ -146,6 +144,7 @@ public class OsuNetworkConnection {
 
     /**
      * Register for network and Wifi state events
+     *
      * @param callbacks The callbacks to be invoked on network change events
      */
     public void setEventCallback(Callbacks callbacks) {
@@ -176,6 +175,12 @@ public class OsuNetworkConnection {
         }
         WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"" + ssid.toString() + "\"";
+
+        // To suppress Wi-Fi has no internet access notification.
+        config.noInternetAccessExpected = true;
+
+        // Do not save this network
+        config.ephemeral = true;
         if (TextUtils.isEmpty(nai)) {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
         } else {
@@ -188,11 +193,18 @@ public class OsuNetworkConnection {
             Log.e(TAG, "Unable to add network");
             return false;
         }
-        NetworkRequest networkRequest = null;
-        networkRequest = new NetworkRequest.Builder()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build();
+
+        // NET_CAPABILITY_TRUSTED is added by builder by default.
+        // But for ephemeral network, the capability needs to be removed
+        // as wifi stack creates network agent without the capability.
+        // That could cause connectivity service not to find the matching agent.
+        NetworkRequest networkRequest = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI).removeCapability(
+                        NET_CAPABILITY_TRUSTED).build();
         mConnectivityManager.requestNetwork(networkRequest, mConnectivityCallbacks, mHandler,
                 TIMEOUT_MS);
+
+        // TODO(b/112195429): replace it with new connectivity API.
         if (!mWifiManager.enableNetwork(mNetworkId, true)) {
             Log.e(TAG, "Unable to enable network " + mNetworkId);
             disconnectIfNeeded();
@@ -206,6 +218,7 @@ public class OsuNetworkConnection {
 
     /**
      * Method to update logging level in this class
+     *
      * @param verbose more than 0 enables verbose logging
      */
     public void enableVerboseLogging(int verbose) {
