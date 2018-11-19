@@ -36,6 +36,7 @@ import android.hidl.manager.V1_0.IServiceNotification;
 import android.net.wifi.WpsInfo;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
+import android.net.wifi.p2p.WifiWscVendorInfo;
 import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pGroupList;
 import android.net.wifi.p2p.WifiP2pManager;
@@ -2187,6 +2188,39 @@ public class SupplicantP2pIfaceHal {
     }
 
     /**
+     * Set Wifi Simple Configuration Vendor info.
+     *
+     * @param info WSC Vendor  info as described in section TODO of
+     *        WSC technical specification v2.0.4.
+     * @return true, if operation was successful.
+     */
+    public boolean setWscVendorIe(ArrayList <Byte> info) {
+        synchronized (mLock) {
+            if (!checkSupplicantVendorP2pIfaceAndLogFailure("setVendorInfoElement"))
+                return false;
+
+            if (info == null) {
+                Log.e(TAG, "Cannot parse null WSC info string.");
+                return false;
+            }
+
+            SupplicantResult<Void> result = new SupplicantResult(
+                    "setWscVendorIe(" + info + ")");
+            try {
+                result.setResult(
+                        mISupplicantVendorP2pIface.setVendorInfoElement(
+                            info,WifiWscVendorInfo.WSC_VENDOR)
+                        );
+            } catch (RemoteException e) {
+                Log.e(TAG, "ISupplicantVendorP2PIface exception: " + e);
+                supplicantVendorServiceDiedHandler();
+            }
+
+            return result.isSuccess();
+        }
+    }
+
+    /**
      * Remove network with provided id.
      *
      * @param networkId Id of the network to lookup.
@@ -2316,6 +2350,9 @@ public class SupplicantP2pIfaceHal {
                         && !resultSsid.getResult().isEmpty()) {
                     group.setNetworkName(NativeUtil.removeEnclosingQuotes(
                             NativeUtil.encodeSsid(resultSsid.getResult())));
+                } else {
+                    Log.e(TAG, "group ssid is invalid! resultSsid = " + resultSsid);
+                    continue;
                 }
 
                 SupplicantResult<byte[]> resultBssid =

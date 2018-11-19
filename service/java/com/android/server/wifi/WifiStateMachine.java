@@ -1791,9 +1791,9 @@ public class WifiStateMachine extends StateMachine {
         int supportedFeatureSet = resultMsg.arg1;
         resultMsg.recycle();
 
-        // Mask the feature set against system properties.
-        boolean disableRtt = mPropertyService.getBoolean("config.disable_rtt", false);
-        if (disableRtt) {
+        boolean checkRtt = mContext.getPackageManager().hasSystemFeature(
+                PackageManager.FEATURE_WIFI_RTT);
+        if (!checkRtt) {
             supportedFeatureSet &=
                     ~(WifiManager.WIFI_FEATURE_D2D_RTT | WifiManager.WIFI_FEATURE_D2AP_RTT);
         }
@@ -5135,6 +5135,7 @@ public class WifiStateMachine extends StateMachine {
                         sendNetworkStateChangeBroadcast(mLastBssid);
                     }
                     mIpReachabilityMonitorActive = true;
+                    sendMessageDelayed(obtainMessage(CMD_IP_REACHABILITY_SESSION_END, 0, 0), 10000);
                     break;
                 case CMD_RSSI_POLL:
                     if (message.arg1 == mRssiPollToken) {
@@ -5816,6 +5817,7 @@ public class WifiStateMachine extends StateMachine {
             /** clear the roaming state, if we were roaming, we failed */
             mIsAutoRoaming = false;
             mIpReachabilityMonitorActive = false;
+            removeMessages(CMD_IP_REACHABILITY_SESSION_END);
 
             mWifiConnectivityManager.handleConnectionStateChanged(
                     WifiConnectivityManager.WIFI_STATE_DISCONNECTED);
