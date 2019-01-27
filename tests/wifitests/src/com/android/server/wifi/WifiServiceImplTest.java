@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import static android.net.wifi.WifiManager.DEVICE_MOBILITY_STATE_STATIONARY;
 import static android.net.wifi.WifiManager.HOTSPOT_FAILED;
 import static android.net.wifi.WifiManager.HOTSPOT_STARTED;
 import static android.net.wifi.WifiManager.HOTSPOT_STOPPED;
@@ -31,11 +32,9 @@ import static android.net.wifi.WifiManager.SAP_START_FAILURE_NO_CHANNEL;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLED;
-import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_FAILED;
 import static android.net.wifi.WifiManager.WIFI_FEATURE_INFRA_5G;
 import static android.net.wifi.WifiManager.WIFI_STATE_DISABLED;
-import static android.net.wifi.WifiManager.WIFI_STATE_ENABLED;
 import static android.provider.Settings.Secure.LOCATION_MODE_HIGH_ACCURACY;
 import static android.provider.Settings.Secure.LOCATION_MODE_OFF;
 
@@ -83,7 +82,7 @@ import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.pps.HomeSp;
-import android.os.Binder;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -96,7 +95,8 @@ import android.os.Process;
 import android.os.RemoteException;
 import android.os.UserManager;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.os.PowerProfile;
 import com.android.internal.telephony.TelephonyIntents;
@@ -145,7 +145,9 @@ public class WifiServiceImplTest {
     private static final int TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER = 234;
     private static final String WIFI_IFACE_NAME = "wlan0";
     private static final String TEST_COUNTRY_CODE = "US";
+    private static final String TEST_FACTORY_MAC = "10:22:34:56:78:92";
 
+    private AsyncChannel mAsyncChannel;
     private WifiServiceImpl mWifiServiceImpl;
     private TestLooper mLooper;
     private PowerManager mPowerManager;
@@ -156,6 +158,7 @@ public class WifiServiceImplTest {
     private int mPid2 = Process.myPid();
     private OsuProvider mOsuProvider;
     private SoftApCallback mStateMachineSoftApCallback;
+    private ApplicationInfo mApplicationInfo;
 
     final ArgumentCaptor<BroadcastReceiver> mBroadcastReceiverCaptor =
             ArgumentCaptor.forClass(BroadcastReceiver.class);
@@ -176,9 +179,7 @@ public class WifiServiceImplTest {
     @Mock ClientModeImpl mClientModeImpl;
     @Mock ActiveModeWarden mActiveModeWarden;
     @Mock HandlerThread mHandlerThread;
-    @Mock AsyncChannel mAsyncChannel;
     @Mock Resources mResources;
-    @Mock ApplicationInfo mApplicationInfo;
     @Mock FrameworkFacade mFrameworkFacade;
     @Mock WifiLockManager mLockManager;
     @Mock WifiMulticastLockManager mWifiMulticastLockManager;
@@ -272,11 +273,14 @@ public class WifiServiceImplTest {
         }
     }
 
-    @Before public void setUp() {
+    @Before public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
         mLooper = new TestLooper();
         mHandler = spy(new Handler(mLooper.getLooper()));
         mAppMessenger = new Messenger(mHandler);
+        mAsyncChannel = spy(new AsyncChannel());
+        mApplicationInfo = new ApplicationInfo();
+        mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.CUR_DEVELOPMENT;
 
         WifiInjector.sWifiInjector = mWifiInjector;
         when(mRequestInfo.getPid()).thenReturn(mPid);
@@ -295,6 +299,7 @@ public class WifiServiceImplTest {
         when(mContext.getResources()).thenReturn(mResources);
         when(mContext.getContentResolver()).thenReturn(mContentResolver);
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
+        when(mPackageManager.getApplicationInfo(any(), anyInt())).thenReturn(mApplicationInfo);
         when(mWifiInjector.getWifiApConfigStore()).thenReturn(mWifiApConfigStore);
         doNothing().when(mFrameworkFacade).registerContentObserver(eq(mContext), any(),
                 anyBoolean(), any());
@@ -329,6 +334,12 @@ public class WifiServiceImplTest {
         mOsuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
         when(mContext.getOpPackageName()).thenReturn(TEST_PACKAGE_NAME);
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETUP_WIZARD),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_STACK),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_MANAGED_PROVISIONING),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         when(mScanRequestProxy.startScan(anyInt(), anyString())).thenReturn(true);
 
@@ -391,17 +402,32 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testDumpNullArgs() {
+        setupClientModeImplHandlerForRunWithScissors();
+
         mWifiServiceImpl.dump(new FileDescriptor(), new PrintWriter(new StringWriter()), null);
     }
 
     /**
-     * Verify that wifi can be enabled by a caller with WIFI_STATE_CHANGE permission when wifi is
-     * off (no hotspot, no airplane mode).
-     *
-     * Note: hotspot is disabled by default
+     * Verify that wifi can be enabled by a caller with NETWORK_SETTINGS permission.
      */
     @Test
-    public void testSetWifiEnabledSuccess() throws Exception {
+    public void testSetWifiEnabledSuccessWithNetworkSettingsPermission() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
+        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
+        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
+    }
+
+    /**
+     * Verify that wifi can be enabled by a caller with NETWORK_MANAGED_PROVISIONING permission.
+     */
+    @Test
+    public void testSetWifiEnabledSuccessWithNetworkManagedProvisioningPermission()
+            throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_MANAGED_PROVISIONING),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
@@ -414,253 +440,61 @@ public class WifiServiceImplTest {
     @Test
     public void testSetWifiEnabledNoToggle() throws Exception {
         when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(false);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
     }
 
     /**
-     * Verify a SecurityException is thrown if a caller does not have the correct permission to
-     * toggle wifi.
+     * Verify a SecurityException is thrown if a caller does not have the CHANGE_WIFI_STATE
+     * permission to toggle wifi.
      */
     @Test
-    public void testSetWifiEnableWithoutPermission() throws Exception {
+    public void testSetWifiEnableWithoutChangeWifiStatePermission() throws Exception {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.CHANGE_WIFI_STATE),
                                                 eq("WifiService"));
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
         try {
             mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
             fail();
         } catch (SecurityException e) {
-
         }
-
     }
 
     /**
-     * Verify a SecurityException is thrown if OPSTR_CHANGE_WIFI_STATE is disabled for the app.
+     * Verify setWifiEnabled returns failure if a caller does not have the NETWORK_SETTINGS
+     * permission to toggle wifi.
      */
     @Test
-    public void testSetWifiEnableAppOpsRejected() throws Exception {
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        doThrow(new SecurityException()).when(mAppOpsManager)
-                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        try {
-            mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
-            fail();
-        } catch (SecurityException e) {
-
-        }
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify a SecurityException is thrown if OP_CHANGE_WIFI_STATE is set to MODE_IGNORED
-     * for the app.
-     */
-    @Test // No exception expected, but the operation should not be done
-    public void testSetWifiEnableAppOpsIgnored() throws Exception {
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        doReturn(AppOpsManager.MODE_IGNORED).when(mAppOpsManager)
-                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
-
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that a call from an app with the NETWORK_SETTINGS permission can enable wifi if we
-     * are in airplane mode.
-     */
-    @Test
-    public void testSetWifiEnabledFromNetworkSettingsHolderWhenInAirplaneMode() throws Exception {
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(true);
-        when(mContext.checkPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS), anyInt(), anyInt()))
-                        .thenReturn(PackageManager.PERMISSION_GRANTED);
-        assertTrue(mWifiServiceImpl.setWifiEnabled(SYSUI_PACKAGE_NAME, true));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that a caller without the NETWORK_SETTINGS permission can't enable wifi
-     * if we are in airplane mode.
-     */
-    @Test
-    public void testSetWifiEnabledFromAppFailsWhenInAirplaneMode() throws Exception {
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(true);
-        when(mContext.checkPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS), anyInt(), anyInt()))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
+    public void testSetWifiEnableWithoutNetworkSettingsPermission() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         assertFalse(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
     }
 
     /**
-     * Verify that a call from an app with the NETWORK_SETTINGS permission can enable wifi if we
-     * are in softap mode.
+     * Verify that wifi can be disabled by a caller with NETWORK_SETTINGS permission.
      */
     @Test
-    public void testSetWifiEnabledFromNetworkSettingsHolderWhenApEnabled() throws Exception {
-        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
-        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
-        mWifiServiceImpl.checkAndStartWifi();
-
-        verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat(new IntentFilterMatcher()));
-
-        TestUtil.sendWifiApStateChanged(mBroadcastReceiverCaptor.getValue(), mContext,
-                WIFI_AP_STATE_ENABLED, WIFI_AP_STATE_ENABLING, SAP_START_FAILURE_GENERAL,
-                WIFI_IFACE_NAME, IFACE_IP_MODE_LOCAL_ONLY);
-
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mContext.checkPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS), anyInt(), anyInt()))
-                        .thenReturn(PackageManager.PERMISSION_GRANTED);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        assertTrue(mWifiServiceImpl.setWifiEnabled(SYSUI_PACKAGE_NAME, true));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that a call from an app cannot enable wifi if we are in softap mode.
-     */
-    @Test
-    public void testSetWifiEnabledFromAppFailsWhenApEnabled() throws Exception {
-        when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
-        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
-        mWifiServiceImpl.checkAndStartWifi();
-
-        verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
-                (IntentFilter) argThat(new IntentFilterMatcher()));
-
-        TestUtil.sendWifiApStateChanged(mBroadcastReceiverCaptor.getValue(), mContext,
-                WIFI_AP_STATE_ENABLED, WIFI_AP_STATE_ENABLING, SAP_START_FAILURE_GENERAL,
-                WIFI_IFACE_NAME, IFACE_IP_MODE_LOCAL_ONLY);
-
-        when(mContext.checkPermission(
-                eq(android.Manifest.permission.NETWORK_SETTINGS), anyInt(), anyInt()))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        assertFalse(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
-        verify(mSettingsStore, never()).handleWifiToggled(anyBoolean());
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that wifi can be enabled without consent UI popup when permission
-     * review is required but got permission granted.
-     */
-    @Test
-    public void testSetWifiEnabledSuccessWhenPermissionReviewRequiredAndPermissionGranted()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_GRANTED);
-
-        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that wifi is not enabled but got consent UI popup when permission
-     * review is required but do not have permission.
-     */
-    @Test
-    public void testSetWifiEnabledConsentUiWhenPermissionReviewRequiredAndPermissionDenied()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mPackageManager.getApplicationInfoAsUser(
-                anyString(), anyInt(), anyInt()))
-                        .thenReturn(mApplicationInfo);
-        mApplicationInfo.uid = TEST_UID;
-        int uid = Binder.getCallingUid();
-        BinderUtil.setUid(TEST_UID);
-
-        try {
-            assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
-        } finally {
-            BinderUtil.setUid(uid);
-        }
-
-        verify(mContext).startActivity(any());
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that wifi can be enabled when wifi is off and permission review is
-     * not required.
-     */
-    @Test
-    public void testSetWifiEnabledSuccessWhenPermissionReviewNotRequired() throws Exception {
-        // Set PermissionReviewRequired to false explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(false);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-
-        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify a SecurityException is thrown when bringing up Consent UI but caller
-     * uid does not match application uid.
-     *
-     * @throws SecurityException
-     */
-    @Test
-    public void testSetWifiEnabledThrowsSecurityExceptionForConsentUiIfUidNotMatch()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(true))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mPackageManager.getApplicationInfoAsUser(
-                anyString(), anyInt(), anyInt()))
-                        .thenReturn(mApplicationInfo);
-        mApplicationInfo.uid = TEST_UID;
-        int uid = Binder.getCallingUid();
-        BinderUtil.setUid(OTHER_TEST_UID);
-
-        try {
-            mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true);
-            fail();
-        } catch (SecurityException e) {
-        } finally {
-            BinderUtil.setUid(uid);
-        }
-    }
-
-    /**
-     * Verify that wifi can be disabled by a caller with WIFI_STATE_CHANGE permission when wifi is
-     * on.
-     */
-    @Test
-    public void testSetWifiDisabledSuccess() throws Exception {
+    public void testSetWifiDisabledSuccessWithNetworkSettingsPermission() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
-        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
+    }
+
+    /**
+     * Verify that wifi can be disabled by a caller with NETWORK_MANAGED_PROVISIONING permission.
+     */
+    @Test
+    public void testSetWifiDisabledSuccessWithNetworkManagedProvisioningPermission()
+            throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_MANAGED_PROVISIONING),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
+        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
         verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
     }
 
@@ -669,133 +503,26 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testSetWifiDisabledNoToggle() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(false);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
         verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
     }
 
     /**
-     * Verify a SecurityException is thrown if a caller does not have the correct permission to
-     * toggle wifi.
+     * Verify a SecurityException is thrown if a caller does not have the CHANGE_WIFI_STATE
+     * permission to toggle wifi.
      */
     @Test
-    public void testSetWifiDisabledWithoutPermission() throws Exception {
+    public void testSetWifiDisabledWithoutChangeWifiStatePermission() throws Exception {
         doThrow(new SecurityException()).when(mContext)
                 .enforceCallingOrSelfPermission(eq(android.Manifest.permission.CHANGE_WIFI_STATE),
-                                                eq("WifiService"));
+                        eq("WifiService"));
         try {
             mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false);
             fail();
         } catch (SecurityException e) { }
-    }
-
-    /**
-     * Verify that wifi can be disabled without consent UI popup when wireless
-     * consnet is required but got permission granted.
-     */
-    @Test
-    public void testSetWifiDisabledSuccessWhenPermissionReviewRequiredAndPermissionGranted()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_GRANTED);
-
-        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that wifi is not disabled but got consent UI popup when wireless
-     * consent is required but do not have permission.
-     */
-    @Test
-    public void testSetWifiDisabledConsentUiWhenPermissionDenied()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mPackageManager.getApplicationInfoAsUser(
-                anyString(), anyInt(), anyInt()))
-                        .thenReturn(mApplicationInfo);
-        mApplicationInfo.uid = TEST_UID;
-        int uid = Binder.getCallingUid();
-        BinderUtil.setUid(TEST_UID);
-
-        try {
-            assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
-        } finally {
-            BinderUtil.setUid(uid);
-        }
-        verify(mContext).startActivity(any());
-        verify(mWifiController, never()).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify that wifi can be disabled when wifi is on and permission review is
-     * not required.
-     */
-    @Test
-    public void testSetWifiDisabledSuccessWhenPermissionReviewNotRequired() throws Exception {
-        // Set PermissionReviewRequired to false explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(false);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_GRANTED);
-
-        assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
-        verify(mWifiController).sendMessage(eq(CMD_WIFI_TOGGLED));
-    }
-
-    /**
-     * Verify a SecurityException is thrown when bringing up Consent UI but caller
-     * uid does not match application uid.
-     *
-     * @throws SecurityException
-     */
-    @Test
-    public void testSetWifiDisabledThrowsSecurityExceptionForConsentUiIfUidNotMatch()
-            throws Exception {
-        // Set PermissionReviewRequired to true explicitly
-        when(mResources.getBoolean(anyInt())).thenReturn(true);
-        mWifiServiceImpl = new WifiServiceImpl(mContext, mWifiInjector, mAsyncChannel);
-        when(mSettingsStore.handleWifiToggled(eq(false))).thenReturn(true);
-        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
-        when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_ENABLED);
-        when(mContext.checkCallingPermission(
-                eq(android.Manifest.permission.MANAGE_WIFI_WHEN_WIRELESS_CONSENT_REQUIRED)))
-                        .thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mPackageManager.getApplicationInfoAsUser(
-                anyString(), anyInt(), anyInt()))
-                        .thenReturn(mApplicationInfo);
-        mApplicationInfo.uid = TEST_UID;
-        int uid = Binder.getCallingUid();
-        BinderUtil.setUid(OTHER_TEST_UID);
-
-        try {
-            mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false);
-            fail();
-        } catch (SecurityException e) {
-
-        } finally {
-            // reset Binder uid so we do not mess up other tests
-            BinderUtil.setUid(uid);
-        }
     }
 
     /**
@@ -888,6 +615,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testGetWifiApEnabled() {
+        setupClientModeImplHandlerForRunWithScissors();
+
         // set up WifiServiceImpl with a live thread for testing
         HandlerThread serviceHandlerThread = createAndStartHandlerThreadForRunWithScissors();
         when(mWifiInjector.getWifiServiceHandlerThread()).thenReturn(serviceHandlerThread);
@@ -966,6 +695,8 @@ public class WifiServiceImplTest {
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(true);
         when(mClientModeImpl.syncGetWifiState()).thenReturn(WIFI_STATE_DISABLED);
         when(mContext.getPackageName()).thenReturn(ANDROID_SYSTEM_PACKAGE);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mWifiController).start();
         verify(mWifiController).sendMessage(CMD_WIFI_TOGGLED);
@@ -1285,6 +1016,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testHotspotDoesNotStartWhenAlreadyTethering() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mSettingsStore.getLocationModeSetting(mContext))
                             .thenReturn(LOCATION_MODE_HIGH_ACCURACY);
         when(mFrameworkFacade.isAppForeground(anyInt())).thenReturn(true);
@@ -1503,6 +1236,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void registerSoftApCallbackFailureOnLinkToDeath() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         doThrow(new RemoteException())
                 .when(mAppBinder).linkToDeath(any(IBinder.DeathRecipient.class), anyInt());
         mWifiServiceImpl.registerSoftApCallback(mAppBinder, mClientSoftApCallback, 1);
@@ -1538,6 +1273,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void replacesOldCallbackWithNewCallbackWhenRegisteringTwice() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mAppBinder, mClientSoftApCallback, callbackIdentifier);
         registerSoftApCallbackAndVerify(
@@ -1561,6 +1298,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void unregisterSoftApCallbackRemovesCallback() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mClientSoftApCallback, callbackIdentifier);
 
@@ -1579,6 +1318,8 @@ public class WifiServiceImplTest {
     @Test
     public void unregisterSoftApCallbackDoesNotRemoveCallbackIfCallbackIdentifierNotMatching()
             throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mClientSoftApCallback, callbackIdentifier);
 
@@ -1597,6 +1338,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void correctCallbackIsCalledAfterAddingTwoCallbacksAndRemovingOne() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         mWifiServiceImpl.registerSoftApCallback(mAppBinder, mClientSoftApCallback,
                 callbackIdentifier);
@@ -1632,6 +1375,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void registersForBinderDeathOnRegisterSoftApCallback() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mClientSoftApCallback, callbackIdentifier);
         verify(mAppBinder).linkToDeath(any(IBinder.DeathRecipient.class), anyInt());
@@ -1642,6 +1387,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void unregistersSoftApCallbackOnBinderDied() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         ArgumentCaptor<IBinder.DeathRecipient> drCaptor =
                 ArgumentCaptor.forClass(IBinder.DeathRecipient.class);
         final int callbackIdentifier = 1;
@@ -1664,6 +1411,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void callsRegisteredCallbacksOnNumClientsChangedEvent() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mClientSoftApCallback, callbackIdentifier);
 
@@ -1678,6 +1427,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void callsRegisteredCallbacksOnSoftApStateChangedEvent() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int callbackIdentifier = 1;
         registerSoftApCallbackAndVerify(mClientSoftApCallback, callbackIdentifier);
 
@@ -1692,6 +1443,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void updatesSoftApStateAndNumClientsOnSoftApEvents() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         final int testNumClients = 4;
         mStateMachineSoftApCallback.onStateChanged(WIFI_AP_STATE_ENABLED, 0);
         mStateMachineSoftApCallback.onNumClientsChanged(testNumClients);
@@ -1769,6 +1522,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testRegisteredCallbacksTriggeredOnSoftApDisabling() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -1802,6 +1557,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testRegisteredCallbacksTriggeredOnSoftApDisabled() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -1858,6 +1615,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testRegisteredCallbacksTriggeredOnlyOnceWhenSoftApDisabling() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -1956,6 +1715,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testAllRegisteredCallbacksTriggeredWhenSoftApStops() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -1996,6 +1757,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testAllRegisteredCallbacksTriggeredWhenSoftApStopsLOHSNotActive() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -2025,6 +1788,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testLOHSReadyWithoutRegisteredRequestsStopsSoftApMode() {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_LOCAL_ONLY);
         mLooper.dispatchAll();
 
@@ -2038,6 +1803,8 @@ public class WifiServiceImplTest {
     @Test
     public void testRegisteredLocalOnlyHotspotRequestorsGetOnStartedCallbackWhenReady()
             throws Exception {
+        setupClientModeImplHandlerForPost();
+
         registerLOHSRequestFull();
 
         mWifiServiceImpl.registerLOHSForTest(TEST_PID, mRequestInfo);
@@ -2060,6 +1827,8 @@ public class WifiServiceImplTest {
     @Test
     public void testRegisterLocalOnlyHotspotRequestAfterAlreadyStartedGetsOnStartedCallback()
             throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.registerLOHSForTest(TEST_PID, mRequestInfo);
 
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_LOCAL_ONLY);
@@ -2083,6 +1852,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testCallOnFailedLocalOnlyHotspotRequestWhenIpConfigFails() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         registerLOHSRequestFull();
 
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_CONFIGURATION_ERROR);
@@ -2111,6 +1882,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testStopSoftApWhenIpConfigFails() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_CONFIGURATION_ERROR);
         mLooper.dispatchAll();
 
@@ -2123,6 +1896,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testCallOnFailedLocalOnlyHotspotRequestWhenTetheringStarts() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         registerLOHSRequestFull();
 
         mWifiServiceImpl.updateInterfaceIpState(WIFI_IFACE_NAME, IFACE_IP_MODE_TETHERED);
@@ -2161,6 +1936,8 @@ public class WifiServiceImplTest {
     @Test
     public void testRegisterLocalOnlyHotspotRequestAfterStoppedNoOnStartedCallback()
             throws Exception {
+        setupClientModeImplHandlerForPost();
+
         when(mFrameworkFacade.inStorageManagerCryptKeeperBounce()).thenReturn(false);
         when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
         mWifiServiceImpl.checkAndStartWifi();
@@ -2257,12 +2034,14 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testAddPasspointProfileViaAddNetwork() throws Exception {
+        mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.P;
         WifiConfiguration config = WifiConfigurationTestUtil.createPasspointNetwork();
         config.enterpriseConfig.setEapMethod(WifiEnterpriseConfig.Eap.TLS);
 
         PackageManager pm = mock(PackageManager.class);
         when(pm.hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)).thenReturn(true);
         when(mContext.getPackageManager()).thenReturn(pm);
+        when(pm.getApplicationInfo(any(), anyInt())).thenReturn(mApplicationInfo);
 
         when(mClientModeImpl.syncAddOrUpdatePasspointConfig(any(),
                 any(PasspointConfiguration.class), anyInt())).thenReturn(true);
@@ -2431,57 +2210,61 @@ public class WifiServiceImplTest {
     }
 
     /**
+     * Helper to test handling of async messages by wifi service when the message comes from an
+     * app without one of the privileged permissions.
+     */
+    private void verifyAsyncChannelMessageHandlingWithoutPrivilegedPermissons(
+            int requestMsgWhat, int expectedReplyMsgwhat) throws RemoteException {
+        WifiAsyncChannelTester tester = verifyAsyncChannelHalfConnected();
+
+        int uidWithoutPermission = 5;
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETUP_WIZARD),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_STACK),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+
+        Message request = Message.obtain();
+        request.what = requestMsgWhat;
+        request.sendingUid = uidWithoutPermission;
+
+        mLooper.startAutoDispatch();
+        Message reply = tester.sendMessageSynchronously(request);
+        mLooper.stopAutoDispatch();
+
+        verify(mClientModeImpl, never()).sendMessage(any(Message.class));
+        assertEquals(expectedReplyMsgwhat, reply.what);
+        assertEquals(WifiManager.NOT_AUTHORIZED, reply.arg1);
+    }
+
+    /**
      * Verify that the CONNECT_NETWORK message received from an app without
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is rejected with the correct
-     * error code.
+     * one of the privileged permission is rejected with the correct error code.
      */
     @Test
-    public void testConnectNetworkWithoutChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithoutChangePermisson(
+    public void testConnectNetworkWithoutPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithoutPrivilegedPermissons(
                 WifiManager.CONNECT_NETWORK, WifiManager.CONNECT_NETWORK_FAILED);
     }
 
     /**
      * Verify that the FORGET_NETWORK message received from an app without
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is rejected with the correct
-     * error code.
+     * one of the privileged permission is rejected with the correct error code.
      */
     @Test
-    public void testForgetNetworkWithoutChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithoutChangePermisson(
+    public void testForgetNetworkWithoutPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithoutPrivilegedPermissons(
                 WifiManager.SAVE_NETWORK, WifiManager.SAVE_NETWORK_FAILED);
     }
 
     /**
-     * Verify that the START_WPS message received from an app without
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is rejected with the correct
-     * error code.
-     */
-    @Test
-    public void testStartWpsWithoutChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithoutChangePermisson(
-                WifiManager.START_WPS, WifiManager.WPS_FAILED);
-    }
-
-    /**
-     * Verify that the CANCEL_WPS message received from an app without
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is rejected with the correct
-     * error code.
-     */
-    @Test
-    public void testCancelWpsWithoutChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithoutChangePermisson(
-                WifiManager.CANCEL_WPS, WifiManager.CANCEL_WPS_FAILED);
-    }
-
-    /**
      * Verify that the DISABLE_NETWORK message received from an app without
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is rejected with the correct
-     * error code.
+     * one of the privileged permission is rejected with the correct error code.
      */
     @Test
-    public void testDisableNetworkWithoutChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithoutChangePermisson(
+    public void testDisableNetworkWithoutPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithoutPrivilegedPermissons(
                 WifiManager.DISABLE_NETWORK, WifiManager.DISABLE_NETWORK_FAILED);
     }
 
@@ -2518,16 +2301,16 @@ public class WifiServiceImplTest {
         assertEquals(requestMsgWhat, messageArgumentCaptor.getValue().what);
     }
 
-     /**
+    /**
      * Helper to test handling of async messages by wifi service when the message comes from an
-     * app with {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission where we
-     * immediately return an error for deprecated functionality.
+     * app with one of the  privileged permissions.
      */
-    private void verifyAsyncChannelDeprecatedMessageHandlingNotSentToCMIWithChangePermisson(
-            int requestMsgWhat, Object requestMsgObj) throws Exception {
+    private void verifyAsyncChannelMessageHandlingWithPrivilegedPermissions(
+            int requestMsgWhat, Object requestMsgObj) throws RemoteException {
         WifiAsyncChannelTester tester = verifyAsyncChannelHalfConnected();
 
-        when(mWifiPermissionsUtil.checkChangePermission(anyInt())).thenReturn(true);
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
 
         Message request = Message.obtain();
         request.what = requestMsgWhat;
@@ -2536,68 +2319,44 @@ public class WifiServiceImplTest {
         tester.sendMessage(request);
         mLooper.dispatchAll();
 
-        verify(mClientModeImpl, never()).sendMessage(any());
+        ArgumentCaptor<Message> messageArgumentCaptor = ArgumentCaptor.forClass(Message.class);
+        verify(mClientModeImpl).sendMessage(messageArgumentCaptor.capture());
+        assertEquals(requestMsgWhat, messageArgumentCaptor.getValue().what);
     }
 
     /**
      * Verify that the CONNECT_NETWORK message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
+     * one of the privileged permission is forwarded to ClientModeImpl.
      */
     @Test
-    public void testConnectNetworkWithChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithChangePermisson(
+    public void testConnectNetworkWithPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithPrivilegedPermissions(
                 WifiManager.CONNECT_NETWORK, new WifiConfiguration());
     }
 
     /**
      * Verify that the SAVE_NETWORK message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
+     * one of the privileged permission is forwarded to ClientModeImpl.
      */
     @Test
-    public void testSaveNetworkWithChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithChangePermisson(
+    public void testSaveNetworkWithPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithPrivilegedPermissions(
                 WifiManager.SAVE_NETWORK, new WifiConfiguration());
     }
 
     /**
-     * Verify that the START_WPS message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
-     */
-    @Test
-    public void testStartWpsWithChangePermission() throws Exception {
-        verifyAsyncChannelDeprecatedMessageHandlingNotSentToCMIWithChangePermisson(
-                WifiManager.START_WPS, new Object());
-    }
-
-    /**
-     * Verify that the CANCEL_WPS message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
-     */
-    @Test
-    public void testCancelWpsWithChangePermission() throws Exception {
-        verifyAsyncChannelDeprecatedMessageHandlingNotSentToCMIWithChangePermisson(
-                WifiManager.CANCEL_WPS, new Object());
-    }
-
-    /**
      * Verify that the DISABLE_NETWORK message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
+     * one of the privileged permission is forwarded to ClientModeImpl.
      */
     @Test
-    public void testDisableNetworkWithChangePermission() throws Exception {
-        verifyAsyncChannelMessageHandlingWithChangePermisson(
+    public void testDisableNetworkWithPrivilegedPermission() throws Exception {
+        verifyAsyncChannelMessageHandlingWithPrivilegedPermissions(
                 WifiManager.DISABLE_NETWORK, new Object());
     }
 
     /**
      * Verify that the RSSI_PKTCNT_FETCH message received from an app with
-     * {@link android.Manifest.permission#CHANGE_WIFI_STATE} permission is forwarded to
-     * ClientModeImpl.
+     * one of the privileged permission is forwarded to ClientModeImpl.
      */
     @Test
     public void testRssiPktcntFetchWithChangePermission() throws Exception {
@@ -2626,6 +2385,10 @@ public class WifiServiceImplTest {
                         eq("ConnectivityService"));
         mWifiServiceImpl.setCountryCode(TEST_COUNTRY_CODE);
         verify(mWifiCountryCode, never()).setCountryCode(TEST_COUNTRY_CODE);
+    }
+
+    private void setupClientModeImplHandlerForPost() {
+        when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
     }
 
     /**
@@ -2696,7 +2459,7 @@ public class WifiServiceImplTest {
                 android.Manifest.permission.CHANGE_WIFI_STATE, "WifiService");
         doThrow(new SecurityException()).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
-        mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME);
+        assertTrue(mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME));
         verify(mClientModeImpl).disconnectCommand();
     }
 
@@ -2707,9 +2470,9 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testDisconnectWithChangeWifiStatePerm() throws Exception {
-        mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME);
+        assertFalse(mWifiServiceImpl.disconnect(TEST_PACKAGE_NAME));
         verifyCheckChangePermission(TEST_PACKAGE_NAME);
-        verify(mClientModeImpl).disconnectCommand();
+        verify(mClientModeImpl, never()).disconnectCommand();
     }
 
     /**
@@ -2733,6 +2496,7 @@ public class WifiServiceImplTest {
 
     @Test
     public void testPackageRemovedBroadcastHandling() {
+        when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
                 (IntentFilter) argThat((IntentFilter filter) ->
@@ -2750,10 +2514,12 @@ public class WifiServiceImplTest {
 
         mLooper.dispatchAll();
         verify(mScanRequestProxy).clearScanRequestTimestampsForApp(packageName, uid);
+        verify(mWifiNetworkSuggestionsManager).removeApp(packageName);
     }
 
     @Test
     public void testPackageRemovedBroadcastHandlingWithNoUid() {
+        when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
                 (IntentFilter) argThat((IntentFilter filter) ->
@@ -2769,10 +2535,12 @@ public class WifiServiceImplTest {
 
         mLooper.dispatchAll();
         verify(mScanRequestProxy, never()).clearScanRequestTimestampsForApp(anyString(), anyInt());
+        verify(mWifiNetworkSuggestionsManager, never()).removeApp(anyString());
     }
 
     @Test
     public void testPackageRemovedBroadcastHandlingWithNoPackageName() {
+        when(mWifiInjector.getClientModeImplHandler()).thenReturn(mHandler);
         mWifiServiceImpl.checkAndStartWifi();
         verify(mContext).registerReceiver(mBroadcastReceiverCaptor.capture(),
                 (IntentFilter) argThat((IntentFilter filter) ->
@@ -2788,6 +2556,7 @@ public class WifiServiceImplTest {
 
         mLooper.dispatchAll();
         verify(mScanRequestProxy, never()).clearScanRequestTimestampsForApp(anyString(), anyInt());
+        verify(mWifiNetworkSuggestionsManager, never()).removeApp(anyString());
     }
 
     @Test
@@ -3001,6 +2770,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void registerTrafficStateCallbackAndVerify() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.registerTrafficStateCallback(
                 mAppBinder, mTrafficStateCallback, TEST_TRAFFIC_STATE_CALLBACK_IDENTIFIER);
         mLooper.dispatchAll();
@@ -3013,6 +2784,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void unregisterTrafficStateCallbackAndVerify() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.unregisterTrafficStateCallback(0);
         mLooper.dispatchAll();
         verify(mWifiTrafficPoller).removeCallback(0);
@@ -3074,6 +2847,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void registerNetworkRequestMatchCallbackAndVerify() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.registerNetworkRequestMatchCallback(
                 mAppBinder, mNetworkRequestMatchCallback,
                 TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
@@ -3089,6 +2864,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void unregisterNetworkRequestMatchCallbackAndVerify() throws Exception {
+        setupClientModeImplHandlerForPost();
+
         mWifiServiceImpl.unregisterNetworkRequestMatchCallback(
                 TEST_NETWORK_REQUEST_MATCH_CALLBACK_IDENTIFIER);
         mLooper.dispatchAll();
@@ -3101,6 +2878,8 @@ public class WifiServiceImplTest {
      */
     @Test
     public void testFactoryReset() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         final String fqdn = "example.com";
         WifiConfiguration network = WifiConfigurationTestUtil.createOpenNetwork();
         PasspointConfiguration config = new PasspointConfiguration();
@@ -3157,6 +2936,81 @@ public class WifiServiceImplTest {
     }
 
     /**
+     * Verify that add or update networks is not allowed for apps targeting Q SDK.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsNotAllowedForAppsTargetingQSDK() throws Exception {
+        mLooper.dispatchAll();
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mClientModeImpl.syncAddOrUpdateNetwork(any(), any())).thenReturn(0);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        assertEquals(-1, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mClientModeImpl, never()).syncAddOrUpdateNetwork(any(), any());
+    }
+
+    /**
+     * Verify that add or update networks is allowed for apps targeting below Q SDK.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsAllowedForAppsTargetingBelowQSDK() throws Exception {
+        mLooper.dispatchAll();
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.P;
+        when(mClientModeImpl.syncAddOrUpdateNetwork(any(), any())).thenReturn(0);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+    }
+
+    /**
+     * Verify that add or update networks is allowed for settings app.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsAllowedForSettingsApp() throws Exception {
+        mLooper.dispatchAll();
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mApplicationInfo.targetSdkVersion = Build.VERSION_CODES.P;
+        when(mClientModeImpl.syncAddOrUpdateNetwork(any(), any())).thenReturn(0);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
+
+        // Ensure that we don't check for change permission.
+        verify(mContext, never()).enforceCallingOrSelfPermission(
+                android.Manifest.permission.CHANGE_WIFI_STATE, "WifiService");
+        verify(mAppOpsManager, never()).noteOp(
+                AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+    }
+
+    /**
+     * Verify that add or update networks is allowed for system apps.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsAllowedForSystemApp() throws Exception {
+        mLooper.dispatchAll();
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        mApplicationInfo.flags = ApplicationInfo.FLAG_SYSTEM;
+        when(mClientModeImpl.syncAddOrUpdateNetwork(any(), any())).thenReturn(0);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mClientModeImpl).syncAddOrUpdateNetwork(any(), any());
+    }
+
+    /**
      * Ensure that we invoke {@link WifiNetworkSuggestionsManager} to add network
      * suggestions.
      */
@@ -3164,11 +3018,20 @@ public class WifiServiceImplTest {
     public void testAddNetworkSuggestions() {
         setupClientModeImplHandlerForRunWithScissors();
 
-        when(mWifiNetworkSuggestionsManager.add(any(), anyString())).thenReturn(true);
-        assertTrue(mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+        when(mWifiNetworkSuggestionsManager.add(any(), anyString()))
+                .thenReturn(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS);
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
 
-        when(mWifiNetworkSuggestionsManager.add(any(), anyString())).thenReturn(false);
-        assertFalse(mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+        when(mWifiNetworkSuggestionsManager.add(any(), anyString()))
+                .thenReturn(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE);
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_DUPLICATE,
+                mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        doReturn(false).when(mHandlerSpyForCmiRunWithScissors)
+                .runWithScissors(any(), anyLong());
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL,
+                mWifiServiceImpl.addNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
 
         verify(mWifiNetworkSuggestionsManager, times(2)).add(any(), eq(TEST_PACKAGE_NAME));
     }
@@ -3181,12 +3044,133 @@ public class WifiServiceImplTest {
     public void testRemoveNetworkSuggestions() {
         setupClientModeImplHandlerForRunWithScissors();
 
-        when(mWifiNetworkSuggestionsManager.remove(any(), anyString())).thenReturn(true);
-        assertTrue(mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+        when(mWifiNetworkSuggestionsManager.remove(any(), anyString()))
+                .thenReturn(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID);
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID,
+                mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
 
-        when(mWifiNetworkSuggestionsManager.remove(any(), anyString())).thenReturn(false);
-        assertFalse(mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+        when(mWifiNetworkSuggestionsManager.remove(any(), anyString()))
+                .thenReturn(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS);
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS,
+                mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
+
+        doReturn(false).when(mHandlerSpyForCmiRunWithScissors)
+                .runWithScissors(any(), anyLong());
+        assertEquals(WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL,
+                mWifiServiceImpl.removeNetworkSuggestions(mock(List.class), TEST_PACKAGE_NAME));
 
         verify(mWifiNetworkSuggestionsManager, times(2)).remove(any(), eq(TEST_PACKAGE_NAME));
+    }
+
+    /**
+     * Verify that if the caller has NETWORK_SETTINGS permission, then it can invoke
+     * {@link WifiManager#disableEphemeralNetwork(String)}.
+     */
+    @Test
+    public void testDisableEphemeralNetworkWithNetworkSettingsPerm() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
+        verify(mClientModeImpl).disableEphemeralNetwork(anyString());
+    }
+
+    /**
+     * Verify that if the caller does not have NETWORK_SETTINGS permission, then it cannot invoke
+     * {@link WifiManager#disableEphemeralNetwork(String)}.
+     */
+    @Test
+    public void testDisableEphemeralNetworkWithoutNetworkSettingsPerm() throws Exception {
+        when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
+                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
+        mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
+        verify(mClientModeImpl, never()).disableEphemeralNetwork(anyString());
+    }
+
+    /**
+     * Verify getting the factory MAC address.
+     */
+    @Test
+    public void testGetFactoryMacAddresses() throws Exception {
+        setupClientModeImplHandlerForRunWithScissors();
+        when(mClientModeImpl.getFactoryMacAddress()).thenReturn(TEST_FACTORY_MAC);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
+        final String[] factoryMacs = mWifiServiceImpl.getFactoryMacAddresses();
+        assertEquals(1, factoryMacs.length);
+        assertEquals(TEST_FACTORY_MAC, factoryMacs[0]);
+        verify(mClientModeImpl).getFactoryMacAddress();
+    }
+
+    /**
+     * Verify getting the factory MAC address returns null when posting the runnable to handler
+     * fails.
+     */
+    @Test
+    public void testGetFactoryMacAddressesPostFail() throws Exception {
+        setupClientModeImplHandlerForRunWithScissors();
+        doReturn(false).when(mHandlerSpyForCmiRunWithScissors)
+                .runWithScissors(any(), anyLong());
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
+        assertNull(mWifiServiceImpl.getFactoryMacAddresses());
+        verify(mClientModeImpl, never()).getFactoryMacAddress();
+    }
+
+    /**
+     * Verify getting the factory MAC address returns null when the lower layers fail.
+     */
+    @Test
+    public void testGetFactoryMacAddressesFail() throws Exception {
+        setupClientModeImplHandlerForRunWithScissors();
+        when(mClientModeImpl.getFactoryMacAddress()).thenReturn(null);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
+        assertNull(mWifiServiceImpl.getFactoryMacAddresses());
+        verify(mClientModeImpl).getFactoryMacAddress();
+    }
+
+    /**
+     * Verify getting the factory MAC address throws a SecurityException if the calling app
+     * doesn't have NETWORK_SETTINGS permission.
+     */
+    @Test
+    public void testGetFactoryMacAddressesFailNoNetworkSettingsPermission() throws Exception {
+        setupClientModeImplHandlerForRunWithScissors();
+        when(mClientModeImpl.getFactoryMacAddress()).thenReturn(TEST_FACTORY_MAC);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
+        try {
+            mWifiServiceImpl.getFactoryMacAddresses();
+            fail();
+        } catch (SecurityException e) {
+            assertTrue("Exception message should contain 'factory MAC'",
+                    e.toString().contains("factory MAC"));
+        }
+    }
+
+    /**
+     * Verify that a call to setDeviceMobilityState throws a SecurityException if the
+     * caller does not have WIFI_SET_DEVICE_MOBILITY_STATE permission.
+     */
+    @Test
+    public void setDeviceMobilityStateThrowsSecurityExceptionOnMissingPermissions() {
+        doThrow(new SecurityException()).when(mContext)
+                .enforceCallingPermission(
+                        eq(android.Manifest.permission.WIFI_SET_DEVICE_MOBILITY_STATE),
+                        eq("WifiService"));
+        try {
+            mWifiServiceImpl.setDeviceMobilityState(DEVICE_MOBILITY_STATE_STATIONARY);
+            fail("expected SecurityException");
+        } catch (SecurityException expected) {
+        }
+    }
+
+    /**
+     * Verifies that setDeviceMobilityState runs on a separate handler thread.
+     */
+    @Test
+    public void setDeviceMobilityStateRunsOnHandler() {
+        setupClientModeImplHandlerForPost();
+
+        mWifiServiceImpl.setDeviceMobilityState(DEVICE_MOBILITY_STATE_STATIONARY);
+        verify(mClientModeImpl, never()).setDeviceMobilityState(anyInt());
+        mLooper.dispatchAll();
+        verify(mClientModeImpl).setDeviceMobilityState(eq(DEVICE_MOBILITY_STATE_STATIONARY));
     }
 }

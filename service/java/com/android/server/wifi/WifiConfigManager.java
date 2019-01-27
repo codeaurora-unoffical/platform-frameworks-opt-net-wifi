@@ -1027,6 +1027,7 @@ public class WifiConfigManager {
         newInternalConfig.requirePMF = externalConfig.requirePMF;
         newInternalConfig.noInternetAccessExpected = externalConfig.noInternetAccessExpected;
         newInternalConfig.ephemeral = externalConfig.ephemeral;
+        newInternalConfig.osu = externalConfig.osu;
         newInternalConfig.trusted = externalConfig.trusted;
         newInternalConfig.useExternalScores = externalConfig.useExternalScores;
         newInternalConfig.shared = externalConfig.shared;
@@ -1122,9 +1123,11 @@ public class WifiConfigManager {
         }
 
         if (WifiConfigurationUtil.hasMacRandomizationSettingsChanged(existingInternalConfig,
-                newInternalConfig) && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
+                newInternalConfig) && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
+                && !mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify MAC randomization "
-                    + "Settings " + config.configKey() + ". Must have NETWORK_SETTINGS");
+                    + "Settings " + config.configKey() + ". Must have NETWORK_SETTINGS or"
+                    + "NETWORK_SETUP_WIZARD.");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
@@ -2642,14 +2645,22 @@ public class WifiConfigManager {
                     Pair<String, String> currentIdentity =
                             TelephonyUtil.getSimIdentity(mTelephonyManager,
                                     new TelephonyUtil(), config);
+                    if (mVerboseLoggingEnabled) {
+                        Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
+                    }
 
                     // Update the loaded config
                     if (currentIdentity == null) {
                         Log.d(TAG, "Identity is null");
                         break;
                     }
-                    config.enterpriseConfig.setIdentity(currentIdentity.first);
-                    if (config.enterpriseConfig.getEapMethod() != WifiEnterpriseConfig.Eap.PEAP) {
+                    if (config.enterpriseConfig.getEapMethod() == WifiEnterpriseConfig.Eap.PEAP) {
+                        config.enterpriseConfig.setIdentity(currentIdentity.first);
+                        // do not reset anonymous identity since it may be dependent on user-entry
+                        // (i.e. cannot re-request on every reboot/SIM re-entry)
+                    } else {
+                        // reset identity as well: supplicant will ask us for it
+                        config.enterpriseConfig.setIdentity("");
                         config.enterpriseConfig.setAnonymousIdentity("");
                     }
                 }
@@ -2959,12 +2970,7 @@ public class WifiConfigManager {
             mWifiConfigStore.setUserStores(WifiConfigStore.createUserFiles(mCurrentUserId));
             mDeferredUserUnlockRead = false;
         }
-        if (!mWifiConfigStore.areStoresPresent()) {
-            Log.d(TAG, "New store files not found. No saved networks loaded!");
-            if (!mWifiConfigStoreLegacy.areStoresPresent()) {
-                // No legacy store files either, so reset the pending store read flag.
-                mPendingStoreRead = false;
-            }
+        if (mWifiConfigStoreLegacy.areStoresPresent()) {
             return true;
         }
         try {
