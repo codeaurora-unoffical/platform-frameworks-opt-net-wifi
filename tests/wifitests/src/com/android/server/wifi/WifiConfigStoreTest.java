@@ -25,7 +25,8 @@ import android.content.pm.PackageManager;
 import android.net.MacAddress;
 import android.net.wifi.WifiConfiguration;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.util.ArrayUtils;
 import com.android.server.wifi.WifiConfigStore.StoreData;
@@ -84,6 +85,7 @@ public class WifiConfigStoreTest {
                     + "<byte-array name=\"AllowedGroupMgmtCiphers\" num=\"0\"></byte-array>\n"
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
+                    + "<int name=\"MacRandomizationSetting\" value=\"1\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
                     + "<null name=\"ProviderFriendlyName\" />\n"

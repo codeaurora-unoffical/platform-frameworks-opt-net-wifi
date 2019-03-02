@@ -28,6 +28,7 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.server.wifi.HalDeviceManager;
+import com.android.server.wifi.WifiVendorHal;
 
 /**
  * Native calls for bring up/shut down of the supplicant daemon and for
@@ -39,6 +40,7 @@ public class WifiP2pNative {
     private static final String TAG = "WifiP2pNative";
     private final SupplicantP2pIfaceHal mSupplicantP2pIfaceHal;
     private final HalDeviceManager mHalDeviceManager;
+    private final WifiVendorHal mWifiVendorHal;
     private IWifiP2pIface mIWifiP2pIface;
     private InterfaceAvailableListenerInternal mInterfaceAvailableListener;
     private InterfaceDestroyedListenerInternal mInterfaceDestroyedListener;
@@ -100,7 +102,9 @@ public class WifiP2pNative {
         }
     }
 
-    public WifiP2pNative(SupplicantP2pIfaceHal p2pIfaceHal, HalDeviceManager halDeviceManager) {
+    public WifiP2pNative(WifiVendorHal wifiVendorHal,
+            SupplicantP2pIfaceHal p2pIfaceHal, HalDeviceManager halDeviceManager) {
+        mWifiVendorHal = wifiVendorHal;
         mSupplicantP2pIfaceHal = p2pIfaceHal;
         mHalDeviceManager = halDeviceManager;
     }
@@ -534,6 +538,33 @@ public class WifiP2pNative {
     }
 
     /**
+     * Set up a P2P group as Group Owner or join a group with a configuration.
+     *
+     * @param config Used to specify config for setting up a P2P group
+     *
+     * @return true, if operation was successful.
+     */
+    public boolean p2pGroupAdd(WifiP2pConfig config, boolean join) {
+        int freq = 0;
+        switch (config.groupOwnerBand) {
+            case WifiP2pConfig.GROUP_OWNER_BAND_2GHZ:
+                freq = 2;
+                break;
+            case WifiP2pConfig.GROUP_OWNER_BAND_5GHZ:
+                freq = 5;
+                break;
+            // treat it as frequency.
+            default:
+                freq = config.groupOwnerBand;
+        }
+        return mSupplicantP2pIfaceHal.groupAdd(
+                config.networkName,
+                config.passphrase,
+                (config.netId == WifiP2pGroup.PERSISTENT_NET_ID),
+                freq, config.deviceAddress, join);
+    }
+
+    /**
      * Terminate a P2P group. If a new virtual network interface was used for
      * the group, it must also be removed. The network interface name of the
      * group interface is used as a parameter for this command.
@@ -753,5 +784,25 @@ public class WifiP2pNative {
      */
     public boolean saveConfig() {
         return mSupplicantP2pIfaceHal.saveConfig();
+    }
+
+    /**
+     * Enable/Disable MAC randomization.
+     *
+     * @param enable true to enable, false to disable.
+     * @return true, if operation was successful.
+     */
+    public boolean setMacRandomization(boolean enable) {
+        return mSupplicantP2pIfaceHal.setMacRandomization(enable);
+    }
+
+    /**
+     * Get the supported features
+     *
+     * @param ifaceName Name of the interface.
+     * @return bitmask defined by WifiManager.WIFI_FEATURE_*
+     */
+    public long getSupportedFeatureSet(@NonNull String ifaceName) {
+        return mWifiVendorHal.getSupportedFeatureSet(ifaceName);
     }
 }

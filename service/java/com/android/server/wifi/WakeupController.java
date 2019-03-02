@@ -25,6 +25,7 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -72,7 +73,11 @@ public class WakeupController {
 
         @Override
         public void onResults(WifiScanner.ScanData[] results) {
-            if (results.length == 1 && results[0].isAllChannelsScanned()) {
+            // We treat any full band scans (with DFS or not) as "full".
+            boolean isFullBandScanResults =
+                    results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
+                            || results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH;
+            if (results.length == 1 && isFullBandScanResults) {
                 handleScanResults(filterDfsScanResults(Arrays.asList(results[0].getResults())));
             }
         }
@@ -306,7 +311,8 @@ public class WakeupController {
 
     /** Returns a filtered set of saved networks from WifiConfigManager. */
     private Set<ScanResultMatchInfo> getGoodSavedNetworks() {
-        List<WifiConfiguration> savedNetworks = mWifiConfigManager.getSavedNetworks();
+        List<WifiConfiguration> savedNetworks = mWifiConfigManager.getSavedNetworks(
+                Process.WIFI_UID);
 
         Set<ScanResultMatchInfo> goodSavedNetworks = new HashSet<>(savedNetworks.size());
         for (WifiConfiguration config : savedNetworks) {

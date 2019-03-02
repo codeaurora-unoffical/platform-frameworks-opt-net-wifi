@@ -58,12 +58,13 @@ import android.os.RemoteException;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.MutableBoolean;
-import android.util.MutableInt;
+import android.util.MutableLong;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.HexDump;
 import com.android.server.wifi.HalDeviceManager.InterfaceDestroyedListener;
+import com.android.server.wifi.WifiLinkLayerStats.ChannelStats;
 import com.android.server.wifi.util.BitMask;
 import com.android.server.wifi.util.NativeUtil;
 
@@ -1026,6 +1027,16 @@ public class WifiVendorHal {
             stats.on_time_roam_scan = radioStats.onTimeInMsForRoamScan;
             stats.on_time_pno_scan = radioStats.onTimeInMsForPnoScan;
             stats.on_time_hs20_scan = radioStats.onTimeInMsForHs20Scan;
+            /* Copy list of channel stats */
+            for (int i = 0; i < radioStats.channelStats.size(); i++) {
+                android.hardware.wifi.V1_3.WifiChannelStats channelStats =
+                        radioStats.channelStats.get(i);
+                ChannelStats channelStatsEntry = new ChannelStats();
+                channelStatsEntry.frequency = channelStats.channel.centerFreq;
+                channelStatsEntry.radioOnTimeMs = channelStats.onTimeInMs;
+                channelStatsEntry.ccaBusyTimeMs = channelStats.ccaBusyTimeInMs;
+                stats.channelStatsMap.put(channelStats.channel.centerFreq, channelStatsEntry);
+            }
         }
     }
 
@@ -1058,7 +1069,7 @@ public class WifiVendorHal {
     }
 
     /**
-     * Translation table used by getSupportedFeatureSet for translating IWifiChip caps
+     * Translation table used by getSupportedFeatureSet for translating IWifiChip caps for V1.1
      */
     private static final int[][] sChipFeatureCapabilityTranslation = {
             {WifiManager.WIFI_FEATURE_TX_POWER_LIMIT,
@@ -1073,7 +1084,21 @@ public class WifiVendorHal {
     };
 
     /**
-     * Feature bit mask translation for Chip
+     * Translation table used by getSupportedFeatureSet for translating IWifiChip caps for
+     * additional capabilities introduced in V1.3
+     */
+    private static final long[][] sChipFeatureCapabilityTranslation13 = {
+            {WifiManager.WIFI_FEATURE_LOW_LATENCY,
+                    android.hardware.wifi.V1_3.IWifiChip.ChipCapabilityMask.SET_LATENCY_MODE
+            },
+            {WifiManager.WIFI_FEATURE_P2P_RAND_MAC,
+                    android.hardware.wifi.V1_3.IWifiChip.ChipCapabilityMask.P2P_RAND_MAC
+            }
+
+    };
+
+    /**
+     * Feature bit mask translation for Chip V1.1
      *
      * @param capabilities bitmask defined IWifiChip.ChipCapabilityMask
      * @return bitmask defined by WifiManager.WIFI_FEATURE_*
@@ -1086,6 +1111,27 @@ public class WifiVendorHal {
                 features |= sChipFeatureCapabilityTranslation[i][0];
             }
         }
+        return features;
+    }
+
+    /**
+     * Feature bit mask translation for Chip V1.3
+     *
+     * @param capabilities bitmask defined IWifiChip.ChipCapabilityMask
+     * @return bitmask defined by WifiManager.WIFI_FEATURE_*
+     */
+    @VisibleForTesting
+    long wifiFeatureMaskFromChipCapabilities_1_3(int capabilities) {
+        // First collect features from previous versions
+        long features = wifiFeatureMaskFromChipCapabilities(capabilities);
+
+        // Next collect features for V1_3 version
+        for (int i = 0; i < sChipFeatureCapabilityTranslation13.length; i++) {
+            if ((capabilities & sChipFeatureCapabilityTranslation13[i][1]) != 0) {
+                features |= sChipFeatureCapabilityTranslation13[i][0];
+            }
+        }
+
         return features;
     }
 
@@ -1159,15 +1205,21 @@ public class WifiVendorHal {
      * @param ifaceName Name of the interface.
      * @return bitmask defined by WifiManager.WIFI_FEATURE_*
      */
-    public int getSupportedFeatureSet(@NonNull String ifaceName) {
-        int featureSet = 0;
+    public long getSupportedFeatureSet(@NonNull String ifaceName) {
+        long featureSet = 0;
         if (!mHalDeviceManager.isStarted()) {
             return featureSet; // TODO: can't get capabilities with Wi-Fi down
         }
         try {
-            final MutableInt feat = new MutableInt(0);
+            final MutableLong feat = new MutableLong(0);
             synchronized (sLock) {
-                if (mIWifiChip != null) {
+                android.hardware.wifi.V1_3.IWifiChip iWifiChipV13 = getWifiChipForV1_3Mockable();
+                if (iWifiChipV13 != null) {
+                    iWifiChipV13.getCapabilities_1_3((status, capabilities) -> {
+                        if (!ok(status)) return;
+                        feat.value = wifiFeatureMaskFromChipCapabilities_1_3(capabilities);
+                    });
+                } else if (mIWifiChip != null) {
                     mIWifiChip.getCapabilities((status, capabilities) -> {
                         if (!ok(status)) return;
                         feat.value = wifiFeatureMaskFromChipCapabilities(capabilities);
@@ -1251,6 +1303,34 @@ public class WifiVendorHal {
             } catch (RemoteException e) {
                 handleRemoteException(e);
                 return false;
+            }
+        }
+    }
+
+    /**
+     * Get factory MAC address of the given interface
+     *
+     * @param ifaceName Name of the interface
+     * @return factory MAC address of the interface or null.
+     */
+    public MacAddress getFactoryMacAddress(@NonNull String ifaceName) {
+        class AnswerBox {
+            public MacAddress mac = null;
+        }
+        synchronized (sLock) {
+            try {
+                android.hardware.wifi.V1_3.IWifiStaIface ifaceV13 =
+                        getWifiStaIfaceForV1_3Mockable(ifaceName);
+                if (ifaceV13 == null) return null;
+                AnswerBox box = new AnswerBox();
+                ifaceV13.getFactoryMacAddress((status, macBytes) -> {
+                    if (!ok(status)) return;
+                    box.mac = MacAddress.fromBytes(macBytes);
+                });
+                return box.mac;
+            } catch (RemoteException e) {
+                handleRemoteException(e);
+                return null;
             }
         }
     }
@@ -1596,6 +1676,26 @@ public class WifiVendorHal {
                 handleRemoteException(e);
                 return false;
             }
+        }
+    }
+
+    /**
+     * request hal to flush ring buffers to files
+     */
+    public boolean flushRingBufferData() {
+        synchronized (sLock) {
+            if (mIWifiChip == null) return boolResult(false);
+            android.hardware.wifi.V1_3.IWifiChip iWifiChipV13 = getWifiChipForV1_3Mockable();
+            if (iWifiChipV13 != null) {
+                try {
+                    WifiStatus status = iWifiChipV13.flushRingBufferToFile();
+                    return ok(status);
+                } catch (RemoteException e) {
+                    handleRemoteException(e);
+                    return false;
+                }
+            }
+            return false;
         }
     }
 
@@ -2175,6 +2275,17 @@ public class WifiVendorHal {
     }
 
     /**
+     * Method to mock out the V1_3 IWifiChip retrieval in unit tests.
+     *
+     * @return 1.3 IWifiChip object if the device is running the 1.3 wifi hal service, null
+     * otherwise.
+     */
+    protected android.hardware.wifi.V1_3.IWifiChip getWifiChipForV1_3Mockable() {
+        if (mIWifiChip == null) return null;
+        return android.hardware.wifi.V1_3.IWifiChip.castFrom(mIWifiChip);
+    }
+
+    /**
      * Method to mock out the V1_2 IWifiStaIface retrieval in unit tests.
      *
      * @param ifaceName Name of the interface
@@ -2453,6 +2564,42 @@ public class WifiVendorHal {
         }
     }
 
+    /**
+     * Enable/Disable low-latency mode
+     *
+     * @param enabled true to enable low-latency mode, false to disable it
+     */
+    public boolean setLowLatencyMode(boolean enabled) {
+        synchronized (sLock) {
+            android.hardware.wifi.V1_3.IWifiChip iWifiChipV13 = getWifiChipForV1_3Mockable();
+            if (iWifiChipV13 != null) {
+                try {
+                    int mode;
+                    if (enabled) {
+                        mode = android.hardware.wifi.V1_3.IWifiChip.LatencyMode.LOW;
+                    } else {
+                        mode = android.hardware.wifi.V1_3.IWifiChip.LatencyMode.NORMAL;
+                    }
+
+                    WifiStatus status = iWifiChipV13.setLatencyMode(mode);
+                    if (ok(status)) {
+                        mVerboseLog.d("Setting low-latency mode to " + enabled);
+                        return true;
+                    } else {
+                        mLog.e("Failed to set low-latency mode to " + enabled);
+                        return false;
+                    }
+                } catch (RemoteException e) {
+                    handleRemoteException(e);
+                    return false;
+                }
+            }
+
+            // HAL version does not support this api
+            return false;
+        }
+    }
+
     // This creates a blob of IE elements from the array received.
     // TODO: This ugly conversion can be removed if we put IE elements in ScanResult.
     private static byte[] hidlIeArrayToFrameworkIeBlob(ArrayList<WifiInformationElement> ies) {
@@ -2509,8 +2656,8 @@ public class WifiVendorHal {
             int flags = hidlToFrameworkScanDataFlags(scanData.flags);
             ScanResult[] frameworkScanResults = hidlToFrameworkScanResults(scanData.results);
             frameworkScanDatas[i++] =
-                    new WifiScanner.ScanData(cmdId, flags, scanData.bucketsScanned, false,
-                            frameworkScanResults);
+                    new WifiScanner.ScanData(cmdId, flags, scanData.bucketsScanned,
+                            WifiScanner.WIFI_BAND_UNSPECIFIED, frameworkScanResults);
         }
         return frameworkScanDatas;
     }

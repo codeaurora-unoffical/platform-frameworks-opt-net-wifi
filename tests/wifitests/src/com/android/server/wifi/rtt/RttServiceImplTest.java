@@ -69,8 +69,9 @@ import android.os.UserHandle;
 import android.os.WorkSource;
 import android.os.test.TestLooper;
 import android.provider.Settings;
-import android.support.test.filters.SmallTest;
 import android.util.Pair;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.FrameworkFacade;
@@ -128,9 +129,6 @@ public class RttServiceImplTest {
 
     @Mock
     public ActivityManager mockActivityManager;
-
-    @Mock
-    public LocationManager mockLocationManager;
 
     @Mock
     public Clock mockClock;
@@ -197,7 +195,6 @@ public class RttServiceImplTest {
             eq(Settings.Global.WIFI_RTT_BACKGROUND_EXEC_GAP_MS),
             anyLong()))
             .thenReturn(BACKGROUND_PROCESS_EXEC_GAP_MS);
-        when(mockLocationManager.isLocationEnabled()).thenReturn(true);
         when(mockContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
         mInOrder = inOrder(mAlarmManager.getAlarmManager(), mockContext);
@@ -208,7 +205,8 @@ public class RttServiceImplTest {
                 ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE);
 
         when(mockPermissionUtil.checkCallersLocationPermission(eq(mPackageName),
-                anyInt())).thenReturn(true);
+                anyInt(), anyBoolean())).thenReturn(true);
+        when(mockPermissionUtil.isLocationModeEnabled()).thenReturn(true);
         when(mockNative.isReady()).thenReturn(true);
         when(mockNative.rangeRequest(anyInt(), any(RangingRequest.class), anyBoolean())).thenReturn(
                 true);
@@ -219,8 +217,6 @@ public class RttServiceImplTest {
         when(mockContext.getSystemServiceName(PowerManager.class)).thenReturn(
                 Context.POWER_SERVICE);
         when(mockContext.getSystemService(PowerManager.class)).thenReturn(mMockPowerManager);
-        when(mockContext.getSystemService(Context.LOCATION_SERVICE)).thenReturn(
-                mockLocationManager);
 
         doAnswer(mBinderLinkToDeathCounter).when(mockIbinder).linkToDeath(any(), anyInt());
         doAnswer(mBinderUnlinkToDeathCounter).when(mockIbinder).unlinkToDeath(any(), anyInt());
@@ -346,7 +342,7 @@ public class RttServiceImplTest {
         RangingResult removed = results.second.remove(results.second.size() - 1);
         results.second.add(
                 new RangingResult(RangingResult.STATUS_FAIL, removed.getPeerHandle(), 0, 0, 0, 0, 0,
-                        null, null, 0));
+                        null, null, null, 0));
         mDut.onRangingResults(mIntCaptor.getValue(), results.first);
         mMockLooper.dispatchAll();
 
@@ -451,7 +447,7 @@ public class RttServiceImplTest {
 
         // (3) native calls back with result - should get a FAILED callback
         when(mockPermissionUtil.checkCallersLocationPermission(eq(mPackageName),
-                anyInt())).thenReturn(false);
+                anyInt(), anyBoolean())).thenReturn(false);
 
         mDut.onRangingResults(mIntCaptor.getValue(), results.first);
         mMockLooper.dispatchAll();
@@ -739,12 +735,12 @@ public class RttServiceImplTest {
         RangingResult removed = results.second.remove(2);
         results.second.add(
                 new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, 0, 0,
-                        null, null, 0));
+                        null, null, null, 0));
         results.first.remove(0); // remove an AP request
         removed = results.second.remove(0);
         results.second.add(
                 new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, 0, 0,
-                        null, null, 0));
+                        null, null, null, 0));
 
         // (1) request ranging operation
         mDut.startRanging(mockIbinder, mPackageName, null, request, mockCallback);
@@ -786,7 +782,7 @@ public class RttServiceImplTest {
         for (RangingResult result : results.second) {
             allFailResults.add(
                     new RangingResult(RangingResult.STATUS_FAIL, result.getMacAddress(), 0, 0, 0, 0,
-                            0, null, null, 0));
+                            0, null, null, null, 0));
         }
 
         // (1) request ranging operation
@@ -830,13 +826,13 @@ public class RttServiceImplTest {
         RangingResult removed = results.second.remove(1);
         results.second.add(
                 new RangingResult(RangingResult.STATUS_RESPONDER_DOES_NOT_SUPPORT_IEEE80211MC,
-                        removed.getMacAddress(), 0, 0, 0, 0, 0, null, null, 0));
+                        removed.getMacAddress(), 0, 0, 0, 0, 0, null, null, null, 0));
         results.first.remove(
                 0); // remove an AP request (i.e. test combo of missing for different reasons)
         removed = results.second.remove(0);
         results.second.add(
                 new RangingResult(RangingResult.STATUS_FAIL, removed.getMacAddress(), 0, 0, 0, 0, 0,
-                        null, null, 0));
+                        null, null, null, 0));
 
         when(mockContext.checkCallingOrSelfPermission(
                 android.Manifest.permission.LOCATION_HARDWARE)).thenReturn(
@@ -1350,7 +1346,7 @@ public class RttServiceImplTest {
         } else if (failureMode == FAILURE_MODE_ENABLE_DOZE) {
             simulatePowerStateChangeDoze(true);
         } else if (failureMode == FAILURE_MODE_DISABLE_LOCATIONING) {
-            when(mockLocationManager.isLocationEnabled()).thenReturn(false);
+            when(mockPermissionUtil.isLocationModeEnabled()).thenReturn(false);
             simulateLocationModeChange();
         }
         mMockLooper.dispatchAll();
@@ -1378,7 +1374,7 @@ public class RttServiceImplTest {
         } else if (failureMode == FAILURE_MODE_ENABLE_DOZE) {
             simulatePowerStateChangeDoze(false);
         } else if (failureMode == FAILURE_MODE_DISABLE_LOCATIONING) {
-            when(mockLocationManager.isLocationEnabled()).thenReturn(true);
+            when(mockPermissionUtil.isLocationModeEnabled()).thenReturn(true);
             simulateLocationModeChange();
         }
         mMockLooper.dispatchAll();

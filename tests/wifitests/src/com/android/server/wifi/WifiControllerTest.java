@@ -34,14 +34,17 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.Resources;
 import android.location.LocationManager;
 import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.test.TestLooper;
 import android.provider.Settings;
-import android.support.test.filters.SmallTest;
 import android.util.Log;
 
+import androidx.test.filters.SmallTest;
+
+import com.android.internal.R;
 import com.android.internal.util.IState;
 import com.android.internal.util.StateMachine;
 
@@ -64,6 +67,8 @@ import java.lang.reflect.Method;
 public class WifiControllerTest {
 
     private static final String TAG = "WifiControllerTest";
+
+    private static final int TEST_WIFI_RECOVERY_DELAY_MS = 2000;
 
     private void dumpState() {
         ByteArrayOutputStream stream = new ByteArrayOutputStream();
@@ -89,6 +94,7 @@ public class WifiControllerTest {
 
     TestLooper mLooper;
     @Mock Context mContext;
+    @Mock Resources mResources;
     @Mock FrameworkFacade mFacade;
     @Mock WifiSettingsStore mSettingsStore;
     @Mock ClientModeImpl mClientModeImpl;
@@ -109,6 +115,11 @@ public class WifiControllerTest {
         mLooper = new TestLooper();
 
         initializeSettingsStore();
+
+        when(mContext.getResources()).thenReturn(mResources);
+
+        when(mResources.getInteger(R.integer.config_wifi_framework_recovery_timeout_delay))
+                .thenReturn(TEST_WIFI_RECOVERY_DELAY_MS);
 
         mWifiController = new WifiController(mContext, mClientModeImpl, mLooper.getLooper(),
                 mSettingsStore, mLooper.getLooper(), mFacade, mActiveModeWarden);
@@ -223,6 +234,7 @@ public class WifiControllerTest {
                 .thenReturn(Settings.Secure.LOCATION_MODE_OFF);
 
         reset(mContext, mActiveModeWarden);
+        when(mContext.getResources()).thenReturn(mResources);
         mWifiController = new WifiController(mContext, mClientModeImpl, mLooper.getLooper(),
                 mSettingsStore, mLooper.getLooper(), mFacade, mActiveModeWarden);
         ArgumentCaptor<BroadcastReceiver> bcastRxCaptor = ArgumentCaptor.forClass(
@@ -257,6 +269,7 @@ public class WifiControllerTest {
                 .thenReturn(Settings.Secure.LOCATION_MODE_HIGH_ACCURACY);
 
         reset(mContext, mActiveModeWarden);
+        when(mContext.getResources()).thenReturn(mResources);
         mWifiController = new WifiController(mContext, mClientModeImpl, mLooper.getLooper(),
                 mSettingsStore, mLooper.getLooper(), mFacade, mActiveModeWarden);
         ArgumentCaptor<BroadcastReceiver> bcastRxCaptor = ArgumentCaptor.forClass(
@@ -1037,6 +1050,8 @@ public class WifiControllerTest {
         reset(mActiveModeWarden);
         mWifiController.sendMessage(CMD_RECOVERY_RESTART_WIFI);
         mLooper.dispatchAll();
+        mLooper.moveTimeForward(TEST_WIFI_RECOVERY_DELAY_MS);
+        mLooper.dispatchAll();
         InOrder inOrder = inOrder(mActiveModeWarden);
         verify(mActiveModeWarden).disableWifi();
         verify(mActiveModeWarden).enterScanOnlyMode();
@@ -1059,6 +1074,9 @@ public class WifiControllerTest {
 
         mWifiController.sendMessage(CMD_RECOVERY_RESTART_WIFI);
         mLooper.dispatchAll();
+        mLooper.moveTimeForward(TEST_WIFI_RECOVERY_DELAY_MS);
+        mLooper.dispatchAll();
+
         InOrder inOrder = inOrder(mActiveModeWarden);
         inOrder.verify(mActiveModeWarden).shutdownWifi();
         inOrder.verify(mActiveModeWarden).enterClientMode();

@@ -22,7 +22,6 @@ import static android.content.pm.PackageManager.PERMISSION_GRANTED;
 import android.Manifest;
 import android.app.AlarmManager;
 import android.content.Context;
-import android.location.LocationManager;
 import android.net.wifi.IWifiScanner;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiScanner;
@@ -41,6 +40,7 @@ import android.util.ArrayMap;
 import android.util.LocalLog;
 import android.util.Log;
 import android.util.Pair;
+import android.util.StatsLog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.app.IBatteryStats;
@@ -60,6 +60,7 @@ import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.scanner.ChannelHelper.ChannelCollection;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiHandler;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -120,13 +121,6 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return b;
     }
 
-    private void enforceLocationHardwarePermission(int uid) {
-        mContext.enforcePermission(
-                Manifest.permission.LOCATION_HARDWARE,
-                UNKNOWN_PID, uid,
-                "LocationHardware");
-    }
-
     private void enforceNetworkStack(int uid) {
         mContext.enforcePermission(
                 Manifest.permission.NETWORK_STACK,
@@ -139,17 +133,27 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         return (msgWhat == WifiScanner.CMD_ENABLE
                 || msgWhat == WifiScanner.CMD_DISABLE
                 || msgWhat == WifiScanner.CMD_START_PNO_SCAN
-                || msgWhat == WifiScanner.CMD_STOP_PNO_SCAN);
+                || msgWhat == WifiScanner.CMD_STOP_PNO_SCAN
+                || msgWhat == WifiScanner.CMD_REGISTER_SCAN_LISTENER);
     }
 
-    // Retrieves a handle to LocationManager (if not already done) and check if location is enabled.
-    private boolean isLocationEnabled() {
-        if (mLocationManager == null) {
-            mLocationManager =
-                    (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
+    // For non-privileged requests, retrieve the bundled package name for app-op & permission
+    // checks.
+    private String getPackageName(Message msg) {
+        if (!(msg.obj instanceof Bundle)) {
+            return null;
         }
-        if (mLocationManager == null) return false;
-        return mLocationManager.isLocationEnabled();
+        Bundle bundle = (Bundle) msg.obj;
+        return bundle.getString(WifiScanner.REQUEST_PACKAGE_NAME_KEY);
+    }
+
+    // Check if we should ignore location settings if this is a single scan request.
+    private boolean shouldIgnoreLocationSettingsForSingleScan(Message msg) {
+        if (msg.what != WifiScanner.CMD_START_SINGLE_SCAN) return false;
+        if (!(msg.obj instanceof Bundle)) return false;
+        Bundle bundle = (Bundle) msg.obj;
+        ScanSettings scanSettings = bundle.getParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY);
+        return scanSettings.ignoreLocationSettings;
     }
 
     /**
@@ -160,22 +164,21 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
      *    b) Can never make one of the privileged requests.
      *
      * @param uid Uid of the client.
-     * @param msgWhat {@link Message#what} of the incoming request.
+     * @param msg {@link Message} of the incoming request.
      * @throws {@link SecurityException} if the client does not have the necessary permissions.
      */
-    private void enforcePermission(int uid, int msgWhat) throws SecurityException {
+    private void enforcePermission(int uid, Message msg) throws SecurityException {
         try {
+            /** Wifi stack issued requests.*/
             enforceNetworkStack(uid);
         } catch (SecurityException e) {
-            if (!isLocationEnabled()) {
-                // Location not enabled, only requests from clients with NETWORK_STACK allowed!
-                throw e;
-            }
-            if (isPrivilegedMessage(msgWhat)) {
+            /** System-app issued requests. */
+            if (isPrivilegedMessage(msg.what)) {
                 // Privileged message, only requests from clients with NETWORK_STACK allowed!
                 throw e;
             }
-            enforceLocationHardwarePermission(uid);
+            mWifiPermissionsUtil.enforceCanAccessScanResultsForWifiScanner(
+                    getPackageName(msg), uid, shouldIgnoreLocationSettingsForSingleScan(msg));
         }
     }
 
@@ -234,7 +237,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
             }
 
             try {
-                enforcePermission(msg.sendingUid, msg.what);
+                enforcePermission(msg.sendingUid, msg);
             } catch (SecurityException e) {
                 localLog("failed to authorize app: " + e);
                 replyFailed(msg, WifiScanner.REASON_NOT_AUTHORIZED, "Not authorized");
@@ -328,12 +331,12 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
     private WifiPnoScanStateMachine mPnoScanStateMachine;
     private ClientHandler mClientHandler;
     // This is retrieved lazily because location service is started after wifi scanner.
-    private LocationManager mLocationManager;
     private final IBatteryStats mBatteryStats;
     private final AlarmManager mAlarmManager;
     private final WifiMetrics mWifiMetrics;
     private final Clock mClock;
     private final FrameworkFacade mFrameworkFacade;
+    private final WifiPermissionsUtil mWifiPermissionsUtil;
 
     WifiScanningServiceImpl(Context context, Looper looper,
             WifiScannerImpl.WifiScannerImplFactory scannerImplFactory, IBatteryStats batteryStats,
@@ -348,6 +351,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         mClock = wifiInjector.getClock();
         mLog = wifiInjector.makeLog(TAG);
         mFrameworkFacade = wifiInjector.getFrameworkFacade();
+        mWifiPermissionsUtil = wifiInjector.getWifiPermissionsUtil();
         mPreviousSchedule = null;
     }
 
@@ -720,6 +724,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 } catch (RemoteException e) {
                     loge(e.toString());
                 }
+                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
+                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__ON);
             }
 
             @Override
@@ -730,6 +736,8 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 } catch (RemoteException e) {
                     loge(e.toString());
                 }
+                StatsLog.write(StatsLog.WIFI_SCAN_STATE_CHANGED, mScanWorkSource,
+                        StatsLog.WIFI_SCAN_STATE_CHANGED__STATE__OFF);
 
                 // if any scans are still active (never got results available then indicate failure)
                 mWifiMetrics.incrementScanReturnEntry(
@@ -1028,7 +1036,9 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
                 entry.reportEvent(WifiScanner.CMD_SCAN_RESULT, 0, parcelableAllResults);
             }
 
-            if (results.isAllChannelsScanned()) {
+            // Cache full band (with DFS or not) scan results.
+            if (results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
+                    || results.getBandScanned() == WifiScanner.WIFI_BAND_BOTH) {
                 mCachedScanResults.clear();
                 mCachedScanResults.addAll(Arrays.asList(results.getResults()));
             }
@@ -2235,6 +2245,7 @@ public class WifiScanningServiceImpl extends IWifiScanner.Stub {
         sb.append("ScanSettings { ")
           .append(" type:").append(getScanTypeString(scanSettings.type))
           .append(" band:").append(ChannelHelper.bandToString(scanSettings.band))
+          .append(" ignoreLocationSettings:").append(scanSettings.ignoreLocationSettings)
           .append(" period:").append(scanSettings.periodInMs)
           .append(" reportEvents:").append(scanSettings.reportEvents)
           .append(" numBssidsPerScan:").append(scanSettings.numBssidsPerScan)

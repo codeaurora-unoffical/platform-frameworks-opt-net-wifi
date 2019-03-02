@@ -16,8 +16,7 @@
 
 package com.android.server.wifi;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyLong;
 import static org.mockito.Mockito.never;
@@ -27,7 +26,8 @@ import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.provider.Settings;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.nano.WifiMetricsProto.WifiIsUnusableEvent;
 
@@ -99,7 +99,8 @@ public class WifiDataStallTest {
     @Test
     public void verifyDataStallTxFailure() throws Exception {
         mNewLlStats.lostmpdu_be = mOldLlStats.lostmpdu_be + WifiDataStall.MIN_TX_BAD_DEFAULT;
-        assertTrue(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics).logWifiIsUnusableEvent(WifiIsUnusableEvent.TYPE_DATA_STALL_BAD_TX);
     }
@@ -111,7 +112,8 @@ public class WifiDataStallTest {
     public void verifyDataStallRxFailure() throws Exception {
         mNewLlStats.txmpdu_be =
                 mOldLlStats.txmpdu_be + WifiDataStall.MIN_TX_SUCCESS_WITHOUT_RX_DEFAULT;
-        assertTrue(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_DATA_STALL_TX_WITHOUT_RX,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics).logWifiIsUnusableEvent(
                 WifiIsUnusableEvent.TYPE_DATA_STALL_TX_WITHOUT_RX);
@@ -125,7 +127,8 @@ public class WifiDataStallTest {
         mNewLlStats.lostmpdu_be = mOldLlStats.lostmpdu_be + WifiDataStall.MIN_TX_BAD_DEFAULT;
         mNewLlStats.txmpdu_be =
                 mOldLlStats.txmpdu_be + WifiDataStall.MIN_TX_SUCCESS_WITHOUT_RX_DEFAULT;
-        assertTrue(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_DATA_STALL_BOTH,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics).logWifiIsUnusableEvent(WifiIsUnusableEvent.TYPE_DATA_STALL_BOTH);
     }
@@ -146,7 +149,8 @@ public class WifiDataStallTest {
                 WifiDataStall.MIN_TX_SUCCESS_WITHOUT_RX_DEFAULT);
 
         mNewLlStats.lostmpdu_be = mOldLlStats.lostmpdu_be + WifiDataStall.MIN_TX_BAD_DEFAULT;
-        assertFalse(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_UNKNOWN,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics, never()).logWifiIsUnusableEvent(anyInt());
     }
@@ -168,7 +172,8 @@ public class WifiDataStallTest {
 
         mNewLlStats.txmpdu_be =
                 mOldLlStats.txmpdu_be + WifiDataStall.MIN_TX_SUCCESS_WITHOUT_RX_DEFAULT;
-        assertFalse(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_UNKNOWN,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics, never()).logWifiIsUnusableEvent(anyInt());
     }
@@ -178,7 +183,8 @@ public class WifiDataStallTest {
      */
     @Test
     public void verifyNoDataStallWhenNoFail() throws Exception {
-        assertFalse(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_UNKNOWN,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verify(mWifiMetrics, never()).resetWifiIsUnusableLinkLayerStats();
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics, never()).logWifiIsUnusableEvent(anyInt());
@@ -193,7 +199,8 @@ public class WifiDataStallTest {
         mNewLlStats.lostmpdu_be = mOldLlStats.lostmpdu_be + WifiDataStall.MIN_TX_BAD_DEFAULT;
         mNewLlStats.timeStampInMs = mOldLlStats.timeStampInMs
                 + WifiDataStall.MAX_MS_DELTA_FOR_DATA_STALL + 1;
-        assertFalse(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_UNKNOWN,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verifyUpdateWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics, never()).logWifiIsUnusableEvent(anyInt());
     }
@@ -204,7 +211,8 @@ public class WifiDataStallTest {
     @Test
     public void verifyReset() throws Exception {
         mNewLlStats.lostmpdu_be = mOldLlStats.lostmpdu_be - 1;
-        assertFalse(mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
+        assertEquals(WifiIsUnusableEvent.TYPE_UNKNOWN,
+                mWifiDataStall.checkForDataStall(mOldLlStats, mNewLlStats));
         verify(mWifiMetrics).resetWifiIsUnusableLinkLayerStats();
         verify(mWifiMetrics, never()).updateWifiIsUnusableLinkLayerStats(
                 anyLong(), anyLong(), anyLong(), anyLong(), anyLong());

@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
@@ -39,7 +40,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-import android.Manifest;
 import android.app.AppOpsManager;
 import android.app.test.MockAnswerUtil;
 import android.app.test.TestAlarmManager;
@@ -68,9 +68,10 @@ import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
 import android.util.Log;
 import android.util.SparseArray;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
@@ -100,6 +101,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
+
 /**
  * Unit test harness for WifiAwareStateManager.
  */
@@ -116,7 +118,6 @@ public class WifiAwareStateManagerTest {
     @Mock private WifiAwareMetrics mAwareMetricsMock;
     @Mock private WifiPermissionsUtil mWifiPermissionsUtil;
     @Mock private WifiPermissionsWrapper mPermissionsWrapperMock;
-    @Mock private LocationManager mLocationManagerMock;
     TestAlarmManager mAlarmManager;
     private PowerManager mMockPowerManager;
     @Mock private WifiManager mMockWifiManager;
@@ -156,19 +157,13 @@ public class WifiAwareStateManagerTest {
         when(mMockContext.getSystemServiceName(PowerManager.class)).thenReturn(
                 Context.POWER_SERVICE);
         when(mMockContext.getSystemService(PowerManager.class)).thenReturn(mMockPowerManager);
-        when(mMockContext.getSystemService(Context.LOCATION_SERVICE)).thenReturn(
-                mLocationManagerMock);
         when(mMockContext.checkPermission(eq(android.Manifest.permission.ACCESS_FINE_LOCATION),
-                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
-        when(mMockContext.checkPermission(eq(Manifest.permission.ACCESS_COARSE_LOCATION),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         when(mMockAppOpsManager.noteOp(eq(AppOpsManager.OP_FINE_LOCATION), anyInt(),
                 any())).thenReturn(AppOpsManager.MODE_ERRORED);
-        when(mMockAppOpsManager.noteOp(eq(AppOpsManager.OP_COARSE_LOCATION), anyInt(),
-                any())).thenReturn(AppOpsManager.MODE_ERRORED);
         when(mMockPowerManager.isDeviceIdleMode()).thenReturn(false);
         when(mMockPowerManager.isInteractive()).thenReturn(true);
-        when(mLocationManagerMock.isLocationEnabled()).thenReturn(true);
+        when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(true);
 
         ArgumentCaptor<BroadcastReceiver> bcastRxCaptor = ArgumentCaptor.forClass(
                 BroadcastReceiver.class);
@@ -628,10 +623,8 @@ public class WifiAwareStateManagerTest {
         mMockLooper.dispatchAll();
 
         // (5) deliver new identity - with LOCATIONING permission
-        when(mMockContext.checkPermission(eq(Manifest.permission.ACCESS_COARSE_LOCATION),
-                anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
-        when(mMockAppOpsManager.noteOp(eq(AppOpsManager.OP_COARSE_LOCATION), anyInt(),
-                any())).thenReturn(AppOpsManager.MODE_ALLOWED);
+        when(mWifiPermissionsUtil.checkCallersLocationPermission(anyString(), anyInt(),
+                anyBoolean())).thenReturn(true);
         mDut.onInterfaceAddressChangeNotification(someMac);
         mMockLooper.dispatchAll();
 
@@ -3479,7 +3472,7 @@ public class WifiAwareStateManagerTest {
      * broadcast.
      */
     private void simulateLocationModeChange(boolean isLocationModeEnabled) {
-        when(mLocationManagerMock.isLocationEnabled()).thenReturn(isLocationModeEnabled);
+        when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(isLocationModeEnabled);
 
         Intent intent = new Intent(LocationManager.MODE_CHANGED_ACTION);
         mLocationModeReceiver.onReceive(mMockContext, intent);

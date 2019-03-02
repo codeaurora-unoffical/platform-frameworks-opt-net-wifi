@@ -25,7 +25,8 @@ import static org.mockito.MockitoAnnotations.initMocks;
 
 import android.os.Looper;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -96,6 +97,9 @@ public class RedirectListenerTest {
         mLooper.dispatchAll();
 
         assertFalse(mRedirectListener.mIsStart);
+
+        // true if there are pending messages in the message queue
+        assertFalse(mLooper.isIdle());
     }
 
     /**

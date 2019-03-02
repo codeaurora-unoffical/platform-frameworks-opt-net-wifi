@@ -30,6 +30,7 @@ import static android.net.wifi.WifiManager.EXTRA_URL;
 import static org.hamcrest.collection.IsIterableContainingInAnyOrder.containsInAnyOrder;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
@@ -67,14 +68,18 @@ import android.net.wifi.hotspot2.pps.HomeSp;
 import android.os.Looper;
 import android.os.UserHandle;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
+import android.telephony.TelephonyManager;
 import android.util.Base64;
 import android.util.Pair;
 
+import androidx.test.filters.SmallTest;
+
+import com.android.dx.mockito.inline.extended.ExtendedMockito;
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.FakeKeys;
 import com.android.server.wifi.IMSIParameter;
 import com.android.server.wifi.SIMAccessor;
+import com.android.server.wifi.ScanDetail;
 import com.android.server.wifi.WifiConfigManager;
 import com.android.server.wifi.WifiConfigStore;
 import com.android.server.wifi.WifiKeyStore;
@@ -85,7 +90,10 @@ import com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType;
 import com.android.server.wifi.hotspot2.anqp.DomainNameElement;
 import com.android.server.wifi.hotspot2.anqp.HSOsuProvidersElement;
 import com.android.server.wifi.hotspot2.anqp.I18Name;
+import com.android.server.wifi.hotspot2.anqp.NAIRealmData;
+import com.android.server.wifi.hotspot2.anqp.NAIRealmElement;
 import com.android.server.wifi.hotspot2.anqp.OsuProviderInfo;
+import com.android.server.wifi.hotspot2.anqp.eap.EAPMethod;
 import com.android.server.wifi.util.InformationElementUtil;
 import com.android.server.wifi.util.InformationElementUtil.RoamingConsortium;
 
@@ -115,10 +123,12 @@ import java.util.Set;
 public class PasspointManagerTest {
     private static final long BSSID = 0x112233445566L;
     private static final String ICON_FILENAME = "test";
-    private static final String  TEST_FQDN = "test1.test.com";
+    private static final String TEST_FQDN = "test1.test.com";
+    private static final String TEST_FQDN2 = "test2.test.com";
     private static final String TEST_FRIENDLY_NAME = "friendly name";
+    private static final String TEST_FRIENDLY_NAME2 = "second friendly name";
     private static final String TEST_REALM = "realm.test.com";
-    private static final String TEST_IMSI = "1234*";
+    private static final String TEST_IMSI = "123456*";
     private static final IMSIParameter TEST_IMSI_PARAM = IMSIParameter.build(TEST_IMSI);
 
     private static final long TEST_BSSID = 0x112233445566L;
@@ -128,6 +138,9 @@ public class PasspointManagerTest {
     private static final String TEST_BSSID_STRING2 = "11:22:33:44:55:77";
     private static final String TEST_SSID3 = "TestSSID3";
     private static final String TEST_BSSID_STRING3 = "11:22:33:44:55:88";
+    private static final String TEST_MCC_MNC = "123456";
+    private static final String TEST_3GPP_FQDN = String.format("wlan.mnc%s.mcc%s.3gppnetwork.org",
+            TEST_MCC_MNC.substring(3), TEST_MCC_MNC.substring(0, 3));
 
     private static final long TEST_HESSID = 0x5678L;
     private static final int TEST_ANQP_DOMAIN_ID = 0;
@@ -178,8 +191,8 @@ public class PasspointManagerTest {
                 .thenReturn(mOsuServerConnection);
         when(mObjectFactory.makeWfaKeyStore()).thenReturn(mWfaKeyStore);
         when(mWfaKeyStore.get()).thenReturn(mKeyStore);
-        when(mObjectFactory.makePasspointProvisioner(any(Context.class), any(WifiNative.class)))
-                .thenReturn(mPasspointProvisioner);
+        when(mObjectFactory.makePasspointProvisioner(any(Context.class), any(WifiNative.class),
+                any(PasspointManager.class))).thenReturn(mPasspointProvisioner);
         mManager = new PasspointManager(mContext, mWifiNative, mWifiKeyStore, mClock,
                 mSimAccessor, mObjectFactory, mWifiConfigManager, mWifiConfigStore, mWifiMetrics);
         ArgumentCaptor<PasspointEventHandler.Callbacks> callbacks =
@@ -253,12 +266,18 @@ public class PasspointManagerTest {
      *
      * @return {@link PasspointConfiguration}
      */
-    private PasspointConfiguration createTestConfigWithUserCredential(String fqdn) {
+    private PasspointConfiguration createTestConfigWithUserCredential(String fqdn,
+            String friendlyName) {
         PasspointConfiguration config = new PasspointConfiguration();
         HomeSp homeSp = new HomeSp();
         homeSp.setFqdn(fqdn);
-        homeSp.setFriendlyName(TEST_FRIENDLY_NAME);
+        homeSp.setFriendlyName(friendlyName);
         config.setHomeSp(homeSp);
+        Map<String, String> friendlyNames = new HashMap<>();
+        friendlyNames.put("en", friendlyName);
+        friendlyNames.put("kr", friendlyName + 1);
+        friendlyNames.put("jp", friendlyName + 2);
+        config.setServiceFriendlyNames(friendlyNames);
         Credential credential = new Credential();
         credential.setRealm(TEST_REALM);
         credential.setCaCertificate(FakeKeys.CA_CERT0);
@@ -277,16 +296,17 @@ public class PasspointManagerTest {
      *
      * @return {@link PasspointConfiguration}
      */
-    private PasspointConfiguration createTestConfigWithSimCredential() {
+    private PasspointConfiguration createTestConfigWithSimCredential(String fqdn, String imsi,
+            String realm) {
         PasspointConfiguration config = new PasspointConfiguration();
         HomeSp homeSp = new HomeSp();
-        homeSp.setFqdn(TEST_FQDN);
+        homeSp.setFqdn(fqdn);
         homeSp.setFriendlyName(TEST_FRIENDLY_NAME);
         config.setHomeSp(homeSp);
         Credential credential = new Credential();
         credential.setRealm(TEST_REALM);
         Credential.SimCredential simCredential = new Credential.SimCredential();
-        simCredential.setImsi(TEST_IMSI);
+        simCredential.setImsi(imsi);
         simCredential.setEapType(EAPConstants.EAP_SIM);
         credential.setSimCredential(simCredential);
         config.setCredential(credential);
@@ -299,8 +319,25 @@ public class PasspointManagerTest {
      *
      * @return {@link PasspointProvider}
      */
-    private PasspointProvider addTestProvider(String fqdn) {
-        PasspointConfiguration config = createTestConfigWithUserCredential(fqdn);
+    private PasspointProvider addTestProvider(String fqdn, String friendlyName) {
+        PasspointConfiguration config = createTestConfigWithUserCredential(fqdn, friendlyName);
+        PasspointProvider provider = createMockProvider(config);
+        when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
+                eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(provider);
+
+        assertTrue(mManager.addOrUpdateProvider(config, TEST_CREATOR_UID));
+
+        return provider;
+    }
+
+    /**
+     * Helper function for adding a test provider with SIM credentials to the manager.  Return the
+     * mock provider that's added to the manager.
+     *
+     * @return {@link PasspointProvider}
+     */
+    private PasspointProvider addTestCarrierProvider(String fqdn, String imsi, String realm) {
+        PasspointConfiguration config = createTestConfigWithSimCredential(fqdn, imsi, realm);
         PasspointProvider provider = createMockProvider(config);
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
                 eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(provider);
@@ -360,6 +397,31 @@ public class PasspointManagerTest {
         scanResults.add(scanResult3);
 
         return scanResults;
+    }
+
+    /**
+     * Helper function for generating {@link ScanDetail} for testing.
+     */
+    private ScanDetail generateScanDetail(String ssid, String bssid, long hessid, int anqpDomaiId,
+            boolean isPasspoint) {
+        NetworkDetail networkDetail = mock(NetworkDetail.class);
+
+        ScanDetail scanDetail = mock(ScanDetail.class);
+        ScanResult scanResult = new ScanResult();
+        scanResult.SSID = ssid;
+        scanResult.BSSID = bssid;
+        scanResult.hessid = hessid;
+        scanResult.anqpDomainId = anqpDomaiId;
+        if (isPasspoint) {
+            lenient().when(networkDetail.isInterworking()).thenReturn(true);
+            scanResult.flags = ScanResult.FLAG_PASSPOINT_NETWORK;
+        } else {
+            lenient().when(networkDetail.isInterworking()).thenReturn(false);
+        }
+
+        lenient().when(scanDetail.getScanResult()).thenReturn(scanResult);
+        lenient().when(scanDetail.getNetworkDetail()).thenReturn(networkDetail);
+        return scanDetail;
     }
 
     /**
@@ -521,7 +583,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addProviderWithInvalidCredential() throws Exception {
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         // EAP-TLS not allowed for user credential.
         config.getCredential().getUserCredential().setEapType(EAPConstants.EAP_TLS);
         assertFalse(mManager.addOrUpdateProvider(config, TEST_CREATOR_UID));
@@ -536,7 +599,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addRemoveProviderWithValidUserCredential() throws Exception {
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         PasspointProvider provider = createMockProvider(config);
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
                 eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(provider);
@@ -576,7 +640,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addRemoveProviderWithValidSimCredential() throws Exception {
-        PasspointConfiguration config = createTestConfigWithSimCredential();
+        PasspointConfiguration config = createTestConfigWithSimCredential(TEST_FQDN, TEST_IMSI,
+                TEST_REALM);
         PasspointProvider provider = createMockProvider(config);
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
                 eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(provider);
@@ -619,7 +684,8 @@ public class PasspointManagerTest {
     @Test
     public void addProviderWithExistingConfig() throws Exception {
         // Add a provider with the original configuration.
-        PasspointConfiguration origConfig = createTestConfigWithSimCredential();
+        PasspointConfiguration origConfig = createTestConfigWithSimCredential(TEST_FQDN, TEST_IMSI,
+                TEST_REALM);
         PasspointProvider origProvider = createMockProvider(origConfig);
         when(mObjectFactory.makePasspointProvider(eq(origConfig), eq(mWifiKeyStore),
                 eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(origProvider);
@@ -639,7 +705,8 @@ public class PasspointManagerTest {
 
         // Add another provider with the same base domain as the existing provider.
         // This should replace the existing provider with the new configuration.
-        PasspointConfiguration newConfig = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration newConfig = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         PasspointProvider newProvider = createMockProvider(newConfig);
         when(mObjectFactory.makePasspointProvider(eq(newConfig), eq(mWifiKeyStore),
                 eq(mSimAccessor), anyLong(), eq(TEST_CREATOR_UID))).thenReturn(newProvider);
@@ -664,7 +731,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addProviderOnKeyInstallationFailiure() throws Exception {
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         PasspointProvider provider = mock(PasspointProvider.class);
         when(provider.installCertsAndKeys()).thenReturn(false);
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
@@ -681,7 +749,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addProviderWithInvalidCaCert() throws Exception {
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         doThrow(new GeneralSecurityException())
                 .when(mCertVerifier).verifyCaCert(any(X509Certificate.class));
         assertFalse(mManager.addOrUpdateProvider(config, TEST_CREATOR_UID));
@@ -697,7 +766,8 @@ public class PasspointManagerTest {
      */
     @Test
     public void addProviderWithR2Config() throws Exception {
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         config.setUpdateIdentifier(1);
         PasspointProvider provider = createMockProvider(config);
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
@@ -738,7 +808,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void matchProviderWithAnqpCacheMissed() throws Exception {
-        addTestProvider(TEST_FQDN);
+        addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
 
         when(mAnqpCache.getEntry(TEST_ANQP_KEY)).thenReturn(null);
         assertNull(mManager.matchProvider(createTestScanResult()));
@@ -754,7 +824,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void matchProviderAsHomeProvider() throws Exception {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         ANQPData entry = new ANQPData(mClock, null);
 
         when(mAnqpCache.getEntry(TEST_ANQP_KEY)).thenReturn(entry);
@@ -773,7 +843,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void matchProviderAsRoamingProvider() throws Exception {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         ANQPData entry = new ANQPData(mClock, null);
 
         when(mAnqpCache.getEntry(TEST_ANQP_KEY)).thenReturn(entry);
@@ -792,7 +862,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void matchProviderWithNoMatch() throws Exception {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         ANQPData entry = new ANQPData(mClock, null);
 
         when(mAnqpCache.getEntry(TEST_ANQP_KEY)).thenReturn(entry);
@@ -841,21 +911,24 @@ public class PasspointManagerTest {
     }
 
     /**
-     * Verify that an expected set of {@link WifiConfiguration} will be returned when a
-     * {@link ScanResult} is matched to a provider.
-     *
-     * @throws Exception
+     * Verify that an expected map of FQDN and a list of ScanResult will be returned when provided
+     * scanResults are matched to installed Passpoint profiles.
      */
     @Test
-    public void getAllMatchingWifiConfigsForProviderAP() throws Exception {
+    public void getAllMatchingFqdnsForScanResults() {
         // static mocking
         MockitoSession session =
                 com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession().mockStatic(
                         InformationElementUtil.class).startMocking();
         try {
-            PasspointProvider providerHome = addTestProvider(TEST_FQDN + 0);
-            PasspointProvider providerRoaming = addTestProvider(TEST_FQDN + 1);
-            PasspointProvider providerNone = addTestProvider(TEST_FQDN + 2);
+            PasspointProvider providerHome = addTestProvider(TEST_FQDN + 0, TEST_FRIENDLY_NAME);
+            WifiConfiguration homeWifiConfiguration = new WifiConfiguration();
+            homeWifiConfiguration.FQDN = TEST_FQDN + 0;
+            homeWifiConfiguration.isHomeProviderNetwork = true;
+            PasspointProvider providerRoaming = addTestProvider(TEST_FQDN + 1, TEST_FRIENDLY_NAME);
+            WifiConfiguration roamingWifiConfiguration = new WifiConfiguration();
+            roamingWifiConfiguration.FQDN = TEST_FQDN + 1;
+            PasspointProvider providerNone = addTestProvider(TEST_FQDN + 2, TEST_FRIENDLY_NAME);
             ANQPData entry = new ANQPData(mClock, null);
             InformationElementUtil.Vsa vsa = new InformationElementUtil.Vsa();
             vsa.anqpDomainID = TEST_ANQP_DOMAIN_ID2;
@@ -869,81 +942,98 @@ public class PasspointManagerTest {
             when(providerNone.match(anyMap(), isNull()))
                     .thenReturn(PasspointMatch.None);
 
-            lenient().when(providerHome.getWifiConfig()).thenReturn(new WifiConfiguration());
-            lenient().when(providerRoaming.getWifiConfig()).thenReturn(new WifiConfiguration());
+            lenient().when(providerHome.getWifiConfig()).thenReturn(homeWifiConfiguration);
+            lenient().when(providerRoaming.getWifiConfig()).thenReturn(roamingWifiConfiguration);
             lenient().when(providerNone.getWifiConfig()).thenReturn(new WifiConfiguration());
 
-            List<WifiConfiguration> configs = mManager.getAllMatchingWifiConfigs(
-                    createTestScanResults());
+            Map<String, Map<Integer, List<ScanResult>>> configs =
+                    mManager.getAllMatchingFqdnsForScanResults(
+                            createTestScanResults());
 
-            // Expects to be matched with home Provider and roaming Provider per Passpoint APs.
-            assertEquals(4, configs.size());
-            int observedHome = 0;
-            int observedRoaming = 0;
-            for (WifiConfiguration config : configs) {
-                if (config.isHomeProviderNetwork) {
-                    observedHome++;
-                } else {
-                    observedRoaming++;
-                }
-            }
-            assertEquals(2, observedHome);
-            assertEquals(2, observedRoaming);
+            // Expects to be matched with home Provider for each AP (two APs).
+            assertEquals(2, configs.get(TEST_FQDN + 0).get(
+                    WifiManager.PASSPOINT_HOME_NETWORK).size());
+            assertFalse(
+                    configs.get(TEST_FQDN + 0).containsKey(WifiManager.PASSPOINT_ROAMING_NETWORK));
+
+            // Expects to be matched with roaming Provider for each AP (two APs).
+            assertEquals(2, configs.get(TEST_FQDN + 1).get(
+                    WifiManager.PASSPOINT_ROAMING_NETWORK).size());
+            assertFalse(configs.get(TEST_FQDN + 1).containsKey(WifiManager.PASSPOINT_HOME_NETWORK));
+
         } finally {
             session.finishMocking();
         }
     }
 
     /**
-     * Verify that an empty list will be returned when trying to get all matching
-     * {@link WifiConfiguration} for a {@code null} {@link ScanResult}.
-     *
-     * @throws Exception
+     * Verify that an expected list of {@link WifiConfiguration} will be returned when provided
+     * a list of FQDN is matched to installed Passpoint profiles.
      */
     @Test
-    public void getAllMatchingWifiConfigsWithNullScanResult() throws Exception {
-        assertEquals(0, mManager.getAllMatchingWifiConfigs(null).size());
+    public void getWifiConfigsForPasspointProfiles() {
+        PasspointProvider provider1 = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
+        WifiConfiguration wifiConfiguration1 = new WifiConfiguration();
+        wifiConfiguration1.FQDN = TEST_FQDN;
+        PasspointProvider provider2 = addTestProvider(TEST_FQDN + 1, TEST_FRIENDLY_NAME);
+        WifiConfiguration wifiConfiguration2 = new WifiConfiguration();
+        wifiConfiguration2.FQDN = TEST_FQDN + 1;
+        PasspointProvider provider3 = addTestProvider(TEST_FQDN + 2, TEST_FRIENDLY_NAME);
+        WifiConfiguration wifiConfiguration3 = new WifiConfiguration();
+        wifiConfiguration3.FQDN = TEST_FQDN + 2;
+        lenient().when(provider1.getWifiConfig()).thenReturn(wifiConfiguration1);
+        lenient().when(provider2.getWifiConfig()).thenReturn(wifiConfiguration2);
+        lenient().when(provider3.getWifiConfig()).thenReturn(wifiConfiguration3);
+
+        assertEquals(3, mManager.getWifiConfigsForPasspointProfiles(
+                Arrays.asList(TEST_FQDN, TEST_FQDN + 1, TEST_FQDN + 2)).size());
     }
 
     /**
-     * Verify that an empty list will be returned when trying to get a all matching
-     * {@link WifiConfiguration} for a {@link ScanResult} with a {@code null} BSSID.
-     *
-     * @throws Exception
+     * Verify that an empty map will be returned when trying to get all matching FQDN for a {@code
+     * null} {@link ScanResult}.
      */
     @Test
-    public void getAllMatchingWifiConfigWithNullBSSID() throws Exception {
+    public void getAllMatchingFqdnsForScanResultsWithNullScanResult() throws Exception {
+        assertEquals(0, mManager.getAllMatchingFqdnsForScanResults(null).size());
+    }
+
+    /**
+     * Verify that an empty map will be returned when trying to get a all matching FQDN for a {@link
+     * ScanResult} with a {@code null} BSSID.
+     */
+    @Test
+    public void getAllMatchingFqdnsForScanResultsWithNullBSSID() throws Exception {
         ScanResult scanResult = createTestScanResult();
         scanResult.BSSID = null;
 
-        assertEquals(0, mManager.getAllMatchingWifiConfigs(Arrays.asList(scanResult)).size());
+        assertEquals(0,
+                mManager.getAllMatchingFqdnsForScanResults(Arrays.asList(scanResult)).size());
     }
 
     /**
-     * Verify that an empty list will be returned when trying to get all matching
-     * {@link WifiConfiguration} for a {@link ScanResult} with an invalid BSSID.
-     *
-     * @throws Exception
+     * Verify that an empty map will be returned when trying to get all matching FQDN for a {@link
+     * ScanResult} with an invalid BSSID.
      */
     @Test
-    public void getAllMatchingWifiConfigWithInvalidBSSID() throws Exception {
+    public void ggetAllMatchingFqdnsForScanResultsWithInvalidBSSID() throws Exception {
         ScanResult scanResult = createTestScanResult();
         scanResult.BSSID = "asdfdasfas";
 
-        assertEquals(0, mManager.getAllMatchingWifiConfigs(Arrays.asList(scanResult)).size());
+        assertEquals(0,
+                mManager.getAllMatchingFqdnsForScanResults(Arrays.asList(scanResult)).size());
     }
 
     /**
-     * Verify that an empty list will be returned when trying to get all matching
-     * {@link WifiConfiguration} for a non-Passpoint AP.
-     *
-     * @throws Exception
+     * Verify that an empty map will be returned when trying to get all matching FQDN for a
+     * non-Passpoint AP.
      */
     @Test
-    public void getAllMatchingWifiConfigForNonPasspointAP() throws Exception {
+    public void getAllMatchingFqdnsForScanResultsForNonPasspointAP() throws Exception {
         ScanResult scanResult = createTestScanResult();
         scanResult.flags = 0;
-        assertEquals(0, mManager.getAllMatchingWifiConfigs(Arrays.asList(scanResult)).size());
+        assertEquals(0,
+                mManager.getAllMatchingFqdnsForScanResults(Arrays.asList(scanResult)).size());
     }
 
     /**
@@ -1031,8 +1121,12 @@ public class PasspointManagerTest {
                 List<I18Name> serviceDescriptions = Arrays.asList(
                         new I18Name(Locale.ENGLISH.getLanguage(), Locale.ENGLISH,
                                 serviceDescription));
+                Map<String, String> friendlyNameMap = new HashMap<>();
+                friendlyNames.forEach(e -> friendlyNameMap.put(e.getLanguage(), e.getText()));
+
                 expectedOsuProvidersForDomainId.add(new OsuProvider(
-                        null, friendlyName, serviceDescription, serverUri, nai, methodList, null));
+                        null, friendlyNameMap, serviceDescription,
+                        serverUri, nai, methodList, null));
 
                 // add All OSU Providers for AP1.
                 providerInfoListOfAp1.add(new OsuProviderInfo(
@@ -1043,7 +1137,8 @@ public class PasspointManagerTest {
                     providerInfoListOfAp2.add(new OsuProviderInfo(
                             friendlyNames, serverUri, methodList, null, nai, serviceDescriptions));
                     expectedOsuProvidersForDomainId2.add(new OsuProvider(
-                            null, friendlyName, serviceDescription, serverUri, nai, methodList,
+                            null, friendlyNameMap, serviceDescription,
+                            serverUri, nai, methodList,
                             null));
                 }
             }
@@ -1064,17 +1159,69 @@ public class PasspointManagerTest {
             // ANQP_DOMAIN_ID(TEST_ANQP_KEY)
             vsa.anqpDomainID = TEST_ANQP_DOMAIN_ID;
             when(InformationElementUtil.getHS2VendorSpecificIE(isNull())).thenReturn(vsa);
-            assertThat(mManager.getMatchingOsuProviders(Arrays.asList(createTestScanResult())),
-                    containsInAnyOrder(expectedOsuProvidersForDomainId.toArray()));
+            assertEquals(mManager.getMatchingOsuProviders(
+                    Arrays.asList(createTestScanResult())).keySet(),
+                    expectedOsuProvidersForDomainId);
 
             // ANQP_DOMAIN_ID2(TEST_ANQP_KEY2)
             vsa.anqpDomainID = TEST_ANQP_DOMAIN_ID2;
             when(InformationElementUtil.getHS2VendorSpecificIE(isNull())).thenReturn(vsa);
-            assertThat(mManager.getMatchingOsuProviders(createTestScanResults()),
-                    containsInAnyOrder(expectedOsuProvidersForDomainId2.toArray()));
+            assertEquals(mManager.getMatchingOsuProviders(
+                    createTestScanResults()).keySet(), expectedOsuProvidersForDomainId2);
         } finally {
             session.finishMocking();
         }
+    }
+
+    /**
+     * Verify that matching Passpoint configurations will be returned as map with corresponding
+     * OSU providers.
+     */
+    @Test
+    public void getMatchingPasspointConfigsForOsuProvidersWithMatch() {
+        PasspointProvider provider1 = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
+        PasspointProvider provider2 = addTestProvider(TEST_FQDN2, TEST_FRIENDLY_NAME2);
+
+        List<OsuProvider> osuProviders = new ArrayList<>();
+        Map<String, String> friendlyNames = new HashMap<>();
+        friendlyNames.put("en", "NO-MATCH-NAME");
+        friendlyNames.put("kr", TEST_FRIENDLY_NAME + 1);
+
+        osuProviders.add(PasspointProvisioningTestUtil.generateOsuProviderWithFriendlyName(true,
+                friendlyNames));
+        friendlyNames = new HashMap<>();
+        friendlyNames.put("en", TEST_FRIENDLY_NAME2);
+        osuProviders.add(PasspointProvisioningTestUtil.generateOsuProviderWithFriendlyName(true,
+                friendlyNames));
+
+        Map<OsuProvider, PasspointConfiguration> results =
+                mManager.getMatchingPasspointConfigsForOsuProviders(osuProviders);
+
+        assertEquals(2, results.size());
+        assertThat(Arrays.asList(provider1.getConfig(), provider2.getConfig()),
+                containsInAnyOrder(results.values().toArray()));
+    }
+
+    /**
+     * Verify that empty map will be returned when there is no matching Passpoint configuration.
+     */
+    @Test
+    public void getMatchingPasspointConfigsForOsuProvidersWitNoMatch() {
+        addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
+        addTestProvider(TEST_FQDN2, TEST_FRIENDLY_NAME2);
+
+        List<OsuProvider> osuProviders = new ArrayList<>();
+
+        Map<String, String> friendlyNames = new HashMap<>();
+        friendlyNames.put("en", "NO-MATCH-NAME");
+        osuProviders.add(PasspointProvisioningTestUtil.generateOsuProviderWithFriendlyName(true,
+                friendlyNames));
+        friendlyNames = new HashMap<>();
+        friendlyNames.put("en", "NO-MATCH-NAME-2");
+        osuProviders.add(PasspointProvisioningTestUtil.generateOsuProviderWithFriendlyName(true,
+                friendlyNames));
+
+        assertEquals(0, mManager.getMatchingPasspointConfigsForOsuProviders(osuProviders).size());
     }
 
     /**
@@ -1086,7 +1233,8 @@ public class PasspointManagerTest {
     @Test
     public void verifyProvidersAfterDataSourceUpdate() throws Exception {
         // Update the provider list in the data source.
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         PasspointProvider provider = createMockProvider(config);
         List<PasspointProvider> providers = new ArrayList<>();
         providers.add(provider);
@@ -1110,7 +1258,8 @@ public class PasspointManagerTest {
         assertEquals(providerIndex, mSharedDataSource.getProviderIndex());
 
         // Add a provider.
-        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN);
+        PasspointConfiguration config = createTestConfigWithUserCredential(TEST_FQDN,
+                TEST_FRIENDLY_NAME);
         PasspointProvider provider = createMockProvider(config);
         // Verify the provider ID used to create the new provider.
         when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
@@ -1357,7 +1506,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void providerNetworkConnectedFirstTime() throws Exception {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         when(provider.getHasEverConnected()).thenReturn(false);
         mManager.onPasspointNetworkConnected(TEST_FQDN);
         verify(provider).setHasEverConnected(eq(true));
@@ -1372,7 +1521,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void providerNetworkConnectedNotFirstTime() throws Exception {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         when(provider.getHasEverConnected()).thenReturn(true);
         mManager.onPasspointNetworkConnected(TEST_FQDN);
         verify(provider, never()).setHasEverConnected(anyBoolean());
@@ -1386,7 +1535,7 @@ public class PasspointManagerTest {
      */
     @Test
     public void updateMetrics() {
-        PasspointProvider provider = addTestProvider(TEST_FQDN);
+        PasspointProvider provider = addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
         ArgumentCaptor<Map<String, PasspointProvider>> argCaptor = ArgumentCaptor.forClass(
                 Map.class);
         // Provider have not provided a successful network connection.
@@ -1423,5 +1572,185 @@ public class PasspointManagerTest {
         OsuProvider osuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
         assertEquals(true,
                 mManager.startSubscriptionProvisioning(TEST_UID, osuProvider, mCallback));
+    }
+
+    /**
+     * Verify that it will return {@code null} if the EAP-Method provided is not a carrier
+     * EAP-Method.
+     */
+    @Test
+    public void verifyCreateEphemeralPasspointConfigurationWithNonCarrierEapMethod() {
+        // static mocking
+        MockitoSession session = ExtendedMockito.mockitoSession().mockStatic(
+                TelephonyManager.class).startMocking();
+        try {
+            TelephonyManager telephonyManager = mock(TelephonyManager.class);
+            when(TelephonyManager.from(any(Context.class))).thenReturn(telephonyManager);
+            when(telephonyManager.getNetworkOperator()).thenReturn("123456");
+            PasspointManager passpointManager = new PasspointManager(mContext, mWifiNative,
+                    mWifiKeyStore, mClock,
+                    mSimAccessor, mObjectFactory, mWifiConfigManager, mWifiConfigStore,
+                    mWifiMetrics);
+
+            assertNull(passpointManager.createEphemeralPasspointConfigForCarrier(
+                    EAPConstants.EAP_TLS));
+        } finally {
+            session.finishMocking();
+        }
+    }
+
+    /**
+     * Verify that it creates an ephemeral Passpoint configuration for the carrier.
+     */
+    @Test
+    public void verifyCreateEphemeralPasspointConfigurationWithCarrierEapMethod() {
+        // static mocking
+        MockitoSession session = ExtendedMockito.mockitoSession().mockStatic(
+                TelephonyManager.class).startMocking();
+        try {
+            TelephonyManager telephonyManager = mock(TelephonyManager.class);
+            String mccmnc = "123456";
+            when(TelephonyManager.from(any(Context.class))).thenReturn(telephonyManager);
+            when(telephonyManager.getNetworkOperator()).thenReturn(mccmnc);
+            when(telephonyManager.getNetworkOperatorName()).thenReturn("test");
+
+            PasspointManager passpointManager = new PasspointManager(mContext, mWifiNative,
+                    mWifiKeyStore, mClock,
+                    mSimAccessor, mObjectFactory, mWifiConfigManager, mWifiConfigStore,
+                    mWifiMetrics);
+
+            PasspointConfiguration result =
+                    passpointManager.createEphemeralPasspointConfigForCarrier(
+                            EAPConstants.EAP_AKA);
+
+            assertNotNull(result);
+            assertTrue(result.validate());
+            assertEquals(Utils.getRealmForMccMnc(mccmnc), result.getHomeSp().getFqdn());
+            assertEquals(mccmnc + "*", result.getCredential().getSimCredential().getImsi());
+        } finally {
+            session.finishMocking();
+        }
+    }
+
+    /**
+     * Verify that it will not install the Passpoint configuration with Non-Carrier EAP method.
+     */
+    @Test
+    public void verifyInstallEphemeralPasspointConfigurationWithNonCarrierEapMethod() {
+        when(mWifiConfigManager.isSimPresent()).thenReturn(true);
+        PasspointConfiguration config = createTestConfigWithUserCredential("abc.com", "test");
+        PasspointProvider provider = createMockProvider(config);
+        when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
+                eq(mSimAccessor), anyLong(), anyInt())).thenReturn(provider);
+
+        assertFalse(mManager.installEphemeralPasspointConfigForCarrier(config));
+    }
+
+    /**
+     * Verify that it installs the carrier Passpoint configuration successfully.
+     */
+    @Test
+    public void verifyInstallEphemeralPasspointConfiguration() {
+        when(mWifiConfigManager.isSimPresent()).thenReturn(true);
+        PasspointConfiguration config = createTestConfigWithSimCredential(TEST_FQDN, TEST_IMSI,
+                TEST_REALM);
+        PasspointProvider provider = createMockProvider(config);
+        when(mObjectFactory.makePasspointProvider(eq(config), eq(mWifiKeyStore),
+                eq(mSimAccessor), anyLong(), anyInt())).thenReturn(provider);
+
+        assertTrue(mManager.installEphemeralPasspointConfigForCarrier(config));
+    }
+
+    /**
+     * Verify that it returns {@code true} when it has Carrier Provider.
+     */
+    @Test
+    public void verifyHasProviderForCarrierWithMatch() {
+        addTestCarrierProvider(TEST_3GPP_FQDN, TEST_MCC_MNC, TEST_3GPP_FQDN);
+
+        assertTrue(mManager.hasCarrierProvider(TEST_MCC_MNC));
+    }
+
+    /**
+     * Verify that it returns {@code false} when it does not have Carrier Provider.
+     */
+    @Test
+    public void verifyHasProviderForCarrierWithNoMatch() {
+        addTestProvider(TEST_FQDN, TEST_FRIENDLY_NAME);
+
+        assertFalse(mManager.hasCarrierProvider(TEST_MCC_MNC));
+    }
+
+    /**
+     * Verify that it returns a carrier EAP-method from NAI-Realm matched with the carrier.
+     */
+    @Test
+    public void verifyFindEapMethodFromNAIRealmMatchedWithCarrierWithMatch() {
+        // static mocking
+        MockitoSession session = ExtendedMockito.mockitoSession().mockStatic(
+                TelephonyManager.class).mockStatic(
+                InformationElementUtil.class).startMocking();
+        try {
+            TelephonyManager telephonyManager = mock(TelephonyManager.class);
+            when(TelephonyManager.from(any(Context.class))).thenReturn(telephonyManager);
+            when(telephonyManager.getNetworkOperator()).thenReturn(TEST_MCC_MNC);
+            when(mWifiConfigManager.isSimPresent()).thenReturn(true);
+            List<ScanDetail> scanDetails = new ArrayList<>();
+            scanDetails.add(generateScanDetail(TEST_SSID, TEST_BSSID_STRING, TEST_HESSID,
+                    TEST_ANQP_DOMAIN_ID, true));
+            InformationElementUtil.Vsa vsa = new InformationElementUtil.Vsa();
+
+            // ANQP_DOMAIN_ID(TEST_ANQP_KEY)
+            vsa.anqpDomainID = TEST_ANQP_DOMAIN_ID;
+            when(InformationElementUtil.getHS2VendorSpecificIE(isNull())).thenReturn(vsa);
+            Map<ANQPElementType, ANQPElement> anqpElementMapOfAp1 = new HashMap<>();
+            List<NAIRealmData> realmDataList = new ArrayList<>();
+            realmDataList.add(new NAIRealmData(Arrays.asList(TEST_3GPP_FQDN),
+                    Arrays.asList(new EAPMethod(EAPConstants.EAP_AKA, null))));
+            anqpElementMapOfAp1.put(ANQPElementType.ANQPNAIRealm,
+                    new NAIRealmElement(realmDataList));
+
+            ANQPData anqpData = new ANQPData(mClock, anqpElementMapOfAp1);
+            when(mAnqpCache.getEntry(TEST_ANQP_KEY)).thenReturn(anqpData);
+
+            PasspointManager passpointManager = new PasspointManager(mContext, mWifiNative,
+                    mWifiKeyStore, mClock,
+                    mSimAccessor, mObjectFactory, mWifiConfigManager, mWifiConfigStore,
+                    mWifiMetrics);
+
+            assertEquals(EAPConstants.EAP_AKA,
+                    passpointManager.findEapMethodFromNAIRealmMatchedWithCarrier(scanDetails));
+        } finally {
+            session.finishMocking();
+        }
+    }
+
+    /**
+     * Verify that it returns -1 when there is no NAI-Realm matched with the carrier.
+     */
+    @Test
+    public void verifyFindEapMethodFromNAIRealmMatchedWithCarrierWithNoMatch() {
+        // static mocking
+        MockitoSession session = ExtendedMockito.mockitoSession().mockStatic(
+                TelephonyManager.class).mockStatic(
+                InformationElementUtil.class).startMocking();
+        try {
+            TelephonyManager telephonyManager = mock(TelephonyManager.class);
+            when(TelephonyManager.from(any(Context.class))).thenReturn(telephonyManager);
+            when(telephonyManager.getNetworkOperator()).thenReturn(TEST_MCC_MNC);
+            when(mWifiConfigManager.isSimPresent()).thenReturn(true);
+            List<ScanDetail> scanDetails = new ArrayList<>();
+            scanDetails.add(generateScanDetail(TEST_SSID, TEST_BSSID_STRING, 0, 0, false));
+
+            PasspointManager passpointManager = new PasspointManager(mContext, mWifiNative,
+                    mWifiKeyStore, mClock,
+                    mSimAccessor, mObjectFactory, mWifiConfigManager, mWifiConfigStore,
+                    mWifiMetrics);
+
+            assertEquals(-1,
+                    passpointManager.findEapMethodFromNAIRealmMatchedWithCarrier(scanDetails));
+        } finally {
+            session.finishMocking();
+        }
     }
 }

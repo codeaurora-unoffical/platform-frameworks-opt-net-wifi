@@ -33,7 +33,8 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiScanner;
 import android.os.test.TestLooper;
 import android.provider.Settings;
-import android.support.test.filters.SmallTest;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -108,7 +109,7 @@ public class WakeupControllerTest {
         scanResults[0] = mTestScanResult;
         mTestScanDatas = new WifiScanner.ScanData[1];
         mTestScanDatas[0] = new WifiScanner.ScanData(0 /* id */, 0 /* flags */,
-                0 /* bucketsScanned */, true /* allChannelsScanned */, scanResults);
+                0 /* bucketsScanned */, WifiScanner.WIFI_BAND_BOTH /* bandScanned */, scanResults);
     }
 
     /** Initializes the wakeupcontroller in the given {@code enabled} state. */
@@ -317,7 +318,7 @@ public class WakeupControllerTest {
         openNetwork.getNetworkSelectionStatus().setHasEverConnected(true);
         WifiConfiguration wepNetwork = WifiConfigurationTestUtil.createWepNetwork();
         wepNetwork.getNetworkSelectionStatus().setHasEverConnected(true);
-        when(mWifiConfigManager.getSavedNetworks())
+        when(mWifiConfigManager.getSavedNetworks(anyInt()))
                 .thenReturn(Arrays.asList(openNetwork, wepNetwork));
 
         // scan results from most recent scan
@@ -353,7 +354,7 @@ public class WakeupControllerTest {
                 .createOpenNetwork(ScanResultUtil.createQuotedSSID(ssid24));
         openNetwork24.getNetworkSelectionStatus().setHasEverConnected(true);
 
-        when(mWifiConfigManager.getSavedNetworks())
+        when(mWifiConfigManager.getSavedNetworks(anyInt()))
                 .thenReturn(Arrays.asList(openNetworkDfs, openNetwork24));
 
         // scan results from most recent scan
@@ -382,7 +383,7 @@ public class WakeupControllerTest {
         WifiConfiguration openNetwork = WifiConfigurationTestUtil
                 .createOpenNetwork(ScanResultUtil.createQuotedSSID(SAVED_SSID));
         openNetwork.getNetworkSelectionStatus().setHasEverConnected(true);
-        when(mWifiConfigManager.getSavedNetworks())
+        when(mWifiConfigManager.getSavedNetworks(anyInt()))
                 .thenReturn(Collections.singletonList(openNetwork));
 
         initializeWakeupController(true /* enabled */);
@@ -408,7 +409,7 @@ public class WakeupControllerTest {
     @Test
     public void onResultsUpdatesWakeupLockWithOnlySavedNetworks() {
         // no saved configs
-        when(mWifiConfigManager.getSavedNetworks()).thenReturn(Collections.emptyList());
+        when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(Collections.emptyList());
 
         initializeWakeupController(true /* enabled */);
         mWakeupController.start();
@@ -583,7 +584,7 @@ public class WakeupControllerTest {
         when(mClock.getElapsedSinceBootMillis()).thenReturn(0L,
                 (long) (0.8 * WakeupController.LAST_DISCONNECT_TIMEOUT_MILLIS));
         ScanResultMatchInfo matchInfo = ScanResultMatchInfo.fromScanResult(mTestScanResult);
-        when(mWifiConfigManager.getSavedNetworks()).thenReturn(Collections.emptyList());
+        when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(Collections.emptyList());
         when(mWifiScanner.getSingleScanResults()).thenReturn(Collections.emptyList());
         initializeWakeupController(true);
 
@@ -609,7 +610,7 @@ public class WakeupControllerTest {
         when(mClock.getElapsedSinceBootMillis()).thenReturn(0L,
                 (long) (1.2 * WakeupController.LAST_DISCONNECT_TIMEOUT_MILLIS));
         ScanResultMatchInfo matchInfo = ScanResultMatchInfo.fromScanResult(mTestScanResult);
-        when(mWifiConfigManager.getSavedNetworks()).thenReturn(Collections.emptyList());
+        when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(Collections.emptyList());
         when(mWifiScanner.getSingleScanResults()).thenReturn(Collections.emptyList());
         initializeWakeupController(true);
 

@@ -31,8 +31,9 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiNetworkScoreCache;
 import android.net.wifi.WifiSsid;
-import android.support.test.filters.SmallTest;
 import android.text.TextUtils;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.util.ScanResultUtil;
 
@@ -201,9 +202,9 @@ public class WifiNetworkSelectorTestUtil {
                         return null;
                     }
                 });
-        when(wifiConfigManager.getSavedNetworks())
+        when(wifiConfigManager.getSavedNetworks(anyInt()))
                 .then(new AnswerWithArguments() {
-                    public List<WifiConfiguration> answer() {
+                    public List<WifiConfiguration> answer(int uid) {
                         List<WifiConfiguration> savedNetworks = new ArrayList<>();
                         for (int netId = 0; netId < configs.length; netId++) {
                             savedNetworks.add(new WifiConfiguration(configs[netId]));

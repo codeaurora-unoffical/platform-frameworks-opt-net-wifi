@@ -64,7 +64,7 @@ public class WifiConfigurationTestUtil {
      */
     public static final int TEST_NETWORK_ID = -1;
     public static final int TEST_UID = 5;
-    public static final String TEST_SSID = "WifiConfigurationTestUtilSSID";
+    public static final String TEST_SSID = "WifiConfigurationTestSSID";
     public static final String TEST_PSK = "\"WifiConfigurationTestUtilPsk\"";
     public static final String[] TEST_WEP_KEYS =
             {"\"WifiConfigurationTestUtilWep1\"", "\"WifiConfigurationTestUtilWep2\"",
@@ -574,6 +574,7 @@ public class WifiConfigurationTestUtil {
         assertEquals(expected.updateTime, actual.updateTime);
         assertEquals(expected.isLegacyPasspointConfig, actual.isLegacyPasspointConfig);
         assertEquals(expected.getRandomizedMacAddress(), actual.getRandomizedMacAddress());
+        assertEquals(expected.macRandomizationSetting, actual.macRandomizationSetting);
         assertNetworkSelectionStatusEqualForConfigStore(
                 expected.getNetworkSelectionStatus(), actual.getNetworkSelectionStatus());
         assertWifiEnterpriseConfigEqualForConfigStore(
@@ -594,7 +595,10 @@ public class WifiConfigurationTestUtil {
         assertEquals(expected.meteredOverride, actual.meteredOverride);
         assertEquals(expected.useExternalScores, actual.useExternalScores);
         assertEquals(expected.ephemeral, actual.ephemeral);
+        assertEquals(expected.osu, actual.osu);
         assertEquals(expected.trusted, actual.trusted);
+        assertEquals(expected.fromWifiNetworkSuggestion, actual.fromWifiNetworkSuggestion);
+        assertEquals(expected.fromWifiNetworkSpecifier, actual.fromWifiNetworkSpecifier);
         assertEquals(expected.creatorUid, actual.creatorUid);
         assertEquals(expected.creatorName, actual.creatorName);
         assertEquals(expected.creationTime, actual.creationTime);

@@ -26,14 +26,16 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.hardware.wifi.V1_0.NanStatusType;
 import android.net.wifi.aware.WifiAwareNetworkSpecifier;
-import android.support.test.filters.SmallTest;
 import android.util.Log;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 
+import androidx.test.filters.SmallTest;
+
 import com.android.server.wifi.Clock;
 import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.util.MetricsUtils;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -55,6 +57,7 @@ public class WifiAwareMetricsTest {
     @Mock Clock mClock;
     @Mock private Context mMockContext;
     @Mock private AppOpsManager mMockAppOpsManager;
+    @Mock private WifiPermissionsUtil mWifiPermissionsUtil;
     @Rule public ErrorCollector collector = new ErrorCollector();
 
     private WifiAwareMetrics mDut;
@@ -236,25 +239,25 @@ public class WifiAwareMetricsTest {
         // uid1: session 1
         clients.put(10,
                 new WifiAwareClientState(mMockContext, 10, uid1, 0, null, null, null, false,
-                        mClock.getElapsedSinceBootMillis()));
+                        mClock.getElapsedSinceBootMillis(), mWifiPermissionsUtil));
         mDut.recordAttachSession(uid1, false, clients);
 
         // uid1: session 2
         clients.put(11,
                 new WifiAwareClientState(mMockContext, 11, uid1, 0, null, null, null, false,
-                        mClock.getElapsedSinceBootMillis()));
+                        mClock.getElapsedSinceBootMillis(), mWifiPermissionsUtil));
         mDut.recordAttachSession(uid1, false, clients);
 
         // uid2: session 1
         clients.put(12,
                 new WifiAwareClientState(mMockContext, 12, uid2, 0, null, null, null, false,
-                        mClock.getElapsedSinceBootMillis()));
+                        mClock.getElapsedSinceBootMillis(), mWifiPermissionsUtil));
         mDut.recordAttachSession(uid2, false, clients);
 
         // uid2: session 2
         clients.put(13,
                 new WifiAwareClientState(mMockContext, 13, uid2, 0, null, null, null, true,
-                        mClock.getElapsedSinceBootMillis()));
+                        mClock.getElapsedSinceBootMillis(), mWifiPermissionsUtil));
         mDut.recordAttachSession(uid2, true, clients);
 
         // uid2: delete session 1
@@ -270,7 +273,7 @@ public class WifiAwareMetricsTest {
         // uid2: session 3
         clients.put(14,
                 new WifiAwareClientState(mMockContext, 14, uid2, 0, null, null, null, false,
-                        mClock.getElapsedSinceBootMillis()));
+                        mClock.getElapsedSinceBootMillis(), mWifiPermissionsUtil));
         mDut.recordAttachSession(uid2, false, clients);
 
         // a few failures
@@ -304,11 +307,11 @@ public class WifiAwareMetricsTest {
 
         setTime(5);
         WifiAwareClientState client1 = new WifiAwareClientState(mMockContext, 10, uid1, 0, null,
-                null, null, false, 0);
+                null, null, false, 0, mWifiPermissionsUtil);
         WifiAwareClientState client2 = new WifiAwareClientState(mMockContext, 11, uid2, 0, null,
-                null, null, false, 0);
+                null, null, false, 0, mWifiPermissionsUtil);
         WifiAwareClientState client3 = new WifiAwareClientState(mMockContext, 12, uid3, 0, null,
-                null, null, false, 0);
+                null, null, false, 0, mWifiPermissionsUtil);
         clients.put(10, client1);
         clients.put(11, client2);
         clients.put(12, client3);
@@ -632,7 +635,7 @@ public class WifiAwareMetricsTest {
                     .AwareNetworkRequestInformation> networkRequestCache,
             int index, int uid, String interfaceName, String passphrase) {
         WifiAwareNetworkSpecifier ns = new WifiAwareNetworkSpecifier(0, 0, 0, index, 0, null, null,
-                passphrase, 0);
+                passphrase, 0, 0, 0);
         WifiAwareDataPathStateManager.AwareNetworkRequestInformation anri =
                 new WifiAwareDataPathStateManager.AwareNetworkRequestInformation();
         anri.networkSpecifier = ns;

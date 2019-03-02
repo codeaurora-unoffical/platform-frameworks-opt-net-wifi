@@ -39,7 +39,6 @@ import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.argThat;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.inOrder;
@@ -56,7 +55,6 @@ import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.app.test.TestAlarmManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.location.LocationManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiScanner;
 import android.os.Binder;
@@ -66,14 +64,16 @@ import android.os.Message;
 import android.os.RemoteException;
 import android.os.WorkSource;
 import android.os.test.TestLooper;
-import android.support.test.filters.SmallTest;
 import android.util.Pair;
+
+import androidx.test.filters.SmallTest;
 
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.util.AsyncChannel;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.test.BidirectionalAsyncChannel;
 import com.android.server.wifi.Clock;
+import com.android.server.wifi.DppMetrics;
 import com.android.server.wifi.FakeWifiLog;
 import com.android.server.wifi.FrameworkFacade;
 import com.android.server.wifi.ScanResults;
@@ -83,8 +83,10 @@ import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.WifiPowerMetrics;
 import com.android.server.wifi.aware.WifiAwareMetrics;
 import com.android.server.wifi.nano.WifiMetricsProto;
+import com.android.server.wifi.p2p.WifiP2pMetrics;
 import com.android.server.wifi.rtt.RttMetrics;
 import com.android.server.wifi.util.WifiAsyncChannel;
+import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import org.junit.After;
 import org.junit.Before;
@@ -112,6 +114,7 @@ public class WifiScanningServiceTest {
     public static final String TAG = "WifiScanningServiceTest";
 
     private static final int TEST_MAX_SCAN_BUCKETS_IN_CAPABILITIES = 8;
+    private static final String TEST_PACKAGE_NAME = "com.test.123";
 
     @Mock Context mContext;
     TestAlarmManager mAlarmManager;
@@ -122,10 +125,12 @@ public class WifiScanningServiceTest {
     @Mock FrameworkFacade mFrameworkFacade;
     @Mock Clock mClock;
     @Spy FakeWifiLog mLog;
-    @Mock LocationManager mLocationManager;
+    @Mock WifiPermissionsUtil mWifiPermissionsUtil;
+    @Mock DppMetrics mDppMetrics;
     WifiMetrics mWifiMetrics;
     TestLooper mLooper;
     WifiScanningServiceImpl mWifiScanningServiceImpl;
+    @Mock WifiP2pMetrics mWifiP2pMetrics;
 
 
     @Before
@@ -135,8 +140,8 @@ public class WifiScanningServiceTest {
         mAlarmManager = new TestAlarmManager();
         when(mContext.getSystemService(Context.ALARM_SERVICE))
                 .thenReturn(mAlarmManager.getAlarmManager());
-        when(mContext.getSystemService(Context.LOCATION_SERVICE))
-                .thenReturn(mLocationManager);
+        when(mWifiInjector.getWifiPermissionsUtil())
+                .thenReturn(mWifiPermissionsUtil);
 
         ChannelHelper channelHelper = new PresetKnownBandsChannelHelper(
                 new int[]{2400, 2450},
@@ -145,7 +150,8 @@ public class WifiScanningServiceTest {
 
         mLooper = new TestLooper();
         mWifiMetrics = new WifiMetrics(mContext, mFrameworkFacade, mClock, mLooper.getLooper(),
-                new WifiAwareMetrics(mClock), new RttMetrics(mClock), new WifiPowerMetrics());
+                new WifiAwareMetrics(mClock), new RttMetrics(mClock), new WifiPowerMetrics(),
+                mWifiP2pMetrics, mDppMetrics);
         when(mWifiScannerImplFactory
                 .create(any(), any(), any()))
                 .thenReturn(mWifiScannerImpl);
@@ -626,7 +632,7 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH_WITH_DFS,
                 0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
-                ScanResults.create(0, true, 2400, 5150, 5175));
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH_WITH_DFS, 2400, 5150, 5175));
     }
 
     /**
@@ -637,7 +643,7 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings = createRequest(channelsToSpec(2400, 5150, 5175),
                 0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
-                ScanResults.create(0, 2400, 5150, 5175));
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400, 5150, 5175));
     }
 
     /**
@@ -649,7 +655,7 @@ public class WifiScanningServiceTest {
                 channelsToSpec(2400, 2450, 5150, 5175, 5600, 5650, 5660),
                 0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
-                ScanResults.create(0, true, 2400, 5150, 5175));
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400, 5150, 5175));
     }
 
     /**
@@ -660,7 +666,7 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH, 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
-                ScanResults.create(0, new int[0]));
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, new int[0]));
     }
 
     /**
@@ -673,7 +679,7 @@ public class WifiScanningServiceTest {
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         // Create a set of scan results that has results not matching the request settings, but is
         // limited to zero results for the expected results.
-        ScanResults results = ScanResults.createOverflowing(0, 0,
+        ScanResults results = ScanResults.createOverflowing(0, WifiScanner.WIFI_BAND_24_GHZ, 0,
                 ScanResults.generateNativeResults(0, 5150, 5171));
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
                 results);
@@ -1083,13 +1089,13 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings1 = createRequest(channelsToSpec(2400), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId1 = 12;
-        ScanResults results1 = ScanResults.create(0, true, 2400);
+        ScanResults results1 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
 
         WifiScanner.ScanSettings requestSettings2 = createRequest(channelsToSpec(2450, 5175), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId2 = 13;
-        ScanResults results2 = ScanResults.create(0, true, 2450);
+        ScanResults results2 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2450);
 
 
         startServiceAndLoadDriver();
@@ -1152,12 +1158,12 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings1 = createRequest(channelsToSpec(2400), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId1 = 12;
-        ScanResults results1 = ScanResults.create(0, true, 2400);
+        ScanResults results1 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
         WifiScanner.ScanSettings requestSettings2 = createRequest(channelsToSpec(2450, 5175), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId2 = 13;
-        ScanResults results2 = ScanResults.create(0, true, 2450);
+        ScanResults results2 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2450);
 
 
         startServiceAndLoadDriver();
@@ -1222,13 +1228,13 @@ public class WifiScanningServiceTest {
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         requestSettings1.type = WifiScanner.TYPE_LOW_LATENCY;
         int requestId1 = 12;
-        ScanResults results1 = ScanResults.create(0, true, 2400);
+        ScanResults results1 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
         WifiScanner.ScanSettings requestSettings2 = createRequest(channelsToSpec(2400), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         requestSettings2.type = WifiScanner.TYPE_HIGH_ACCURACY;
         int requestId2 = 13;
-        ScanResults results2 = ScanResults.create(0, true, 2400);
+        ScanResults results2 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
         startServiceAndLoadDriver();
         mWifiScanningServiceImpl.setWifiHandlerLogForTest(mLog);
@@ -1292,14 +1298,15 @@ public class WifiScanningServiceTest {
         requestSettings1.type = WifiScanner.TYPE_LOW_LATENCY;
         int requestId1 = 12;
         WorkSource workSource1 = new WorkSource(1121);
-        ScanResults results1 = ScanResults.create(0, false, 2400);
+        ScanResults results1 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
         WifiScanner.ScanSettings requestSettings2 = createRequest(channelsToSpec(2450, 5175), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         requestSettings2.type = WifiScanner.TYPE_HIGH_ACCURACY;
         int requestId2 = 13;
         WorkSource workSource2 = new WorkSource(Binder.getCallingUid()); // don't explicitly set
-        ScanResults results2 = ScanResults.create(0, false, 2450, 5175, 2450);
+        ScanResults results2 =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2450, 5175, 2450);
 
         WifiScanner.ScanSettings requestSettings3 = createRequest(channelsToSpec(5150), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
@@ -1309,12 +1316,14 @@ public class WifiScanningServiceTest {
         WorkSource workSource3 = new WorkSource();
         workSource3.createWorkChain()
                 .addNode(2292, "tag1");
-        ScanResults results3 = ScanResults.create(0, false, 5150, 5150, 5150, 5150);
+        ScanResults results3 =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 5150, 5150, 5150, 5150);
 
         WifiNative.ScanSettings nativeSettings2and3 = createSingleScanNativeSettingsForChannels(
                 WifiNative.SCAN_TYPE_HIGH_ACCURACY, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN,
                 channelsToSpec(2450, 5175, 5150));
-        ScanResults results2and3 = ScanResults.merge(results2, results3);
+        ScanResults results2and3 =
+                ScanResults.merge(WifiScanner.WIFI_BAND_UNSPECIFIED, results2, results3);
         WorkSource workSource2and3 = new WorkSource();
         workSource2and3.add(workSource2);
         workSource2and3.add(workSource3);
@@ -1401,9 +1410,12 @@ public class WifiScanningServiceTest {
     @Test
     public void sendSingleScanRequestWhilePreviousScanRunningAndMergeIntoFirstScan() {
         // Split by frequency to make it easier to determine which results each request is expecting
-        ScanResults results24GHz = ScanResults.create(0, 2400, 2400, 2400, 2450);
-        ScanResults results5GHz = ScanResults.create(0, 5150, 5150, 5175);
-        ScanResults resultsBoth = ScanResults.merge(results24GHz, results5GHz);
+        ScanResults results24GHz =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 2400, 2400, 2400, 2450);
+        ScanResults results5GHz =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 5150, 5150, 5175);
+        ScanResults resultsBoth =
+                ScanResults.merge(WifiScanner.WIFI_BAND_BOTH, results24GHz, results5GHz);
 
         WifiScanner.ScanSettings requestSettings1 = createRequest(
                 WifiScanner.TYPE_HIGH_ACCURACY, WifiScanner.WIFI_BAND_BOTH, 0,
@@ -1466,9 +1478,11 @@ public class WifiScanningServiceTest {
     public void sendMultipleSingleScanRequestWhilePreviousScanRunningAndMergeOneIntoFirstScan()
           throws RemoteException {
         // Split by frequency to make it easier to determine which results each request is expecting
-        ScanResults results2400 = ScanResults.create(0, 2400, 2400, 2400);
-        ScanResults results2450 = ScanResults.create(0, 2450);
-        ScanResults results1and3 = ScanResults.merge(results2400, results2450);
+        ScanResults results2400 =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400, 2400, 2400);
+        ScanResults results2450 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2450);
+        ScanResults results1and3 =
+                ScanResults.merge(WifiScanner.WIFI_BAND_UNSPECIFIED, results2400, results2450);
 
         WifiScanner.ScanSettings requestSettings1 = createRequest(channelsToSpec(2400, 2450), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
@@ -1572,7 +1586,8 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings =
                 createRequest(WifiScanner.WIFI_BAND_BOTH_WITH_DFS,
                               0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults expectedResults = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults expectedResults =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH_WITH_DFS, 2400, 5150, 5175);
         doSuccessfulSingleScan(requestSettings,
                                computeSingleScanNativeSettings(requestSettings),
                                expectedResults);
@@ -1604,7 +1619,7 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH, 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         doSuccessfulSingleScan(requestSettings, computeSingleScanNativeSettings(requestSettings),
-                ScanResults.create(0, new int[0]));
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, new int[0]));
 
         Handler handler = mock(Handler.class);
         BidirectionalAsyncChannel controlChannel = connectChannel(handler);
@@ -1649,7 +1664,8 @@ public class WifiScanningServiceTest {
     public void retrieveMostRecentFullSingleScanResults() throws Exception {
         WifiScanner.ScanSettings requestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH, 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults expectedResults = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults expectedResults = ScanResults.create(
+                0, WifiScanner.WIFI_BAND_BOTH, 2400, 5150, 5175);
         doSuccessfulSingleScan(requestSettings,
                                computeSingleScanNativeSettings(requestSettings),
                                expectedResults);
@@ -1669,7 +1685,7 @@ public class WifiScanningServiceTest {
 
         // now update with a new scan that only has one result
         int secondScanRequestId = 35;
-        ScanResults expectedSingleResult = ScanResults.create(0, true, 5150);
+        ScanResults expectedSingleResult = ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 5150);
         sendSingleScanRequest(controlChannel, secondScanRequestId, requestSettings, null);
 
         mLooper.dispatchAll();
@@ -1705,7 +1721,8 @@ public class WifiScanningServiceTest {
     public void doesNotRetrieveMostRecentPartialSingleScanResults() throws Exception {
         WifiScanner.ScanSettings fullRequestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH, 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults expectedFullResults = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults expectedFullResults =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 2400, 5150, 5175);
         doSuccessfulSingleScan(fullRequestSettings,
                 computeSingleScanNativeSettings(fullRequestSettings),
                 expectedFullResults);
@@ -1727,7 +1744,8 @@ public class WifiScanningServiceTest {
         int secondScanRequestId = 35;
         WifiScanner.ScanSettings partialRequestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH,
                 0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults expectedPartialResults = ScanResults.create(0, false, 5150);
+        ScanResults expectedPartialResults =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_5_GHZ, 5150);
         sendSingleScanRequest(controlChannel, secondScanRequestId, partialRequestSettings, null);
 
         mLooper.dispatchAll();
@@ -1764,7 +1782,8 @@ public class WifiScanningServiceTest {
     public void doesNotRetrieveStaleScanResultsFromLastFullSingleScan() throws Exception {
         WifiScanner.ScanSettings requestSettings = createRequest(WifiScanner.WIFI_BAND_BOTH, 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults scanResults = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults scanResults =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 2400, 5150, 5175);
 
         // Out of the 3 scan results, modify the timestamp of 2 of them to be within the expiration
         // age and 1 out of it.
@@ -1805,7 +1824,8 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings =
                 createRequest(WifiScanner.WIFI_BAND_BOTH_WITH_DFS,
                               0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults expectedResults = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults expectedResults = ScanResults.create(
+                0, WifiScanner.WIFI_BAND_BOTH_WITH_DFS, 2400, 5150, 5175);
         doSuccessfulSingleScan(requestSettings,
                                computeSingleScanNativeSettings(requestSettings),
                                expectedResults);
@@ -1940,21 +1960,24 @@ public class WifiScanningServiceTest {
         WifiScanner.ScanSettings requestSettings1 = createRequest(channelsToSpec(2400), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId1 = 12;
-        ScanResults results1 = ScanResults.create(0, 2400);
+        ScanResults results1 = ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400);
 
         WifiScanner.ScanSettings requestSettings2 = createRequest(channelsToSpec(2450, 5175), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId2 = 13;
-        ScanResults results2 = ScanResults.create(0, 2450, 5175, 2450);
+        ScanResults results2 =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2450, 5175, 2450);
 
         WifiScanner.ScanSettings requestSettings3 = createRequest(channelsToSpec(5150), 0,
                 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
         int requestId3 = 15;
-        ScanResults results3 = ScanResults.create(0, 5150, 5150, 5150, 5150);
+        ScanResults results3 =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 5150, 5150, 5150, 5150);
 
         WifiNative.ScanSettings nativeSettings2and3 = createSingleScanNativeSettingsForChannels(
                 WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN, channelsToSpec(2450, 5175, 5150));
-        ScanResults results2and3 = ScanResults.merge(results2, results3);
+        ScanResults results2and3 =
+                ScanResults.merge(WifiScanner.WIFI_BAND_UNSPECIFIED, results2, results3);
 
         int listenerRequestId = 13;
 
@@ -2148,10 +2171,6 @@ public class WifiScanningServiceTest {
         return ScanResults.create(0, 2400, 5150, 5175);
     }
 
-    private ScanResults createScanResultsForPnoWithNoIE() {
-        return ScanResults.createWithNoIE(0, 2400, 5150, 5175);
-    }
-
     private WifiNative.PnoEventHandler verifyHwPno(InOrder order,
             WifiNative.PnoSettings expected) {
         ArgumentCaptor<WifiNative.PnoSettings> pnoSettingsCaptor =
@@ -2319,7 +2338,7 @@ public class WifiScanningServiceTest {
 
         when(mWifiScannerImpl.startSingleScan(any(WifiNative.ScanSettings.class),
                         any(WifiNative.ScanEventHandler.class))).thenReturn(true);
-        ScanResults results = ScanResults.create(0, 2400);
+        ScanResults results = ScanResults.create(0, WifiScanner.WIFI_BAND_BOTH, 2400);
         when(mWifiScannerImpl.getLatestSingleScanResults())
                 .thenReturn(results.getRawScanData());
 
@@ -2403,7 +2422,8 @@ public class WifiScanningServiceTest {
         WorkSource workSource = new WorkSource(2292);
         WifiScanner.ScanSettings requestSettings = createRequest(channelsToSpec(2400, 5150, 5175),
                 0, 0, 20, WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN);
-        ScanResults results = ScanResults.create(0, true, 2400, 5150, 5175);
+        ScanResults results =
+                ScanResults.create(0, WifiScanner.WIFI_BAND_UNSPECIFIED, 2400, 5150, 5175);
 
         when(mWifiScannerImpl.startSingleScan(any(WifiNative.ScanSettings.class),
                 any(WifiNative.ScanEventHandler.class))).thenReturn(true);
@@ -2488,10 +2508,13 @@ public class WifiScanningServiceTest {
         controlChannel.sendMessage(Message.obtain(null, WifiScanner.CMD_STOP_PNO_SCAN));
         mLooper.dispatchAll();
 
+        controlChannel.sendMessage(Message.obtain(null, WifiScanner.CMD_REGISTER_SCAN_LISTENER));
+        mLooper.dispatchAll();
+
         // All 4 of the above messages should have been rejected because the app doesn't have
         // the required permissions.
         ArgumentCaptor<Message> messageCaptor = ArgumentCaptor.forClass(Message.class);
-        verify(handler, times(4)).handleMessage(messageCaptor.capture());
+        verify(handler, times(5)).handleMessage(messageCaptor.capture());
         assertFailedResponse(0, WifiScanner.REASON_NOT_AUTHORIZED,
                 "Not authorized", messageCaptor.getAllValues().get(0));
         assertFailedResponse(0, WifiScanner.REASON_NOT_AUTHORIZED,
@@ -2500,6 +2523,8 @@ public class WifiScanningServiceTest {
                 "Not authorized", messageCaptor.getAllValues().get(2));
         assertFailedResponse(0, WifiScanner.REASON_NOT_AUTHORIZED,
                 "Not authorized", messageCaptor.getAllValues().get(3));
+        assertFailedResponse(0, WifiScanner.REASON_NOT_AUTHORIZED,
+                "Not authorized", messageCaptor.getAllValues().get(4));
 
         // Ensure we didn't create scanner instance.
         verify(mWifiScannerImplFactory, never()).create(any(), any(), any());
@@ -2507,15 +2532,17 @@ public class WifiScanningServiceTest {
     }
 
     /**
-     * Verifies that clients without NETWORK_STACK permission cannot issue any messages when
-     * location is turned off.
+     * Verifies that clients without NETWORK_STACK permission cannot issue any messages when they
+     * don't have the necessary location permissions & location is enabled.
      */
     @Test
-    public void rejectAllMessagesFromNonPrivilegedAppsWhenLocationIsTurnedOff() throws Exception {
+    public void rejectAllMessagesFromNonPrivilegedAppsWithoutLocationPermission() throws Exception {
         // Start service & initialize it.
         startServiceAndLoadDriver();
-        // Location turned off.
-        when(mLocationManager.isLocationEnabled()).thenReturn(false);
+        // Location permission or mode check fail.
+        doThrow(new SecurityException()).when(mWifiPermissionsUtil)
+                .enforceCanAccessScanResultsForWifiScanner(any(), eq(Binder.getCallingUid()),
+                        eq(false));
 
         Handler handler = mock(Handler.class);
         BidirectionalAsyncChannel controlChannel = connectChannel(handler);
@@ -2553,18 +2580,62 @@ public class WifiScanningServiceTest {
     }
 
     /**
-     * Verifies that clients with NETWORK_STACK permission can issue any messages even when
-     * location is turned off.
+     * Verifies that we ignore location settings when the single scan request settings sets
+     * {@link WifiScanner.ScanSettings#ignoreLocationSettings}
      */
     @Test
-    public void allowMessagesFromPrivilegedAppsWhenLocationIsTurnedOff() throws Exception {
-        // Location turned off.
-        when(mLocationManager.isLocationEnabled()).thenReturn(false);
-        // Client does have NETWORK_STACK permission.
-        doNothing().when(mContext).enforcePermission(
+    public void verifyIgnoreLocationSettingsFromNonPrivilegedAppsForSingleScan() throws Exception {
+        // Start service & initialize it.
+        startServiceAndLoadDriver();
+
+        Handler handler = mock(Handler.class);
+        BidirectionalAsyncChannel controlChannel = connectChannel(handler);
+
+        // Client doesn't have NETWORK_STACK permission.
+        doThrow(new SecurityException()).when(mContext).enforcePermission(
                 eq(Manifest.permission.NETWORK_STACK), anyInt(), eq(Binder.getCallingUid()), any());
 
-        sendSingleScanAllChannelsRequest();
-        sendBackgroundScanBandRequest();
+        Bundle bundle = new Bundle();
+        bundle.putString(WifiScanner.REQUEST_PACKAGE_NAME_KEY, TEST_PACKAGE_NAME);
+        WifiScanner.ScanSettings scanSettings = new WifiScanner.ScanSettings();
+
+        // send single scan request (ignoreLocationSettings == true).
+        scanSettings.ignoreLocationSettings = true;
+        bundle.putParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY, scanSettings);
+        Message message = Message.obtain();
+        message.what = WifiScanner.CMD_START_SINGLE_SCAN;
+        message.obj = bundle;
+        controlChannel.sendMessage(message);
+        mLooper.dispatchAll();
+
+        // Verify the permission check params (ignoreLocationSettings == true).
+        verify(mWifiPermissionsUtil).enforceCanAccessScanResultsForWifiScanner(
+                eq(TEST_PACKAGE_NAME), eq(Binder.getCallingUid()), eq(true));
+
+        // send single scan request (ignoreLocationSettings == false).
+        scanSettings.ignoreLocationSettings = false;
+        bundle.putParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY, scanSettings);
+        message = Message.obtain();
+        message.what = WifiScanner.CMD_START_SINGLE_SCAN;
+        message.obj = bundle;
+        controlChannel.sendMessage(message);
+        mLooper.dispatchAll();
+
+        // Verify the permission check params (ignoreLocationSettings == true).
+        verify(mWifiPermissionsUtil).enforceCanAccessScanResultsForWifiScanner(
+                eq(TEST_PACKAGE_NAME), eq(Binder.getCallingUid()), eq(false));
+
+        // send background scan request (ignoreLocationSettings == true).
+        scanSettings.ignoreLocationSettings = true;
+        bundle.putParcelable(WifiScanner.SCAN_PARAMS_SCAN_SETTINGS_KEY, scanSettings);
+        message = Message.obtain();
+        message.what = WifiScanner.CMD_START_BACKGROUND_SCAN;
+        controlChannel.sendMessage(message);
+        mLooper.dispatchAll();
+
+        // Verify the permission check params (ignoreLocationSettings == false), the field
+        // is ignored for any requests other than single scan.
+        verify(mWifiPermissionsUtil).enforceCanAccessScanResultsForWifiScanner(
+                eq(TEST_PACKAGE_NAME), eq(Binder.getCallingUid()), eq(false));
     }
 }

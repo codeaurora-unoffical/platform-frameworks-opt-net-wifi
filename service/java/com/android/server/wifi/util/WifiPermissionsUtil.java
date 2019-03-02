@@ -21,13 +21,17 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
+import android.location.LocationManager;
+import android.os.Binder;
+import android.os.Build;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.os.UserManager;
-import android.provider.Settings;
+import android.util.Slog;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.server.wifi.WifiInjector;
 import com.android.server.wifi.WifiLog;
-import com.android.server.wifi.WifiSettingsStore;
 
 import java.util.List;
 
@@ -41,17 +45,17 @@ public class WifiPermissionsUtil {
     private final Context mContext;
     private final AppOpsManager mAppOps;
     private final UserManager mUserManager;
-    private final WifiSettingsStore mSettingsStore;
+    private final Object mLock = new Object();
+    @GuardedBy("mLock")
+    private LocationManager mLocationManager;
     private WifiLog mLog;
 
     public WifiPermissionsUtil(WifiPermissionsWrapper wifiPermissionsWrapper,
-            Context context, WifiSettingsStore settingsStore, UserManager userManager,
-            WifiInjector wifiInjector) {
+            Context context, UserManager userManager, WifiInjector wifiInjector) {
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
         mContext = context;
         mUserManager = userManager;
         mAppOps = (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE);
-        mSettingsStore = settingsStore;
         mLog = wifiInjector.makeLog(TAG);
     }
 
@@ -104,31 +108,61 @@ public class WifiPermissionsUtil {
     }
 
     /**
-     * Check and enforce Coarse Location permission.
+     * Check and enforce Coarse or Fine Location permission (depending on target SDK).
      *
      * @param pkgName PackageName of the application requesting access
      * @param uid The uid of the package
      */
     public void enforceLocationPermission(String pkgName, int uid) {
-        if (!checkCallersLocationPermission(pkgName, uid)) {
-            throw new SecurityException("UID " + uid + " does not have Coarse Location permission");
+        if (!checkCallersLocationPermission(pkgName, uid, /* coarseForTargetSdkLessThanQ */ true)) {
+            throw new SecurityException(
+                    "UID " + uid + " does not have Coarse/Fine Location permission");
         }
     }
 
+    /**
+     * Checks whether than the target SDK of the package is less than the specified version code.
+     */
+    public boolean isTargetSdkLessThan(String packageName, int versionCode) {
+        long ident = Binder.clearCallingIdentity();
+        try {
+            if (mContext.getPackageManager().getApplicationInfo(packageName, 0).targetSdkVersion
+                    < versionCode) {
+                return true;
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            // In case of exception, assume unknown app (more strict checking)
+            // Note: This case will never happen since checkPackage is
+            // called to verify validity before checking App's version.
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+        return false;
+    }
 
     /**
-     * Checks that calling process has android.Manifest.permission.ACCESS_COARSE_LOCATION
+     * Checks that calling process has android.Manifest.permission.ACCESS_FINE_LOCATION or
+     * android.Manifest.permission.ACCESS_FINE_LOCATION (depending on config/targetSDK leve)
      * and a corresponding app op is allowed for this package and uid.
      *
      * @param pkgName PackageName of the application requesting access
      * @param uid The uid of the package
+     * @param coarseForTargetSdkLessThanQ If true and the targetSDK < Q then will check for COARSE
+     *                                    else (false or targetSDK >= Q) then will check for FINE
      */
-    public boolean checkCallersLocationPermission(String pkgName, int uid) {
-        // Having FINE permission implies having COARSE permission (but not the reverse)
-        if ((mWifiPermissionsWrapper.getUidPermission(
-                Manifest.permission.ACCESS_COARSE_LOCATION, uid)
-                == PackageManager.PERMISSION_GRANTED)
-                && checkAppOpAllowed(AppOpsManager.OP_COARSE_LOCATION, pkgName, uid)) {
+    public boolean checkCallersLocationPermission(String pkgName, int uid,
+            boolean coarseForTargetSdkLessThanQ) {
+        String permissionType = Manifest.permission.ACCESS_FINE_LOCATION;
+        int appOps = AppOpsManager.OP_FINE_LOCATION;
+
+        if (coarseForTargetSdkLessThanQ && isTargetSdkLessThan(pkgName, Build.VERSION_CODES.Q)) {
+            // Having FINE permission implies having COARSE permission (but not the reverse)
+            permissionType = Manifest.permission.ACCESS_COARSE_LOCATION;
+            appOps = AppOpsManager.OP_COARSE_LOCATION;
+        }
+
+        if ((mWifiPermissionsWrapper.getUidPermission(permissionType, uid)
+                == PackageManager.PERMISSION_GRANTED) && checkAppOpAllowed(appOps, pkgName, uid)) {
             return true;
         }
         return false;
@@ -166,16 +200,28 @@ public class WifiPermissionsUtil {
     }
 
     /**
+     * Checks that calling process has android.Manifest.permission.LOCATION_HARDWARE.
+     *
+     * @param uid The uid of the package
+     */
+    private boolean checkCallersHardwareLocationPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(Manifest.permission.LOCATION_HARDWARE, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
      * API to determine if the caller has permissions to get scan results. Throws SecurityException
      * if the caller has no permission.
      * @param pkgName package name of the application requesting access
      * @param uid The uid of the package
      */
     public void enforceCanAccessScanResults(String pkgName, int uid) throws SecurityException {
-        mAppOps.checkPackage(uid, pkgName);
+        checkPackage(uid, pkgName);
 
-        // Apps with NETWORK_SETTINGS & NETWORK_SETUP_WIZARD are granted a bypass.
-        if (checkNetworkSettingsPermission(uid) || checkNetworkSetupWizardPermission(uid)) {
+        // Apps with NETWORK_SETTINGS, NETWORK_SETUP_WIZARD & NETWORK_MANAGED_PROVISIONING
+        // are granted a bypass.
+        if (checkNetworkSettingsPermission(uid) || checkNetworkSetupWizardPermission(uid)
+                || checkNetworkManagedProvisioningPermission(uid)) {
             return;
         }
 
@@ -187,9 +233,10 @@ public class WifiPermissionsUtil {
 
         // Check if the calling Uid has CAN_READ_PEER_MAC_ADDRESS permission.
         boolean canCallingUidAccessLocation = checkCallerHasPeersMacAddressPermission(uid);
-        // LocationAccess by App: caller must have
-        // Coarse Location permission to have access to location information.
-        boolean canAppPackageUseLocation = checkCallersLocationPermission(pkgName, uid);
+        // LocationAccess by App: caller must have Coarse/Fine Location permission to have access to
+        // location information.
+        boolean canAppPackageUseLocation = checkCallersLocationPermission(pkgName,
+                uid, /* coarseForTargetSdkLessThanQ */ true);
 
         // If neither caller or app has location access, there is no need to check
         // any other permissions. Deny access to scan results.
@@ -205,6 +252,96 @@ public class WifiPermissionsUtil {
         if (!isCurrentProfile(uid) && !checkInteractAcrossUsersFull(uid)) {
             throw new SecurityException("UID " + uid + " profile not permitted");
         }
+    }
+
+    /**
+     * API to determine if the caller has permissions to get scan results. Throws SecurityException
+     * if the caller has no permission.
+     * @param pkgName package name of the application requesting access
+     * @param uid The uid of the package
+     * @param ignoreLocationSettings Whether this request can bypass location settings.
+     *
+     * Note: This is to be used for checking permissions in the internal WifiScanner API surface
+     * for requests coming from system apps.
+     */
+    public void enforceCanAccessScanResultsForWifiScanner(
+            String pkgName, int uid, boolean ignoreLocationSettings)
+            throws SecurityException {
+        checkPackage(uid, pkgName);
+
+        // Location mode must be enabled
+        if (!isLocationModeEnabled()) {
+            if (ignoreLocationSettings) {
+                mLog.w("Request from " + pkgName + " violated location settings");
+            } else {
+                // Location mode is disabled, scan results cannot be returned
+                throw new SecurityException("Location mode is disabled for the device");
+            }
+        }
+        // LocationAccess by App: caller must have fine & hardware Location permission to have
+        // access to location information.
+        if (!checkCallersFineLocationPermission(pkgName, uid)
+                || !checkCallersHardwareLocationPermission(uid)) {
+            throw new SecurityException("UID " + uid + " has no location permission");
+        }
+        // Check if Wifi Scan request is an operation allowed for this App.
+        if (!isScanAllowedbyApps(pkgName, uid)) {
+            throw new SecurityException("UID " + uid + " has no wifi scan permission");
+        }
+    }
+
+    /**
+     *
+     * Checks that calling process has android.Manifest.permission.ACCESS_FINE_LOCATION
+     * and a corresponding app op is allowed for this package and uid
+     *
+     * @param pkgName package name of the application requesting access
+     * @param uid The uid of the package
+     *
+     * @return true if caller has permission, false otherwise
+     */
+    public boolean checkCanAccessWifiDirect(String pkgName, int uid) {
+        try {
+            checkPackage(uid, pkgName);
+        } catch (SecurityException se) {
+            Slog.e(TAG, "Package check exception - " + se);
+            return false;
+        }
+
+        // Apps with NETWORK_SETTINGS are granted a bypass.
+        if (checkNetworkSettingsPermission(uid)) {
+            return true;
+        }
+
+        // Location mode must be enabled
+        if (!isLocationModeEnabled()) {
+            Slog.e(TAG, "Location mode is disabled for the device");
+            return false;
+        }
+
+        // LocationAccess by App: caller must have Fine Location permission to have access to
+        // location information.
+        if (!checkCallersLocationPermission(pkgName, uid,
+                /* coarseForTargetSdkLessThanQ */ false)) {
+            Slog.e(TAG, "UID " + uid + " has no location permission");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * API to check to validate if a package name belongs to a UID. Throws SecurityException
+     * if pkgName does not belongs to a UID
+     *
+     * @param pkgName package name of the application requesting access
+     * @param uid The uid of the package
+     *
+     */
+    public void checkPackage(int uid, String pkgName) throws SecurityException {
+        if (pkgName == null) {
+            throw new SecurityException("Checking UID " + uid + " but Package Name is Null");
+        }
+        mAppOps.checkPackage(uid, pkgName);
     }
 
     /**
@@ -253,30 +390,29 @@ public class WifiPermissionsUtil {
         return false;
     }
 
-    /**
-     * Returns true if the App version is older than minVersion.
-     */
-    public boolean isLegacyVersion(String pkgName, int minVersion) {
-        try {
-            if (mContext.getPackageManager().getApplicationInfo(pkgName, 0)
-                    .targetSdkVersion < minVersion) {
-                return true;
-            }
-        } catch (PackageManager.NameNotFoundException e) {
-            // In case of exception, assume known app (more strict checking)
-            // Note: This case will never happen since checkPackage is
-            // called to verify valididity before checking App's version.
-        }
-        return false;
-    }
-
     private boolean checkAppOpAllowed(int op, String pkgName, int uid) {
         return mAppOps.noteOp(op, uid, pkgName) == AppOpsManager.MODE_ALLOWED;
     }
 
-    private boolean isLocationModeEnabled() {
-        return (mSettingsStore.getLocationModeSetting(mContext)
-                 != Settings.Secure.LOCATION_MODE_OFF);
+
+    private boolean retrieveLocationManagerIfNecessary() {
+        // This is going to be accessed by multiple threads.
+        synchronized (mLock) {
+            if (mLocationManager == null) {
+                mLocationManager =
+                        (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
+            }
+        }
+        return mLocationManager != null;
+    }
+
+    /**
+     * Retrieves a handle to LocationManager (if not already done) and check if location is enabled.
+     */
+    public boolean isLocationModeEnabled() {
+        if (!retrieveLocationManagerIfNecessary()) return false;
+        return mLocationManager.isLocationEnabledForUser(UserHandle.of(
+                mWifiPermissionsWrapper.getCurrentUser()));
     }
 
     /**
@@ -303,6 +439,15 @@ public class WifiPermissionsUtil {
     public boolean checkNetworkStackPermission(int uid) {
         return mWifiPermissionsWrapper.getUidPermission(
                 android.Manifest.permission.NETWORK_STACK, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Returns true if the |uid| holds NETWORK_MANAGED_PROVISIONING permission.
+     */
+    public boolean checkNetworkManagedProvisioningPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(
+                android.Manifest.permission.NETWORK_MANAGED_PROVISIONING, uid)
                 == PackageManager.PERMISSION_GRANTED;
     }
 }
