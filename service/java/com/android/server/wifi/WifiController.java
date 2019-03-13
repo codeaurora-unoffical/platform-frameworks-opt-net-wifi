@@ -757,7 +757,7 @@ public class WifiController extends StateMachine {
                     break;
                 case CMD_SET_AP:
                     log("QcStaDisablingState: CMD_SET_AP defered");
-                    deferMessage(obtainMessage(msg.what, msg.arg1, 1, msg.obj));
+                    deferMessage(msg);
                     break;
                 case CMD_AIRPLANE_TOGGLED:
                     log("QcStaDisablingState: CMD_AIRPLANE_TOGGLED defered");
