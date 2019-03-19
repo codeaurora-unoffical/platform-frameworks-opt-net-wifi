@@ -16,8 +16,7 @@
 
 package com.android.server.wifi;
 
-import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus
-        .DISABLED_NO_INTERNET_TEMPORARY;
+import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLED_NO_INTERNET_TEMPORARY;
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE;
 
 import static com.android.server.wifi.ClientModeImpl.CMD_PRE_DHCP_ACTION;
@@ -220,11 +219,10 @@ public class ClientModeImplTest {
     }
 
     private Context getContext() throws Exception {
-        PackageManager pkgMgr = mock(PackageManager.class);
-        when(pkgMgr.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)).thenReturn(true);
+        when(mPackageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)).thenReturn(true);
 
         Context context = mock(Context.class);
-        when(context.getPackageManager()).thenReturn(pkgMgr);
+        when(context.getPackageManager()).thenReturn(mPackageManager);
 
         MockContentResolver mockContentResolver = new MockContentResolver();
         mockContentResolver.addProvider(Settings.AUTHORITY,
@@ -377,6 +375,7 @@ public class ClientModeImplTest {
     @Mock UntrustedWifiNetworkFactory mUntrustedWifiNetworkFactory;
     @Mock WifiNetworkSuggestionsManager mWifiNetworkSuggestionsManager;
     @Mock LinkProbeManager mLinkProbeManager;
+    @Mock PackageManager mPackageManager;
 
     final ArgumentCaptor<WifiNative.InterfaceCallback> mInterfaceCallbackCaptor =
             ArgumentCaptor.forClass(WifiNative.InterfaceCallback.class);
@@ -429,6 +428,7 @@ public class ClientModeImplTest {
                 .thenReturn(mUntrustedWifiNetworkFactory);
         when(mWifiInjector.getWifiNetworkSuggestionsManager())
                 .thenReturn(mWifiNetworkSuggestionsManager);
+        when(mWifiInjector.getWifiScoreCard()).thenReturn(mWifiScoreCard);
         when(mWifiNetworkFactory.getSpecificNetworkRequestUidAndPackageName(any()))
                 .thenReturn(Pair.create(Process.INVALID_UID, ""));
         when(mWifiNative.initialize()).thenReturn(true);
@@ -516,7 +516,7 @@ public class ClientModeImplTest {
     private void initializeCmi() throws Exception {
         mCmi = new ClientModeImpl(mContext, mFrameworkFacade, mLooper.getLooper(),
                 mUserManager, mWifiInjector, mBackupManagerProxy, mCountryCode, mWifiNative,
-                mWifiScoreCard, mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
+                mWrongPasswordNotifier, mSarManager, mWifiTrafficPoller,
                 mLinkProbeManager);
         mWifiCoreThread = getCmiHandlerThread(mCmi);
 
@@ -987,11 +987,68 @@ public class ClientModeImplTest {
         assertEquals(sBSSID, wifiInfo.getBSSID());
         assertEquals(sFreq, wifiInfo.getFrequency());
         assertTrue(sWifiSsid.equals(wifiInfo.getWifiSsid()));
+        assertNull(wifiInfo.getProviderFriendlyName());
         // Ensure the connection stats for the network is updated.
         verify(mWifiConfigManager).updateNetworkAfterConnect(FRAMEWORK_NETWORK_ID);
 
         verify(mWifiStateTracker).updateState(eq(WifiStateTracker.CONNECTED));
         assertEquals("ConnectedState", getCurrentState().getName());
+    }
+
+    /**
+     * Tests the Passpoint information is set in WifiInfo for Passpoint AP connection.
+     */
+    @Test
+    public void connectPasspointAp() throws Exception {
+        loadComponentsInStaMode();
+        WifiConfiguration config = spy(WifiConfigurationTestUtil.createPasspointNetwork());
+        config.SSID = sWifiSsid.toString();
+        config.BSSID = sBSSID;
+        config.networkId = FRAMEWORK_NETWORK_ID;
+        when(config.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
+        config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
+        setupAndStartConnectSequence(config);
+        validateSuccessfulConnectSequence(config);
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(FRAMEWORK_NETWORK_ID, sWifiSsid, sBSSID,
+                        SupplicantState.ASSOCIATING));
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mCmi.getWifiInfo();
+        assertNotNull(wifiInfo);
+        assertEquals(WifiConfigurationTestUtil.TEST_FQDN, wifiInfo.getFqdn());
+        assertEquals(WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME,
+                wifiInfo.getProviderFriendlyName());
+    }
+
+    /**
+     * Tests the OSU information is set in WifiInfo for OSU AP connection.
+     */
+    @Test
+    public void connectOsuAp() throws Exception {
+        loadComponentsInStaMode();
+        WifiConfiguration osuConfig = spy(WifiConfigurationTestUtil.createEphemeralNetwork());
+        osuConfig.SSID = sWifiSsid.toString();
+        osuConfig.BSSID = sBSSID;
+        osuConfig.osu = true;
+        osuConfig.networkId = FRAMEWORK_NETWORK_ID;
+        osuConfig.providerFriendlyName = WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME;
+        when(osuConfig.getOrCreateRandomizedMacAddress()).thenReturn(TEST_LOCAL_MAC_ADDRESS);
+        osuConfig.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_PERSISTENT;
+        setupAndStartConnectSequence(osuConfig);
+        validateSuccessfulConnectSequence(osuConfig);
+
+        mCmi.sendMessage(WifiMonitor.SUPPLICANT_STATE_CHANGE_EVENT, 0, 0,
+                new StateChangeResult(FRAMEWORK_NETWORK_ID, sWifiSsid, sBSSID,
+                        SupplicantState.ASSOCIATING));
+        mLooper.dispatchAll();
+
+        WifiInfo wifiInfo = mCmi.getWifiInfo();
+        assertNotNull(wifiInfo);
+        assertTrue(wifiInfo.isOsuAp());
+        assertEquals(WifiConfigurationTestUtil.TEST_PROVIDER_FRIENDLY_NAME,
+                wifiInfo.getProviderFriendlyName());
     }
 
     /**
@@ -1492,15 +1549,16 @@ public class ClientModeImplTest {
         verify(mPropertyService, never()).set(anyString(), anyString());
     }
 
-    private long testGetSupportedFeaturesCase(long supportedFeatures, boolean rttConfigured) {
+    private long testGetSupportedFeaturesCase(long supportedFeatures, boolean rttDisabled) {
         AsyncChannel channel = mock(AsyncChannel.class);
         Message reply = Message.obtain();
         reply.obj = Long.valueOf(supportedFeatures);
         reset(mPropertyService);  // Ignore calls made in setUp()
         when(channel.sendMessageSynchronously(ClientModeImpl.CMD_GET_SUPPORTED_FEATURES))
                 .thenReturn(reply);
-        when(mPropertyService.getBoolean("config.disable_rtt", false))
-                .thenReturn(rttConfigured);
+
+        when(mPackageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_RTT)).thenReturn(
+                !rttDisabled);
         return mCmi.syncGetSupportedFeatures(channel);
     }
 

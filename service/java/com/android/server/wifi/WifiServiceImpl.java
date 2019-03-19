@@ -938,7 +938,9 @@ public class WifiServiceImpl extends BaseWifiService {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CHANGE_WIFI_STATE,
                 "WifiService");
         // only privileged apps like settings, setup wizard, etc can toggle wifi.
-        if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())) {
+        if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())
+                // Default car dock app is allowed to turn on wifi (but, cannot turn off)
+                && !(isDefaultCarDock(packageName) && enable)) {
             mLog.info("setWifiEnabled not allowed for uid=%")
                     .c(Binder.getCallingUid()).flush();
             return false;
@@ -1107,10 +1109,16 @@ public class WifiServiceImpl extends BaseWifiService {
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
         synchronized (mLocalOnlyHotspotRequests) {
+            // If a tethering request comes in while we have an existing tethering session, return
+            // error.
+            if (mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_TETHERED)) {
+                mLog.err("Tethering is already active.").flush();
+                return false;
+            }
             // If a tethering request comes in while we have LOHS running (or requested), call stop
             // for softap mode and restart softap with the tethering config.
             if (!isConcurrentLohsAndTetheringSupported() && !mLocalOnlyHotspotRequests.isEmpty()) {
-                stopSoftApInternal();
+                stopSoftApInternal(WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
             }
             return startSoftApInternal(wifiConfig, WifiManager.IFACE_IP_MODE_TETHERED);
         }
@@ -1160,11 +1168,12 @@ public class WifiServiceImpl extends BaseWifiService {
             // If a tethering request comes in while we have LOHS running (or requested), call stop
             // for softap mode and restart softap with the tethering config.
             if (!mLocalOnlyHotspotRequests.isEmpty()) {
+                // This shouldn't affect devices that support concurrent LOHS and tethering
                 mLog.trace("Call to stop Tethering while LOHS is active,"
                         + " Registered LOHS callers will be updated when softap stopped.").flush();
             }
 
-            return stopSoftApInternal();
+            return stopSoftApInternal(WifiManager.IFACE_IP_MODE_TETHERED);
         }
     }
 
@@ -1172,14 +1181,14 @@ public class WifiServiceImpl extends BaseWifiService {
      * Internal method to stop softap mode.  Callers of this method should have already checked
      * proper permissions beyond the NetworkStack permission.
      */
-    private boolean stopSoftApInternal() {
+    private boolean stopSoftApInternal(int mode) {
         mLog.trace("stopSoftApInternal uid=%").c(Binder.getCallingUid()).flush();
 
         if (mWifiApConfigStore.getDualSapStatus())
             startDualSapMode(null, false);
 
         mSoftApExtendingWifi = false;
-        mWifiController.sendMessage(CMD_SET_AP, 0, 0);
+        mWifiController.sendMessage(CMD_SET_AP, 0, mode);
         return true;
     }
 
@@ -1393,10 +1402,11 @@ public class WifiServiceImpl extends BaseWifiService {
             synchronized (mLocalOnlyHotspotRequests) {
                 // if we are currently in hotspot mode, then trigger onStopped for registered
                 // requestors, otherwise something odd happened and we should clear state
-                if (mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_LOCAL_ONLY)) {
+                if (mIfaceIpModes.getOrDefault(ifaceName, WifiManager.IFACE_IP_MODE_UNSPECIFIED)
+                        == WifiManager.IFACE_IP_MODE_LOCAL_ONLY) {
                     // holding the required lock: send message to requestors and clear the list
                     sendHotspotStoppedMessageToAllLOHSRequestInfoEntriesLocked();
-                } else {
+                } else if (!isConcurrentLohsAndTetheringSupported()) {
                     // LOHS not active: report an error (still holding the required lock)
                     sendHotspotFailedMessageToAllLOHSRequestInfoEntriesLocked(ERROR_GENERIC);
                 }
@@ -1535,6 +1545,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
         synchronized (mLocalOnlyHotspotRequests) {
             // check if we are currently tethering
+            // TODO(b/123227116): handle all interface combinations just by changing the HAL.
             if (!isConcurrentLohsAndTetheringSupported()
                     && mIfaceIpModes.contains(WifiManager.IFACE_IP_MODE_TETHERED)) {
                 // Tethering is enabled, cannot start LocalOnlyHotspot
@@ -1627,7 +1638,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 // if that was the last caller, then call stopSoftAp as WifiService
                 long identity = Binder.clearCallingIdentity();
                 try {
-                    stopSoftApInternal();
+                    stopSoftApInternal(WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
                 } finally {
                     Binder.restoreCallingIdentity(identity);
                 }
@@ -1918,7 +1929,8 @@ public class WifiServiceImpl extends BaseWifiService {
     public ParceledListSlice<WifiConfiguration> getConfiguredNetworks(String packageName) {
         enforceAccessPermission();
         int callingUid = Binder.getCallingUid();
-        if (callingUid != Process.SHELL_UID) { // bypass shell: can get varioud pkg name
+        // bypass shell: can get varioud pkg name
+        if (callingUid != Process.SHELL_UID && callingUid != Process.ROOT_UID) {
             long ident = Binder.clearCallingIdentity();
             try {
                 mWifiPermissionsUtil.enforceCanAccessScanResults(packageName, callingUid);
@@ -2404,10 +2416,11 @@ public class WifiServiceImpl extends BaseWifiService {
      */
     @Override
     public boolean removePasspointConfiguration(String fqdn, String packageName) {
-        if ((mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
-                != PERMISSION_GRANTED)
-                && (mContext.checkSelfPermission(android.Manifest.permission.NETWORK_SETUP_WIZARD)
-                != PERMISSION_GRANTED)) {
+        if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.NETWORK_SETTINGS)
+                != PERMISSION_GRANTED) {
+            if (mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)) {
+                return false;
+            }
             throw new SecurityException(TAG + ": Permission denied");
         }
         mLog.info("removePasspointConfiguration uid=%").c(Binder.getCallingUid()).flush();
@@ -2777,6 +2790,7 @@ public class WifiServiceImpl extends BaseWifiService {
         IntentFilter intentFilter = new IntentFilter();
         intentFilter.addAction(Intent.ACTION_USER_PRESENT);
         intentFilter.addAction(Intent.ACTION_USER_REMOVED);
+        intentFilter.addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION);
         intentFilter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
         intentFilter.addAction(TelephonyIntents.ACTION_EMERGENCY_CALLBACK_MODE_CHANGED);
         intentFilter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
@@ -3001,9 +3015,8 @@ public class WifiServiceImpl extends BaseWifiService {
         }
 
         if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_TETHERING)) {
-            // Turn mobile hotspot off - will also clear any registered LOHS requests when it is
-            // shut down
-            stopSoftApInternal();
+            // Turn mobile hotspot off
+            stopSoftApInternal(WifiManager.IFACE_IP_MODE_UNSPECIFIED);
         }
 
         if (!mUserManager.hasUserRestriction(UserManager.DISALLOW_CONFIG_WIFI)) {

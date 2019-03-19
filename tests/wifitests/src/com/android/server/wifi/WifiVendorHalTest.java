@@ -86,6 +86,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiScanner;
 import android.net.wifi.WifiSsid;
+import android.os.Handler;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.test.TestLooper;
@@ -305,6 +306,7 @@ public class WifiVendorHalTest {
                 when(mHalDeviceManager.isReady()).thenReturn(true);
                 when(mHalDeviceManager.isStarted()).thenReturn(true);
                 mHalDeviceManagerStatusCallbacks.onStatusChanged();
+                mLooper.dispatchAll();
                 return true;
             }
         }).when(mHalDeviceManager).start();
@@ -314,6 +316,7 @@ public class WifiVendorHalTest {
                 when(mHalDeviceManager.isReady()).thenReturn(true);
                 when(mHalDeviceManager.isStarted()).thenReturn(false);
                 mHalDeviceManagerStatusCallbacks.onStatusChanged();
+                mLooper.dispatchAll();
             }
         }).when(mHalDeviceManager).stop();
         when(mHalDeviceManager.createStaIface(anyBoolean(), any(), eq(null)))
@@ -367,7 +370,8 @@ public class WifiVendorHalTest {
         mWifiVendorHal.initialize(mVendorHalDeathHandler);
         ArgumentCaptor<WifiVendorHal.HalDeviceManagerStatusListener> hdmCallbackCaptor =
                 ArgumentCaptor.forClass(WifiVendorHal.HalDeviceManagerStatusListener.class);
-        verify(mHalDeviceManager).registerStatusListener(hdmCallbackCaptor.capture(), eq(null));
+        verify(mHalDeviceManager).registerStatusListener(
+                hdmCallbackCaptor.capture(), any(Handler.class));
         mHalDeviceManagerStatusCallbacks = hdmCallbackCaptor.getValue();
 
     }
@@ -2312,6 +2316,7 @@ public class WifiVendorHalTest {
         // death of the HAL.
         when(mHalDeviceManager.isReady()).thenReturn(false);
         mHalDeviceManagerStatusCallbacks.onStatusChanged();
+        mLooper.dispatchAll();
 
         verify(mVendorHalDeathHandler).onDeath();
     }
@@ -2561,6 +2566,35 @@ public class WifiVendorHalTest {
         sarInfo.sarSensorSupported = false;
 
         sarInfo.isVoiceCall = true;
+
+        // Expose the 1.2 IWifiChip.
+        mWifiVendorHal = new WifiVendorHalSpyV1_2(mHalDeviceManager, mLooper.getLooper());
+        when(mIWifiChipV12.selectTxPowerScenario_1_2(anyInt())).thenReturn(mWifiStatusSuccess);
+
+        // ON_HEAD_CELL_ON
+        assertTrue(mWifiVendorHal.startVendorHalSta());
+        assertTrue(mWifiVendorHal.selectTxPowerScenario(sarInfo));
+        verify(mIWifiChipV12).selectTxPowerScenario_1_2(
+                eq(android.hardware.wifi.V1_2.IWifiChip.TxPowerScenario.ON_HEAD_CELL_ON));
+        verify(mIWifiChipV12, never()).resetTxPowerScenario();
+        mWifiVendorHal.stopVendorHal();
+    }
+
+    /**
+     * Test the selectTxPowerScenario HIDL method invocation with no sensor support, but with
+     * SAP and voice call support.
+     * When earpiece is active, should result in cell with near head scenario
+     * Using IWifiChip 1.2 interface
+     */
+    @Test
+    public void testEarPieceScenarios_SelectTxPowerV1_2() throws RemoteException {
+        // Create a SAR info record (with sensor and SAP support)
+        SarInfo sarInfo = new SarInfo();
+        sarInfo.sarVoiceCallSupported = true;
+        sarInfo.sarSapSupported = true;
+        sarInfo.sarSensorSupported = false;
+
+        sarInfo.isEarPieceActive = true;
 
         // Expose the 1.2 IWifiChip.
         mWifiVendorHal = new WifiVendorHalSpyV1_2(mHalDeviceManager, mLooper.getLooper());

@@ -796,6 +796,12 @@ public class WifiNative {
      */
     private boolean removeStaIface(@NonNull Iface iface) {
         synchronized (mLock) {
+            // For dynamically added interface(s), stop processing scan queries/commands
+            // before deleting interface. This internally triggers stopPnoScan() which
+            // otherwise won't be served on deleted interface.
+            if (!mWificondControl.unsubscribeScan(iface.name))
+                Log.i(TAG, "Unsubscribe scan failed.");
+
             if (mWifiVendorHal.isVendorHalSupported()) {
                 return mWifiVendorHal.removeStaIface(iface.name);
             } else {
@@ -2484,12 +2490,10 @@ public class WifiNative {
         void onSuccessConfigReceived(WifiConfiguration newWifiConfiguration);
 
         /**
-         * Called when DPP success events take place, except for when configuration is received from
-         * an external Configurator. The callback onSuccessConfigReceived will be used in this case.
-         *
-         * @param dppStatusCode Status code of the progress event.
+         * Called when local DPP configurator successfully sends Wi-Fi configuration to a remote
+         * Enrollee.
          */
-        void onSuccess(int dppStatusCode);
+        void onSuccessConfigSent();
 
         /**
          * DPP Progress event.
