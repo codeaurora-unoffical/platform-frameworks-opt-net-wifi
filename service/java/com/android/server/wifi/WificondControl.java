@@ -251,14 +251,16 @@ public class WificondControl implements IBinder.DeathRecipient {
      */
     @Override
     public void binderDied() {
-        Log.e(TAG, "Wificond died!");
-        clearState();
-        // Invalidate the global wificond handle on death. Will be refreshed
-        // on the next setup call.
-        mWificond = null;
-        if (mDeathEventHandler != null) {
-            mDeathEventHandler.onDeath();
-        }
+        mEventHandler.post(() -> {
+            Log.e(TAG, "Wificond died!");
+            clearState();
+            // Invalidate the global wificond handle on death. Will be refreshed
+            // on the next setup call.
+            mWificond = null;
+            if (mDeathEventHandler != null) {
+                mDeathEventHandler.onDeath();
+            }
+        });
     }
 
     /** Enable or disable verbose logging of WificondControl.
@@ -356,6 +358,38 @@ public class WificondControl implements IBinder.DeathRecipient {
         }
 
         return clientInterface;
+    }
+
+    /**
+     * Unsubscribe scan for specific STA interface configured in wificond.
+     * Additionally, trigger stopPnoScan() before invalidating wificond scanner object.
+     *
+     * @return Returns true on success.
+     */
+    public boolean unsubscribeScan(@NonNull String ifaceName) {
+        if (getClientInterface(ifaceName) == null) {
+            Log.e(TAG, "No valid wificond client interface handler");
+            return false;
+        }
+
+        // stop any active pno scan
+        stopPnoScan(ifaceName);
+
+        try {
+            IWifiScannerImpl scannerImpl = mWificondScanners.get(ifaceName);
+            if (scannerImpl != null) {
+                scannerImpl.unsubscribeScanEvents();
+                scannerImpl.unsubscribePnoScanEvents();
+            }
+        } catch (RemoteException e) {
+            Log.e(TAG, "Failed to unsubscribe wificond scanner due to remote exception");
+            return false;
+        }
+
+        mWificondScanners.remove(ifaceName);
+        mScanEventHandlers.remove(ifaceName);
+        mPnoScanEventHandlers.remove(ifaceName);
+        return true;
     }
 
     /**
