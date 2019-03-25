@@ -532,7 +532,6 @@ public class WifiConfigurationTestUtil {
         assertEquals(expected.allowedPairwiseCiphers, actual.allowedPairwiseCiphers);
         assertEquals(expected.shared, actual.shared);
         assertEquals(expected.getIpConfiguration(), actual.getIpConfiguration());
-        assertEquals(expected.macRandomizationSetting, actual.macRandomizationSetting);
     }
 
     /**
@@ -646,6 +645,8 @@ public class WifiConfigurationTestUtil {
         assertCommonConfigurationElementsEqual(expected, actual);
         assertEquals(expected.networkId, actual.networkId);
         assertEquals(expected.ephemeral, actual.ephemeral);
+        assertEquals(expected.fromWifiNetworkSuggestion, actual.fromWifiNetworkSuggestion);
+        assertEquals(expected.fromWifiNetworkSpecifier, actual.fromWifiNetworkSpecifier);
         assertEquals(expected.trusted, actual.trusted);
     }
 

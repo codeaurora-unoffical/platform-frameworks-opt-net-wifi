@@ -52,7 +52,6 @@ import android.util.Pair;
 
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.server.wifi.WifiConfigStoreLegacy.WifiConfigStoreDataLegacy;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -227,7 +226,13 @@ public class WifiConfigManager {
     public static final long MAX_PNO_SCAN_FREQUENCY_AGE_MS = (long) 1000 * 3600 * 24 * 30;
 
     private static final int WIFI_PNO_FREQUENCY_CULLING_ENABLED_DEFAULT = 1; // 0 = disabled
-    private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 0; // 0 = disabled:
+    private static final int WIFI_PNO_RECENCY_SORTING_ENABLED_DEFAULT = 1; // 0 = disabled:
+
+    /**
+     * Expiration timeout for deleted ephemeral ssids. (1 day)
+     */
+    @VisibleForTesting
+    public static final long DELETED_EPHEMERAL_SSID_EXPIRY_MS = (long) 1000 * 60 * 60 * 24;
 
     /**
      * General sorting algorithm of all networks for scanning purposes:
@@ -263,7 +268,6 @@ public class WifiConfigManager {
     private final TelephonyManager mTelephonyManager;
     private final WifiKeyStore mWifiKeyStore;
     private final WifiConfigStore mWifiConfigStore;
-    private final WifiConfigStoreLegacy mWifiConfigStoreLegacy;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
     /**
@@ -281,11 +285,13 @@ public class WifiConfigManager {
     private final Map<Integer, ScanDetailCache> mScanDetailCaches;
     /**
      * Framework keeps a list of ephemeral SSIDs that where deleted by user,
-     * so as, framework knows not to autoconnect again those SSIDs based on scorer input.
-     * The list is never cleared up.
+     * framework knows not to autoconnect again even if the app/scorer recommends it.
+     * The entries are deleted after 24 hours.
      * The SSIDs are encoded in a String as per definition of WifiConfiguration.SSID field.
+     *
+     * The map stores the SSID and the wall clock time when the network was deleted.
      */
-    private final Set<String> mDeletedEphemeralSSIDs;
+    private final Map<String, Long> mDeletedEphemeralSsidsToTimeMap;
 
     /**
      * Framework keeps a mapping from configKey to the randomized MAC address so that
@@ -375,7 +381,7 @@ public class WifiConfigManager {
     WifiConfigManager(
             Context context, Clock clock, UserManager userManager,
             TelephonyManager telephonyManager, WifiKeyStore wifiKeyStore,
-            WifiConfigStore wifiConfigStore, WifiConfigStoreLegacy wifiConfigStoreLegacy,
+            WifiConfigStore wifiConfigStore,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
             NetworkListSharedStoreData networkListSharedStoreData,
@@ -390,13 +396,12 @@ public class WifiConfigManager {
         mTelephonyManager = telephonyManager;
         mWifiKeyStore = wifiKeyStore;
         mWifiConfigStore = wifiConfigStore;
-        mWifiConfigStoreLegacy = wifiConfigStoreLegacy;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
 
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
-        mDeletedEphemeralSSIDs = new HashSet<>();
+        mDeletedEphemeralSsidsToTimeMap = new HashMap<>();
         mRandomizedMacAddressMapping = new HashMap<>();
 
         // Register store data for network list and deleted ephemeral SSIDs.
@@ -1224,7 +1229,7 @@ public class WifiConfigManager {
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
-        if (mDeletedEphemeralSSIDs.remove(config.SSID)) {
+        if (mDeletedEphemeralSsidsToTimeMap.remove(config.SSID) != null) {
             if (mVerboseLoggingEnabled) {
                 Log.v(TAG, "Removed from ephemeral blacklist: " + config.SSID);
             }
@@ -1270,6 +1275,17 @@ public class WifiConfigManager {
             Log.e(TAG, "Cannot add/update network before store is read!");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
+        if (!config.isEphemeral()) {
+            // Removes the existing ephemeral network if it exists to add this configuration.
+            WifiConfiguration existingConfig = getConfiguredNetwork(config.configKey());
+            if (existingConfig != null && existingConfig.isEphemeral()) {
+                // In this case, new connection for this config won't happen because same
+                // network is already registered as an ephemeral network.
+                // Clear the Ephemeral Network to address the situation.
+                removeNetwork(existingConfig.networkId, mSystemUiUid);
+            }
+        }
+
         NetworkUpdateResult result = addOrUpdateNetworkInternal(config, uid, packageName);
         if (!result.isSuccess()) {
             Log.e(TAG, "Failed to add/update network " + config.getPrintableSsid());
@@ -1724,6 +1740,12 @@ public class WifiConfigManager {
         if (config == null) {
             return false;
         }
+        // Set the "last selected" flag even if the app does not have permissions to modify this
+        // network config. Apps are allowed to connect to networks even if they don't have
+        // permission to modify it.
+        if (disableOthers) {
+            setLastSelectedNetwork(networkId);
+        }
         if (!canModifyNetwork(config, uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
@@ -1732,9 +1754,6 @@ public class WifiConfigManager {
         if (!updateNetworkSelectionStatus(
                 networkId, WifiConfiguration.NetworkSelectionStatus.NETWORK_SELECTION_ENABLE)) {
             return false;
-        }
-        if (disableOthers) {
-            setLastSelectedNetwork(networkId);
         }
         saveToStore(true);
         return true;
@@ -1759,6 +1778,11 @@ public class WifiConfigManager {
         if (config == null) {
             return false;
         }
+        // Reset the "last selected" flag even if the app does not have permissions to modify this
+        // network config.
+        if (networkId == mLastSelectedNetworkId) {
+            clearLastSelectedNetwork();
+        }
         if (!canModifyNetwork(config, uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to update configuration "
                     + config.configKey());
@@ -1767,9 +1791,6 @@ public class WifiConfigManager {
         if (!updateNetworkSelectionStatus(
                 networkId, NetworkSelectionStatus.DISABLED_BY_WIFI_MANAGER)) {
             return false;
-        }
-        if (networkId == mLastSelectedNetworkId) {
-            clearLastSelectedNetwork();
         }
         saveToStore(true);
         return true;
@@ -2699,21 +2720,34 @@ public class WifiConfigManager {
     }
 
     /**
-     * Check if the provided ephemeral network was deleted by the user or not.
+     * Check if the provided ephemeral network was deleted by the user or not. This call also clears
+     * the SSID from the deleted ephemeral network map, if the duration has expired the
+     * timeout specified by {@link #DELETED_EPHEMERAL_SSID_EXPIRY_MS}.
      *
      * @param ssid caller must ensure that the SSID passed thru this API match
      *             the WifiConfiguration.SSID rules, and thus be surrounded by quotes.
      * @return true if network was deleted, false otherwise.
      */
     public boolean wasEphemeralNetworkDeleted(String ssid) {
-        return mDeletedEphemeralSSIDs.contains(ssid);
+        if (!mDeletedEphemeralSsidsToTimeMap.containsKey(ssid)) {
+            return false;
+        }
+        long deletedTimeInMs = mDeletedEphemeralSsidsToTimeMap.get(ssid);
+        long nowInMs = mClock.getWallClockMillis();
+        // Clear the ssid from the map if the age > |DELETED_EPHEMERAL_SSID_EXPIRY_MS|.
+        if (nowInMs - deletedTimeInMs > DELETED_EPHEMERAL_SSID_EXPIRY_MS) {
+            mDeletedEphemeralSsidsToTimeMap.remove(ssid);
+            return false;
+        }
+        return true;
     }
 
     /**
      * Disable an ephemeral SSID for the purpose of network selection.
      *
-     * The only way to "un-disable it" is if the user create a network for that SSID and then
-     * forget it.
+     * The network will be re-enabled when:
+     * a) The user creates a network for that SSID and then forgets.
+     * b) The time specified by {@link #DELETED_EPHEMERAL_SSID_EXPIRY_MS} expires after the disable.
      *
      * @param ssid caller must ensure that the SSID passed thru this API match
      *             the WifiConfiguration.SSID rules, and thus be surrounded by quotes.
@@ -2731,8 +2765,10 @@ public class WifiConfigManager {
                 break;
             }
         }
-        mDeletedEphemeralSSIDs.add(ssid);
-        Log.d(TAG, "Forget ephemeral SSID " + ssid + " num=" + mDeletedEphemeralSSIDs.size());
+        // Store the ssid & the wall clock time at which the network was disabled.
+        mDeletedEphemeralSsidsToTimeMap.put(ssid, mClock.getWallClockMillis());
+        Log.d(TAG, "Forget ephemeral SSID " + ssid + " num="
+                + mDeletedEphemeralSsidsToTimeMap.size());
         if (foundConfig != null) {
             Log.d(TAG, "Found ephemeral config in disableEphemeralNetwork: "
                     + foundConfig.networkId);
@@ -2745,7 +2781,7 @@ public class WifiConfigManager {
      */
     @VisibleForTesting
     public void clearDeletedEphemeralNetworks() {
-        mDeletedEphemeralSSIDs.clear();
+        mDeletedEphemeralSsidsToTimeMap.clear();
     }
 
     /**
@@ -2912,7 +2948,7 @@ public class WifiConfigManager {
     private void clearInternalData() {
         localLog("clearInternalData: Clearing all internal data");
         mConfiguredNetworks.clear();
-        mDeletedEphemeralSSIDs.clear();
+        mDeletedEphemeralSsidsToTimeMap.clear();
         mRandomizedMacAddressMapping.clear();
         mScanDetailCaches.clear();
         clearLastSelectedNetwork();
@@ -2943,7 +2979,7 @@ public class WifiConfigManager {
                 mConfiguredNetworks.remove(config.networkId);
             }
         }
-        mDeletedEphemeralSSIDs.clear();
+        mDeletedEphemeralSsidsToTimeMap.clear();
         mScanDetailCaches.clear();
         clearLastSelectedNetwork();
         return removedNetworkIds;
@@ -2976,12 +3012,14 @@ public class WifiConfigManager {
      * Helper function to populate the internal (in-memory) data from the retrieved user store
      * (file) data.
      *
-     * @param configurations        list of configurations retrieved from store.
-     * @param deletedEphemeralSSIDs list of ssid's representing the ephemeral networks deleted by
-     *                              the user.
+     * @param configurations list of configurations retrieved from store.
+     * @param deletedEphemeralSsidsToTimeMap map of ssid's representing the ephemeral networks
+     *                                       deleted by the user to the wall clock time at which
+     *                                       it was deleted.
      */
     private void loadInternalDataFromUserStore(
-            List<WifiConfiguration> configurations, Set<String> deletedEphemeralSSIDs) {
+            List<WifiConfiguration> configurations,
+            Map<String, Long> deletedEphemeralSsidsToTimeMap) {
         for (WifiConfiguration configuration : configurations) {
             configuration.networkId = mNextNetworkId++;
             if (mVerboseLoggingEnabled) {
@@ -2993,8 +3031,16 @@ public class WifiConfigManager {
                 Log.e(TAG, "Failed to add network to config map", e);
             }
         }
-        for (String ssid : deletedEphemeralSSIDs) {
-            mDeletedEphemeralSSIDs.add(ssid);
+        mDeletedEphemeralSsidsToTimeMap.putAll(deletedEphemeralSsidsToTimeMap);
+    }
+
+    /**
+     * Generate randomized MAC addresses for configured networks and persist mapping to storage.
+     */
+    private void generateRandomizedMacAddresses() {
+        for (WifiConfiguration config : getInternalConfiguredNetworks()) {
+            mRandomizedMacAddressMapping.put(config.configKey(),
+                    config.getOrCreateRandomizedMacAddress().toString());
         }
     }
 
@@ -3005,20 +3051,23 @@ public class WifiConfigManager {
      * 1. Clears all existing internal data.
      * 2. Sends out the networks changed broadcast after loading all the data.
      *
-     * @param sharedConfigurations  list of  network configurations retrieved from shared store.
-     * @param userConfigurations    list of  network configurations retrieved from user store.
-     * @param deletedEphemeralSSIDs list of ssid's representing the ephemeral networks deleted by
-     *                              the user.
+     * @param sharedConfigurations list of network configurations retrieved from shared store.
+     * @param userConfigurations list of network configurations retrieved from user store.
+     * @param deletedEphemeralSsidsToTimeMap map of ssid's representing the ephemeral networks
+     *                                       deleted by the user to the wall clock time at which
+     *                                       it was deleted.
      */
     private void loadInternalData(
             List<WifiConfiguration> sharedConfigurations,
-            List<WifiConfiguration> userConfigurations, Set<String> deletedEphemeralSSIDs,
+            List<WifiConfiguration> userConfigurations,
+            Map<String, Long> deletedEphemeralSsidsToTimeMap,
             Map<String, String> macAddressMapping) {
         // Clear out all the existing in-memory lists and load the lists from what was retrieved
         // from the config store.
         clearInternalData();
         loadInternalDataFromSharedStore(sharedConfigurations, macAddressMapping);
-        loadInternalDataFromUserStore(userConfigurations, deletedEphemeralSSIDs);
+        loadInternalDataFromUserStore(userConfigurations, deletedEphemeralSsidsToTimeMap);
+        generateRandomizedMacAddresses();
         if (mConfiguredNetworks.sizeForAllUsers() == 0) {
             Log.w(TAG, "No stored networks found.");
         }
@@ -3029,46 +3078,6 @@ public class WifiConfigManager {
     }
 
     /**
-     * Migrate data from legacy store files. The function performs the following operations:
-     * 1. Check if the legacy store files are present and the new store files are absent on device.
-     * 2. Read all the data from the store files.
-     * 3. Save it to the new store files.
-     * 4. Delete the legacy store file.
-     *
-     * @return true if migration was successful or not needed (fresh install), false if it failed.
-     */
-    public boolean migrateFromLegacyStore() {
-        if (!mWifiConfigStoreLegacy.areStoresPresent()) {
-            Log.d(TAG, "Legacy store files not found. No migration needed!");
-            return true;
-        }
-        if (mWifiConfigStore.areStoresPresent()) {
-            Log.d(TAG, "New store files found. No migration needed!"
-                    + " Remove legacy store files");
-            mWifiConfigStoreLegacy.removeStores();
-            return true;
-        }
-        WifiConfigStoreDataLegacy storeData = mWifiConfigStoreLegacy.read();
-        Log.d(TAG, "Reading from legacy store completed");
-        loadInternalData(storeData.getConfigurations(), new ArrayList<WifiConfiguration>(),
-                storeData.getDeletedEphemeralSSIDs(), mRandomizedMacStoreData.getMacMapping());
-
-        // Setup user store for the current user in case it have not setup yet, so that data
-        // owned by the current user will be backed to the user store.
-        if (mDeferredUserUnlockRead) {
-            mWifiConfigStore.setUserStores(WifiConfigStore.createUserFiles(mCurrentUserId));
-            mDeferredUserUnlockRead = false;
-        }
-
-        if (!saveToStore(true)) {
-            return false;
-        }
-        mWifiConfigStoreLegacy.removeStores();
-        Log.d(TAG, "Migration from legacy store completed");
-        return true;
-    }
-
-    /**
      * Read the config store and load the in-memory lists from the store data retrieved and sends
      * out the networks changed broadcast.
      *
@@ -3076,8 +3085,7 @@ public class WifiConfigManager {
      * 1. Shared WifiConfigStore.xml
      * 2. User WifiConfigStore.xml
      *
-     * @return true on success or not needed (fresh install/pending legacy store migration),
-     * false otherwise.
+     * @return true on success or not needed (fresh install), false otherwise.
      */
     public boolean loadFromStore() {
         // If the user unlock comes in before we load from store, which means the user store have
@@ -3087,9 +3095,6 @@ public class WifiConfigManager {
             Log.i(TAG, "Handling user unlock before loading from store.");
             mWifiConfigStore.setUserStores(WifiConfigStore.createUserFiles(mCurrentUserId));
             mDeferredUserUnlockRead = false;
-        }
-        if (mWifiConfigStoreLegacy.areStoresPresent()) {
-            return true;
         }
         try {
             mWifiConfigStore.read();
@@ -3102,7 +3107,7 @@ public class WifiConfigManager {
         }
         loadInternalData(mNetworkListSharedStoreData.getConfigurations(),
                 mNetworkListUserStoreData.getConfigurations(),
-                mDeletedEphemeralSsidsStoreData.getSsidList(),
+                mDeletedEphemeralSsidsStoreData.getSsidToTimeMap(),
                 mRandomizedMacStoreData.getMacMapping());
         return true;
     }
@@ -3131,7 +3136,7 @@ public class WifiConfigManager {
             return false;
         }
         loadInternalDataFromUserStore(mNetworkListUserStoreData.getConfigurations(),
-                mDeletedEphemeralSsidsStoreData.getSsidList());
+                mDeletedEphemeralSsidsStoreData.getSsidToTimeMap());
         return true;
     }
 
@@ -3192,7 +3197,7 @@ public class WifiConfigManager {
         // Setup store data for write.
         mNetworkListSharedStoreData.setConfigurations(sharedConfigurations);
         mNetworkListUserStoreData.setConfigurations(userConfigurations);
-        mDeletedEphemeralSsidsStoreData.setSsidList(mDeletedEphemeralSSIDs);
+        mDeletedEphemeralSsidsStoreData.setSsidToTimeMap(mDeletedEphemeralSsidsToTimeMap);
         mRandomizedMacStoreData.setMacMapping(mRandomizedMacAddressMapping);
 
         try {

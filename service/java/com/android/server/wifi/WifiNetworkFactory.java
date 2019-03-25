@@ -37,6 +37,7 @@ import android.net.wifi.INetworkRequestMatchCallback;
 import android.net.wifi.INetworkRequestUserSelectionCallback;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.net.wifi.WifiConfiguration.SecurityType;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiScanner;
@@ -55,7 +56,6 @@ import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.server.wifi.ScanResultMatchInfo.NetworkType;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -145,9 +145,10 @@ public class WifiNetworkFactory extends NetworkFactory {
     public static class AccessPoint {
         public final String ssid;
         public final MacAddress bssid;
-        public final @NetworkType int networkType;
+        public final @SecurityType int networkType;
 
-        AccessPoint(@NonNull String ssid, @NonNull MacAddress bssid, @NetworkType int networkType) {
+        AccessPoint(@NonNull String ssid, @NonNull MacAddress bssid,
+                    @SecurityType int networkType) {
             this.ssid = ssid;
             this.bssid = bssid;
             this.networkType = networkType;
@@ -475,17 +476,19 @@ public class WifiNetworkFactory extends NetworkFactory {
             // Invalid network specifier.
             if (!(ns instanceof WifiNetworkSpecifier)) {
                 Log.e(TAG, "Invalid network specifier mentioned. Rejecting");
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             if (!mWifiEnabled) {
+                // Will re-evaluate when wifi is turned on.
                 Log.e(TAG, "Wifi off. Rejecting");
                 return false;
             }
-
             WifiNetworkSpecifier wns = (WifiNetworkSpecifier) ns;
             if (!WifiConfigurationUtil.validateNetworkSpecifier(wns)) {
                 Log.e(TAG, "Invalid network specifier."
                         + " Rejecting request from " + wns.requestorPackageName);
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             try {
@@ -493,6 +496,7 @@ public class WifiNetworkFactory extends NetworkFactory {
             } catch (SecurityException e) {
                 Log.e(TAG, "Invalid uid/package name " + wns.requestorPackageName + ", "
                         + wns.requestorPackageName, e);
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             // Only allow specific wifi network request from foreground app/service.
@@ -500,18 +504,25 @@ public class WifiNetworkFactory extends NetworkFactory {
                     && !isRequestFromForegroundAppOrService(wns.requestorPackageName)) {
                 Log.e(TAG, "Request not from foreground app or service."
                         + " Rejecting request from " + wns.requestorPackageName);
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             // If there is an active request, only proceed if the new request is from a foreground
             // app.
             if (!canNewRequestOverrideExistingRequest(
                     wns, mActiveSpecificNetworkRequestSpecifier)) {
+                Log.e(TAG, "Request cannot override active request."
+                        + " Rejecting request from " + wns.requestorPackageName);
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             // If there is a connected request, only proceed if the new request is from a foreground
             // app.
             if (!canNewRequestOverrideExistingRequest(
                     wns, mConnectedSpecificNetworkRequestSpecifier)) {
+                Log.e(TAG, "Request cannot override connected request."
+                        + " Rejecting request from " + wns.requestorPackageName);
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return false;
             }
             if (mVerboseLoggingEnabled) {
@@ -544,9 +555,11 @@ public class WifiNetworkFactory extends NetworkFactory {
             // Invalid network specifier.
             if (!(ns instanceof WifiNetworkSpecifier)) {
                 Log.e(TAG, "Invalid network specifier mentioned. Rejecting");
+                releaseRequestAsUnfulfillableByAnyFactory(networkRequest);
                 return;
             }
             if (!mWifiEnabled) {
+                // Will re-evaluate when wifi is turned on.
                 Log.e(TAG, "Wifi off. Rejecting");
                 return;
             }
@@ -701,22 +714,26 @@ public class WifiNetworkFactory extends NetworkFactory {
         // Disable Auto-join so that NetworkFactory can take control of the network connection.
         mWifiConnectivityManager.setSpecificNetworkRequestInProgress(true);
 
+        // Copy over the credentials from the app's request and then copy the ssid from user
+        // selection.
+        WifiConfiguration networkToConnect =
+                new WifiConfiguration(mActiveSpecificNetworkRequestSpecifier.wifiConfiguration);
+        networkToConnect.SSID = network.SSID;
         // If the request is for a specific SSID and BSSID, then set WifiConfiguration.BSSID field
         // to prevent roaming.
         if (isActiveRequestForSingleAccessPoint()) {
-            network.BSSID =
+            networkToConnect.BSSID =
                     mActiveSpecificNetworkRequestSpecifier.bssidPatternMatcher.first.toString();
         }
-
         // Mark the network ephemeral so that it's automatically removed at the end of connection.
-        network.ephemeral = true;
-        network.fromWifiNetworkSpecifier = true;
+        networkToConnect.ephemeral = true;
+        networkToConnect.fromWifiNetworkSpecifier = true;
 
         // Store the user selected network.
-        mUserSelectedNetwork = network;
+        mUserSelectedNetwork = networkToConnect;
 
         // Trigger connection to the network.
-        connectToNetwork(network);
+        connectToNetwork(networkToConnect);
     }
 
     private void handleConnectToNetworkUserSelection(WifiConfiguration network) {
@@ -729,7 +746,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         handleConnectToNetworkUserSelectionInternal(network);
 
         // Add the network to the approved access point map for the app.
-        addNetworkToUserApprovedAccessPointMap(network);
+        addNetworkToUserApprovedAccessPointMap(mUserSelectedNetwork);
     }
 
     private void handleRejectUserSelection() {
@@ -860,6 +877,10 @@ public class WifiNetworkFactory extends NetworkFactory {
                 Log.e(TAG, "Unable to invoke network request abort callback " + callback, e);
             }
         }
+        // Force-release the network request to let the app know early that the attempt failed.
+        if (mActiveSpecificNetworkRequest != null) {
+            releaseRequestAsUnfulfillableByAnyFactory(mActiveSpecificNetworkRequest);
+        }
         // Reset the active network request.
         mActiveSpecificNetworkRequest = null;
         mActiveSpecificNetworkRequestSpecifier = null;
@@ -872,8 +893,6 @@ public class WifiNetworkFactory extends NetworkFactory {
         cancelConnectionTimeout();
         // Remove any callbacks registered for the request.
         mRegisteredCallbacks.clear();
-        // TODO(b/113878056): Force-release the network request to let the app know early that the
-        // attempt failed.
     }
 
     // Invoked at the start of new active request processing.
@@ -1186,6 +1205,16 @@ public class WifiNetworkFactory extends NetworkFactory {
                 iter.remove();
             }
         }
+        saveToStore();
+    }
+
+    /**
+     * Clear all internal state (for network settings reset).
+     */
+    public void clear() {
+        mUserApprovedAccessPointMap.clear();
+        Log.i(TAG, "Cleared all internal state");
+        saveToStore();
     }
 }
 
