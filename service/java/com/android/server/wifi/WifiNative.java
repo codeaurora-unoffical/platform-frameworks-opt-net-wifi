@@ -37,6 +37,7 @@ import android.util.SparseArray;
 
 import com.android.internal.annotations.Immutable;
 import com.android.internal.util.HexDump;
+import com.android.server.connectivity.tethering.TetheringConfiguration;
 import com.android.server.net.BaseNetworkObserver;
 import com.android.server.wifi.util.FrameParser;
 import com.android.server.wifi.util.NativeUtil;
@@ -58,6 +59,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
@@ -935,16 +937,13 @@ public class WifiNative {
             Log.e(TAG, "FST interface already added");
             return false;
         }
-        String defaultFstInterfaceName = "bond0"; // interface used for fst
-        String fstInterfaceName = SystemProperties.get("persist.vendor.fst.data.interface",
-                defaultFstInterfaceName);
 
         fstIface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_FST);
         if (fstIface == null) {
             Log.e(TAG, "Failed to allocate FST interface");
             return false;
         }
-        fstIface.name = fstInterfaceName;
+        fstIface.name = TetheringConfiguration.getFstInterfaceName();
         fstIface.externalListener = iface.externalListener;
         iface.externalListener = new InterfaceCallback() {
             public void onDestroyed(String ifaceName) {
@@ -1426,7 +1425,7 @@ public class WifiNative {
      */
     public boolean scan(
             @NonNull String ifaceName, int scanType, Set<Integer> freqs,
-            Set<String> hiddenNetworkSSIDs) {
+            List<String> hiddenNetworkSSIDs) {
         return mWificondControl.scan(ifaceName, scanType, freqs, hiddenNetworkSSIDs);
     }
 
