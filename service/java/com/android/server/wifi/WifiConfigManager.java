@@ -270,6 +270,8 @@ public class WifiConfigManager {
     private final WifiConfigStore mWifiConfigStore;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
     private final WifiPermissionsWrapper mWifiPermissionsWrapper;
+    private final WifiInjector mWifiInjector;
+
     /**
      * Local log used for debugging any WifiConfigManager issues.
      */
@@ -384,6 +386,7 @@ public class WifiConfigManager {
             WifiConfigStore wifiConfigStore,
             WifiPermissionsUtil wifiPermissionsUtil,
             WifiPermissionsWrapper wifiPermissionsWrapper,
+            WifiInjector wifiInjector,
             NetworkListSharedStoreData networkListSharedStoreData,
             NetworkListUserStoreData networkListUserStoreData,
             DeletedEphemeralSsidsStoreData deletedEphemeralSsidsStoreData,
@@ -398,6 +401,7 @@ public class WifiConfigManager {
         mWifiConfigStore = wifiConfigStore;
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiPermissionsWrapper = wifiPermissionsWrapper;
+        mWifiInjector = wifiInjector;
 
         mConfiguredNetworks = new ConfigurationMap(userManager);
         mScanDetailCaches = new HashMap<>(16, 0.75f);
@@ -561,7 +565,7 @@ public class WifiConfigManager {
             boolean savedOnly, boolean maskPasswords, int targetUid) {
         List<WifiConfiguration> networks = new ArrayList<>();
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            if (savedOnly && config.ephemeral) {
+            if (savedOnly && (config.ephemeral || config.isPasspoint())) {
                 continue;
             }
             networks.add(createExternalWifiConfiguration(config, maskPasswords, targetUid));
@@ -932,11 +936,7 @@ public class WifiConfigManager {
             internalConfig.allowedGroupManagementCiphers =
                     (BitSet) externalConfig.allowedGroupManagementCiphers.clone();
         }
-        if (externalConfig.allowedSuiteBCiphers != null
-                && !externalConfig.allowedSuiteBCiphers.isEmpty()) {
-            internalConfig.allowedSuiteBCiphers =
-                    (BitSet) externalConfig.allowedSuiteBCiphers.clone();
-        }
+        // allowedSuiteBCiphers is set internally according to the certificate type
 
         // Copy over the |IpConfiguration| parameters if set.
         if (externalConfig.getIpConfiguration() != null) {
@@ -1082,7 +1082,7 @@ public class WifiConfigManager {
      */
     private void updateRandomizedMacAddress(WifiConfiguration config) {
         // Update randomized MAC address according to stored map
-        final String key = config.configKey();
+        final String key = config.getSsidAndSecurityTypeString();
         // If the key is not found in the current store, then it means this network has never been
         // seen before. So add it to store.
         if (!mRandomizedMacAddressMapping.containsKey(key)) {
@@ -1189,8 +1189,8 @@ public class WifiConfigManager {
                 newInternalConfig) && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
                 && !mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid)) {
             Log.e(TAG, "UID " + uid + " does not have permission to modify MAC randomization "
-                    + "Settings " + config.configKey() + ". Must have NETWORK_SETTINGS or"
-                    + "NETWORK_SETUP_WIZARD.");
+                    + "Settings " + config.getSsidAndSecurityTypeString() + ". Must have "
+                    + "NETWORK_SETTINGS or NETWORK_SETUP_WIZARD.");
             return new NetworkUpdateResult(WifiConfiguration.INVALID_NETWORK_ID);
         }
 
@@ -1607,6 +1607,22 @@ public class WifiConfigManager {
     private boolean updateNetworkSelectionStatus(WifiConfiguration config, int reason) {
         NetworkSelectionStatus networkStatus = config.getNetworkSelectionStatus();
         if (reason != NetworkSelectionStatus.NETWORK_SELECTION_ENABLE) {
+
+            // Do not update SSID blacklist with information if this is the only
+            // SSID be observed. By ignoring it we will cause additional failures
+            // which will trigger Watchdog.
+            if (reason == NetworkSelectionStatus.DISABLED_ASSOCIATION_REJECTION
+                    || reason == NetworkSelectionStatus.DISABLED_AUTHENTICATION_FAILURE
+                    || reason == NetworkSelectionStatus.DISABLED_DHCP_FAILURE) {
+                if (mWifiInjector.getWifiLastResortWatchdog().shouldIgnoreSsidUpdate()) {
+                    if (mVerboseLoggingEnabled) {
+                        Log.v(TAG, "Ignore update network selection status "
+                                    + "since Watchdog trigger is activated");
+                    }
+                    return false;
+                }
+            }
+
             networkStatus.incrementDisableReasonCounter(reason);
             // For network disable reasons, we should only update the status if we cross the
             // threshold.
@@ -2794,7 +2810,8 @@ public class WifiConfigManager {
                 if (TelephonyUtil.isSimConfig(config)) {
                     Pair<String, String> currentIdentity =
                             TelephonyUtil.getSimIdentity(mTelephonyManager,
-                                    new TelephonyUtil(), config);
+                                    new TelephonyUtil(), config,
+                                    mWifiInjector.getCarrierNetworkConfig());
                     if (mVerboseLoggingEnabled) {
                         Log.d(TAG, "New identity for config " + config + ": " + currentIdentity);
                     }
@@ -2876,6 +2893,8 @@ public class WifiConfigManager {
             Log.w(TAG, "User switch before store is read!");
             mConfiguredNetworks.setNewUser(userId);
             mCurrentUserId = userId;
+            // Reset any state from previous user unlock.
+            mDeferredUserUnlockRead = false;
             // Cannot read data from new user's CE store file before they log-in.
             mPendingUnlockStoreRead = true;
             return new HashSet<>();
@@ -2910,12 +2929,16 @@ public class WifiConfigManager {
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Handling user unlock for " + userId);
         }
+        if (userId != mCurrentUserId) {
+            Log.e(TAG, "Ignore user unlock for non current user " + userId);
+            return;
+        }
         if (mPendingStoreRead) {
             Log.w(TAG, "Ignore user unlock until store is read!");
             mDeferredUserUnlockRead = true;
             return;
         }
-        if (userId == mCurrentUserId && mPendingUnlockStoreRead) {
+        if (mPendingUnlockStoreRead) {
             handleUserUnlockOrSwitch(mCurrentUserId);
         }
     }
@@ -3039,7 +3062,7 @@ public class WifiConfigManager {
      */
     private void generateRandomizedMacAddresses() {
         for (WifiConfiguration config : getInternalConfiguredNetworks()) {
-            mRandomizedMacAddressMapping.put(config.configKey(),
+            mRandomizedMacAddressMapping.put(config.getSsidAndSecurityTypeString(),
                     config.getOrCreateRandomizedMacAddress().toString());
         }
     }

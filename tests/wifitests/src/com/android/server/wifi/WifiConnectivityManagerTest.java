@@ -106,6 +106,7 @@ public class WifiConnectivityManagerTest {
         mFullScanMaxRxPacketRate = mResource.getInteger(
                 R.integer.config_wifi_framework_max_rx_rate_for_full_scan);
         when(mCarrierNetworkConfig.isCarrierEncryptionInfoAvailable()).thenReturn(true);
+        when(mWifiLastResortWatchdog.shouldIgnoreBssidUpdate(anyString())).thenReturn(false);
     }
 
     /**
@@ -321,8 +322,7 @@ public class WifiConnectivityManagerTest {
                 mClientModeImpl, mWifiInjector,
                 mWifiConfigManager, mWifiInfo, mWifiNS, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier, mCarrierNetworkNotifier,
-                mCarrierNetworkConfig, mWifiMetrics, mLooper.getLooper(), mClock, mLocalLog,
-                null, null, null, null, null);
+                mCarrierNetworkConfig, mWifiMetrics, mLooper.getLooper(), mClock, mLocalLog);
     }
 
     /**
@@ -1357,6 +1357,60 @@ public class WifiConnectivityManagerTest {
     }
 
     /**
+     * Verify that a successful scan result resets scan retry counter
+     *
+     * Steps
+     * 1. Trigger a scan that fails
+     * 2. Let the retry succeed
+     * 3. Trigger a scan again and have it and all subsequent retries fail
+     * 4. Verify that there are MAX_SCAN_RESTART_ALLOWED + 3 startScan calls. (2 are from the
+     * original scans, and MAX_SCAN_RESTART_ALLOWED + 1 from retries)
+     */
+    @Test
+    public void verifyScanFailureCountIsResetAfterOnResult() {
+        // Setup WifiScanner to fail
+        doAnswer(new AnswerWithArguments() {
+            public void answer(ScanSettings settings, ScanListener listener,
+                    WorkSource workSource) throws Exception {
+                listener.onFailure(-1, "ScanFailure");
+            }}).when(mWifiScanner).startScan(anyObject(), anyObject(), anyObject());
+
+        mWifiConnectivityManager.forceConnectivityScan(null);
+        // make the retry succeed
+        doAnswer(new AnswerWithArguments() {
+            public void answer(ScanSettings settings, ScanListener listener,
+                    WorkSource workSource) throws Exception {
+                listener.onResults(null);
+            }}).when(mWifiScanner).startScan(anyObject(), anyObject(), anyObject());
+        mAlarmManager.dispatch(WifiConnectivityManager.RESTART_SINGLE_SCAN_TIMER_TAG);
+        mLooper.dispatchAll();
+
+        // Verify that startScan is called once for the original scan, plus once for the retry.
+        // The successful retry should have now cleared the restart count
+        verify(mWifiScanner, times(2)).startScan(anyObject(), anyObject(), anyObject());
+
+        // Now force a new scan and verify we retry MAX_SCAN_RESTART_ALLOWED times
+        doAnswer(new AnswerWithArguments() {
+            public void answer(ScanSettings settings, ScanListener listener,
+                    WorkSource workSource) throws Exception {
+                listener.onFailure(-1, "ScanFailure");
+            }}).when(mWifiScanner).startScan(anyObject(), anyObject(), anyObject());
+        mWifiConnectivityManager.forceConnectivityScan(null);
+        // Fire the alarm timer 2x timers
+        for (int i = 0; i < (WifiConnectivityManager.MAX_SCAN_RESTART_ALLOWED * 2); i++) {
+            mAlarmManager.dispatch(WifiConnectivityManager.RESTART_SINGLE_SCAN_TIMER_TAG);
+            mLooper.dispatchAll();
+        }
+
+        // Verify that the connectivity scan has been retried for MAX_SCAN_RESTART_ALLOWED + 3
+        // times. Note, WifiScanner.startScan() is invoked 2 times by the first part of this test,
+        // and additionally MAX_SCAN_RESTART_ALLOWED + 1 times from forceConnectivityScan and
+        // subsequent retries.
+        verify(mWifiScanner, times(WifiConnectivityManager.MAX_SCAN_RESTART_ALLOWED + 3)).startScan(
+                anyObject(), anyObject(), anyObject());
+    }
+
+    /**
      * Listen to scan results not requested by WifiConnectivityManager and
      * act on them.
      *
@@ -2258,5 +2312,30 @@ public class WifiConnectivityManagerTest {
                 WifiManager.DEVICE_MOBILITY_STATE_HIGH_MVMT);
 
         inOrder.verifyNoMoreInteractions();
+    }
+
+    /**
+     * Verifies BSSID blacklist consistent with Watchdog trigger.
+     *
+     * Expected behavior: A BSSID won't gets blacklisted if there only BSSID
+     * of its SSID be observed and Watchdog trigger is activated.
+     */
+    @Test
+    public void verifyConsistentWatchdogAndBssidBlacklist() {
+        String bssid = "6c:f3:7f:ae:8c:f3";
+
+        // If there only one BSSID is available and Watchdog trigger is activated.
+        when(mWifiLastResortWatchdog.shouldIgnoreBssidUpdate(anyString())).thenReturn(true);
+        when(mWifiConnectivityHelper.isFirmwareRoamingSupported()).thenReturn(true);
+
+        // Verify that a BSSID won't gets blacklisted if there only one BSSID is available
+        // and watchdog recover is not triggered.
+        for (int i = 0; i < WifiConnectivityManager.BSSID_BLACKLIST_THRESHOLD; i++) {
+            assertFalse(mWifiConnectivityManager.isBssidDisabled(bssid));
+            mWifiConnectivityManager.trackBssid(bssid, false, 1);
+        }
+
+        // Verify the BSSID is not blacklisted.
+        assertFalse(mWifiConnectivityManager.isBssidDisabled(bssid));
     }
 }

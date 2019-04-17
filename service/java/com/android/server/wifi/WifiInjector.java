@@ -21,7 +21,9 @@ import android.app.ActivityManager;
 import android.app.AlarmManager;
 import android.app.AppOpsManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.hardware.SystemSensorManager;
+import android.net.IpMemoryStore;
 import android.net.NetworkCapabilities;
 import android.net.NetworkKey;
 import android.net.NetworkScoreManager;
@@ -148,6 +150,8 @@ public class WifiInjector {
     private final DppMetrics mDppMetrics;
     private final DppManager mDppManager;
     private final LinkProbeManager mLinkProbeManager;
+    private final IpMemoryStore mIpMemoryStore;
+    private final CellularLinkLayerStatsCollector mCellularLinkLayerStatsCollector;
 
     public WifiInjector(Context context) {
         if (context == null) {
@@ -191,8 +195,10 @@ public class WifiInjector {
         RttMetrics rttMetrics = new RttMetrics(mClock);
         mWifiP2pMetrics = new WifiP2pMetrics(mClock);
         mDppMetrics = new DppMetrics();
+        mCellularLinkLayerStatsCollector = new CellularLinkLayerStatsCollector(mContext);
         mWifiMetrics = new WifiMetrics(mContext, mFrameworkFacade, mClock, clientModeImplLooper,
-                awareMetrics, rttMetrics, new WifiPowerMetrics(), mWifiP2pMetrics, mDppMetrics);
+                awareMetrics, rttMetrics, new WifiPowerMetrics(), mWifiP2pMetrics, mDppMetrics,
+                mCellularLinkLayerStatsCollector);
         // Modules interacting with Native.
         mWifiMonitor = new WifiMonitor(this);
         mHalDeviceManager = new HalDeviceManager(mClock);
@@ -237,7 +243,7 @@ public class WifiInjector {
         mWifiConfigManager = new WifiConfigManager(mContext, mClock,
                 UserManager.get(mContext), TelephonyManager.from(mContext),
                 mWifiKeyStore, mWifiConfigStore, mWifiPermissionsUtil,
-                mWifiPermissionsWrapper, new NetworkListSharedStoreData(mContext),
+                mWifiPermissionsWrapper, this, new NetworkListSharedStoreData(mContext),
                 new NetworkListUserStoreData(mContext),
                 new DeletedEphemeralSsidsStoreData(mClock), new RandomizedMacStoreData(),
                 mFrameworkFacade, mWifiCoreHandlerThread.getLooper());
@@ -248,27 +254,33 @@ public class WifiInjector {
                 new Handler(clientModeImplLooper));
         mWifiMetrics.setScoringParams(mScoringParams);
         mWifiNetworkSelector = new WifiNetworkSelector(mContext, mWifiScoreCard, mScoringParams,
-                mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiMetrics);
+                mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiMetrics, mWifiNative);
+        CompatibilityScorer compatibilityScorer = new CompatibilityScorer(mScoringParams);
+        mWifiNetworkSelector.registerCandidateScorer(compatibilityScorer);
+        ScoreCardBasedScorer scoreCardBasedScorer = new ScoreCardBasedScorer(mScoringParams);
+        mWifiNetworkSelector.registerCandidateScorer(scoreCardBasedScorer);
+        BubbleFunScorer bubbleFunScorer = new BubbleFunScorer(mScoringParams);
+        mWifiNetworkSelector.registerCandidateScorer(bubbleFunScorer);
         mWifiMetrics.setWifiNetworkSelector(mWifiNetworkSelector);
         mSavedNetworkEvaluator = new SavedNetworkEvaluator(mContext, mScoringParams,
                 mWifiConfigManager, mClock, mConnectivityLocalLog, mWifiConnectivityHelper);
         mWifiNetworkSuggestionsManager = new WifiNetworkSuggestionsManager(mContext,
                 new Handler(mWifiCoreHandlerThread.getLooper()), this,
-                mWifiPermissionsUtil, mWifiConfigManager, mWifiConfigStore);
+                mWifiPermissionsUtil, mWifiConfigManager, mWifiConfigStore, mWifiMetrics);
         mNetworkSuggestionEvaluator = new NetworkSuggestionEvaluator(mWifiNetworkSuggestionsManager,
                 mWifiConfigManager, mConnectivityLocalLog);
         mScoredNetworkEvaluator = new ScoredNetworkEvaluator(context, clientModeImplLooper,
                 mFrameworkFacade, mNetworkScoreManager, mWifiConfigManager, mConnectivityLocalLog,
                 mWifiNetworkScoreCache, mWifiPermissionsUtil);
         mCarrierNetworkEvaluator = new CarrierNetworkEvaluator(mWifiConfigManager,
-                mCarrierNetworkConfig, mConnectivityLocalLog);
+                mCarrierNetworkConfig, mConnectivityLocalLog, this);
         mSimAccessor = new SIMAccessor(mContext);
         mPasspointManager = new PasspointManager(mContext, mWifiNative, mWifiKeyStore, mClock,
                 mSimAccessor, new PasspointObjectFactory(), mWifiConfigManager, mWifiConfigStore,
                 mWifiMetrics);
         mPasspointNetworkEvaluator = new PasspointNetworkEvaluator(
                 mPasspointManager, mWifiConfigManager, mConnectivityLocalLog,
-                mCarrierNetworkConfig, TelephonyManager.from(mContext));
+                mCarrierNetworkConfig, this);
         mWifiMetrics.setPasspointManager(mPasspointManager);
         mScanRequestProxy = new ScanRequestProxy(mContext,
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
@@ -304,12 +316,12 @@ public class WifiInjector {
                 mWifiCoreHandlerThread.getLooper(),
                 new WakeupLock(mWifiConfigManager, mWifiMetrics.getWakeupMetrics(), mClock),
                 new WakeupEvaluator(mScoringParams), wakeupOnboarding, mWifiConfigManager,
-                mWifiConfigStore, mWifiMetrics.getWakeupMetrics(), this, mFrameworkFacade,
-                mClock);
+                mWifiConfigStore, mWifiNetworkSuggestionsManager, mWifiMetrics.getWakeupMetrics(),
+                this, mFrameworkFacade, mClock);
         if (mClientModeImpl != null)
             mClientModeImpl.setWifiDiagnostics(mWifiDiagnostics);
         mLockManager = new WifiLockManager(mContext, BatteryStatsService.getService(),
-                mClientModeImpl, mFrameworkFacade, clientModeImplLooper);
+                mClientModeImpl, mFrameworkFacade, clientModeImplLooper, mClock, mWifiMetrics);
         mWifiController = new WifiController(mContext, mClientModeImpl, clientModeImplLooper,
                 mSettingsStore, mWifiServiceHandlerThread.getLooper(), mFrameworkFacade,
                 mActiveModeWarden);
@@ -319,6 +331,17 @@ public class WifiInjector {
                 BatteryStatsService.getService());
         mDppManager = new DppManager(mWifiCoreHandlerThread.getLooper(), mWifiNative,
                 mWifiConfigManager, mContext, mDppMetrics);
+        mIpMemoryStore = IpMemoryStore.getMemoryStore(mContext);
+
+        // Register the various network evaluators with the network selector.
+        mWifiNetworkSelector.registerNetworkEvaluator(mSavedNetworkEvaluator);
+        mWifiNetworkSelector.registerNetworkEvaluator(mNetworkSuggestionEvaluator);
+        if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI_PASSPOINT)) {
+            mWifiNetworkSelector.registerNetworkEvaluator(mPasspointNetworkEvaluator);
+        }
+        mWifiNetworkSelector.registerNetworkEvaluator(mCarrierNetworkEvaluator);
+        mWifiNetworkSelector.registerNetworkEvaluator(mScoredNetworkEvaluator);
+
     }
 
     /**
@@ -463,6 +486,10 @@ public class WifiInjector {
         return mPasspointManager;
     }
 
+    public CarrierNetworkConfig getCarrierNetworkConfig() {
+        return mCarrierNetworkConfig;
+    }
+
     public WakeupController getWakeupController() {
         return mWakeupController;
     }
@@ -582,9 +609,7 @@ public class WifiInjector {
                 mWifiNetworkSelector, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier, mCarrierNetworkNotifier,
                 mCarrierNetworkConfig, mWifiMetrics, mWifiCoreHandlerThread.getLooper(),
-                mClock, mConnectivityLocalLog,
-                mSavedNetworkEvaluator, mScoredNetworkEvaluator, mPasspointNetworkEvaluator,
-                mNetworkSuggestionEvaluator, mCarrierNetworkEvaluator);
+                mClock, mConnectivityLocalLog);
     }
 
     /**
@@ -599,7 +624,7 @@ public class WifiInjector {
                 (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE),
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
                 mClock, this, wifiConnectivityManager, mWifiConfigManager,
-                mWifiConfigStore, mWifiPermissionsUtil);
+                mWifiConfigStore, mWifiPermissionsUtil, mWifiMetrics);
     }
 
     /**
@@ -711,5 +736,9 @@ public class WifiInjector {
 
     public WifiNetworkSuggestionsManager getWifiNetworkSuggestionsManager() {
         return mWifiNetworkSuggestionsManager;
+    }
+
+    public IpMemoryStore getIpMemoryStore() {
+        return mIpMemoryStore;
     }
 }

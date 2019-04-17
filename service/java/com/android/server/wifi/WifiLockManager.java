@@ -49,16 +49,21 @@ public class WifiLockManager {
     private static final int LOW_LATENCY_NOT_SUPPORTED     =  0;
     private static final int LOW_LATENCY_SUPPORTED         =  1;
 
+    private static final int IGNORE_SCREEN_STATE_MASK = 0x01;
+    private static final int IGNORE_WIFI_STATE_MASK   = 0x02;
+
     private int mLatencyModeSupport = LOW_LATENCY_SUPPORT_UNDEFINED;
 
     private boolean mVerboseLoggingEnabled = false;
 
+    private final Clock mClock;
     private final Context mContext;
     private final IBatteryStats mBatteryStats;
     private final FrameworkFacade mFrameworkFacade;
     private final ClientModeImpl mClientModeImpl;
     private final ActivityManager mActivityManager;
     private final ClientModeImplInterfaceHandler mCmiIfaceHandler;
+    private final WifiMetrics mWifiMetrics;
     private WifiAsyncChannel mClientModeImplChannel;
 
     private final List<WifiLock> mWifiLocks = new ArrayList<>();
@@ -66,6 +71,7 @@ public class WifiLockManager {
     private final SparseArray<UidRec> mLowLatencyUidWatchList = new SparseArray<>();
     private int mCurrentOpMode;
     private boolean mScreenOn = false;
+    private boolean mWifiConnected = false;
 
     // For shell command support
     private boolean mForceHiPerfMode = false;
@@ -76,9 +82,11 @@ public class WifiLockManager {
     private int mFullHighPerfLocksReleased;
     private int mFullLowLatencyLocksAcquired;
     private int mFullLowLatencyLocksReleased;
+    private long mCurrentSessionStartTimeMs;
 
     WifiLockManager(Context context, IBatteryStats batteryStats,
-            ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade, Looper looper) {
+            ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade, Looper looper,
+            Clock clock, WifiMetrics wifiMetrics) {
         mContext = context;
         mBatteryStats = batteryStats;
         mClientModeImpl = clientModeImpl;
@@ -86,9 +94,52 @@ public class WifiLockManager {
         mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
         mCmiIfaceHandler = new ClientModeImplInterfaceHandler(looper);
         mCurrentOpMode = WifiManager.WIFI_MODE_NO_LOCKS_HELD;
+        mClock = clock;
+        mWifiMetrics = wifiMetrics;
 
         // Register for UID fg/bg transitions
         registerUidImportanceTransitions();
+    }
+
+    // Check for conditions to activate high-perf lock
+    private boolean canActivateHighPerfLock(int ignoreMask) {
+        boolean check = true;
+
+        // Only condition is when Wifi is connected
+        if ((ignoreMask & IGNORE_WIFI_STATE_MASK) == 0) {
+            check = check && mWifiConnected;
+        }
+
+        return check;
+    }
+
+    private boolean canActivateHighPerfLock() {
+        return canActivateHighPerfLock(0);
+    }
+
+    // Check for conditions to activate low-latency lock
+    private boolean canActivateLowLatencyLock(int ignoreMask, UidRec uidRec) {
+        boolean check = true;
+
+        if ((ignoreMask & IGNORE_WIFI_STATE_MASK) == 0) {
+            check = check && mWifiConnected;
+        }
+        if ((ignoreMask & IGNORE_SCREEN_STATE_MASK) == 0) {
+            check = check && mScreenOn;
+        }
+        if (uidRec != null) {
+            check = check && uidRec.mIsFg;
+        }
+
+        return check;
+    }
+
+    private boolean canActivateLowLatencyLock(int ignoreMask) {
+        return canActivateLowLatencyLock(ignoreMask, null);
+    }
+
+    private boolean canActivateLowLatencyLock() {
+        return canActivateLowLatencyLock(0, null);
     }
 
     // Detect UIDs going foreground/background
@@ -112,9 +163,10 @@ public class WifiLockManager {
                     uidRec.mIsFg = newModeIsFg;
                     updateOpMode();
 
-                    // If screen is on, then UID either share the blame, or removed from sharing
-                    // the blame based on its state
-                    if (mScreenOn) {
+                    // If conditions for lock activation are met,
+                    // then UID either share the blame, or removed from sharing
+                    // whether to start or stop the blame based on UID fg/bg state
+                    if (canActivateLowLatencyLock()) {
                         setBlameLowLatencyUid(uid, uidRec.mIsFg);
                     }
                 });
@@ -168,7 +220,12 @@ public class WifiLockManager {
      * @return int representing the currently held (highest power consumption) lock.
      */
     public synchronized int getStrongestLockMode() {
-        // First check if mode is forced to hi-perf
+        // If Wifi Client is not connected, then all locks are not effective
+        if (!mWifiConnected) {
+            return WifiManager.WIFI_MODE_NO_LOCKS_HELD;
+        }
+
+        // Check if mode is forced to hi-perf
         if (mForceHiPerfMode) {
             return WifiManager.WIFI_MODE_FULL_HIGH_PERF;
         }
@@ -236,8 +293,11 @@ public class WifiLockManager {
         // can correctly match "nested" acquire / release pairs.
         switch(wl.mMode) {
             case WifiManager.WIFI_MODE_FULL_HIGH_PERF:
-                setBlameHiPerfWs(newWorkSource, true);
-                setBlameHiPerfWs(wl.mWorkSource, false);
+                // Shift blame to new worksource if needed
+                if (canActivateHighPerfLock()) {
+                    setBlameHiPerfWs(newWorkSource, true);
+                    setBlameHiPerfWs(wl.mWorkSource, false);
+                }
                 break;
             case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
                 addWsToLlWatchList(newWorkSource);
@@ -296,11 +356,45 @@ public class WifiLockManager {
 
         mScreenOn = screenOn;
 
-        // Update the running mode
-        updateOpMode();
+        if (canActivateLowLatencyLock(IGNORE_SCREEN_STATE_MASK)) {
+            // Update the running mode
+            updateOpMode();
+            // Adjust blaming for UIDs in foreground
+            setBlameLowLatencyWatchList(screenOn);
+        }
+    }
 
-        // Adjust blaming for UIDs in foreground
-        setBlameLowLatencyWatchList(screenOn);
+    /**
+     * Handler for Wifi Client mode state changes
+     */
+    public void updateWifiClientConnected(boolean isConnected) {
+        if (mWifiConnected == isConnected) {
+            // No need to take action
+            return;
+        }
+        mWifiConnected = isConnected;
+
+        // Adjust blaming for UIDs in foreground carrying low latency locks
+        if (canActivateLowLatencyLock(IGNORE_WIFI_STATE_MASK)) {
+            setBlameLowLatencyWatchList(mWifiConnected);
+        }
+
+        // Adjust blaming for UIDs carrying high perf locks
+        // Note that blaming is adjusted only if needed,
+        // since calling this API is reference counted
+        if (canActivateHighPerfLock(IGNORE_WIFI_STATE_MASK)) {
+            setBlameHiPerfLocks(mWifiConnected);
+        }
+
+        updateOpMode();
+    }
+
+    private void setBlameHiPerfLocks(boolean shouldBlame) {
+        for (WifiLock lock : mWifiLocks) {
+            if (lock.mMode == WifiManager.WIFI_MODE_FULL_HIGH_PERF) {
+                setBlameHiPerfWs(lock.getWorkSource(), shouldBlame);
+            }
+        }
     }
 
     private static boolean isValidLockMode(int lockMode) {
@@ -327,7 +421,7 @@ public class WifiLockManager {
                 uidRec.mIsFg = true;
             }
 
-            if (uidRec.mIsFg && mScreenOn) {
+            if (canActivateLowLatencyLock(0, uidRec)) {
                 // Share the blame for this uid
                 setBlameLowLatencyUid(uid, true);
             }
@@ -349,8 +443,10 @@ public class WifiLockManager {
         if (uidRec.mLockCount == 0) {
             mLowLatencyUidWatchList.remove(uid);
 
-            // Remove blame for this UID
-            if (uidRec.mIsFg && mScreenOn) {
+            // Remove blame for this UID if it was alerady set
+            // Note that blame needs to be stopped only if it was started before
+            // to avoid calling the API unnecessarily, since it is reference counted
+            if (canActivateLowLatencyLock(0, uidRec)) {
                 setBlameLowLatencyUid(uid, false);
             }
         }
@@ -407,7 +503,10 @@ public class WifiLockManager {
         switch(lock.mMode) {
             case WifiManager.WIFI_MODE_FULL_HIGH_PERF:
                 ++mFullHighPerfLocksAcquired;
-                setBlameHiPerfWs(lock.mWorkSource, true);
+                // Start blaming this worksource if conditions are met
+                if (canActivateHighPerfLock()) {
+                    setBlameHiPerfWs(lock.mWorkSource, true);
+                }
                 break;
             case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
                 addWsToLlWatchList(lock.getWorkSource());
@@ -436,7 +535,7 @@ public class WifiLockManager {
     private synchronized boolean releaseLock(IBinder binder) {
         WifiLock wifiLock = removeLock(binder);
         if (wifiLock == null) {
-            // attempting to release a lock that is not active.
+            // attempting to release a lock that does not exist.
             return false;
         }
 
@@ -447,11 +546,20 @@ public class WifiLockManager {
         switch(wifiLock.mMode) {
             case WifiManager.WIFI_MODE_FULL_HIGH_PERF:
                 ++mFullHighPerfLocksReleased;
-                setBlameHiPerfWs(wifiLock.mWorkSource, false);
+                mWifiMetrics.addWifiLockAcqSession(WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                        mClock.getElapsedSinceBootMillis() - wifiLock.getAcqTimestamp());
+                // Stop blaming only if blaming was set before (conditions are met).
+                // This is to avoid calling the api unncessarily, since this API is
+                // reference counted in batteryStats and statsd
+                if (canActivateHighPerfLock()) {
+                    setBlameHiPerfWs(wifiLock.mWorkSource, false);
+                }
                 break;
             case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
                 removeWsFromLlWatchList(wifiLock.getWorkSource());
                 ++mFullLowLatencyLocksReleased;
+                mWifiMetrics.addWifiLockAcqSession(WifiManager.WIFI_MODE_FULL_LOW_LATENCY,
+                        mClock.getElapsedSinceBootMillis() - wifiLock.getAcqTimestamp());
                 break;
             default:
                 // Do nothing
@@ -483,6 +591,8 @@ public class WifiLockManager {
                     Slog.e(TAG, "Failed to reset the OpMode from hi-perf to Normal");
                     return false;
                 }
+                mWifiMetrics.addWifiLockActiveSession(WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                        mClock.getElapsedSinceBootMillis() - mCurrentSessionStartTimeMs);
                 break;
 
             case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
@@ -490,6 +600,8 @@ public class WifiLockManager {
                     Slog.e(TAG, "Failed to reset the OpMode from low-latency to Normal");
                     return false;
                 }
+                mWifiMetrics.addWifiLockActiveSession(WifiManager.WIFI_MODE_FULL_LOW_LATENCY,
+                        mClock.getElapsedSinceBootMillis() - mCurrentSessionStartTimeMs);
                 break;
 
             case WifiManager.WIFI_MODE_NO_LOCKS_HELD:
@@ -508,6 +620,7 @@ public class WifiLockManager {
                     Slog.e(TAG, "Failed to set the OpMode to hi-perf");
                     return false;
                 }
+                mCurrentSessionStartTimeMs = mClock.getElapsedSinceBootMillis();
                 break;
 
             case WifiManager.WIFI_MODE_FULL_LOW_LATENCY:
@@ -515,6 +628,7 @@ public class WifiLockManager {
                     Slog.e(TAG, "Failed to set the OpMode to low-latency");
                     return false;
                 }
+                mCurrentSessionStartTimeMs = mClock.getElapsedSinceBootMillis();
                 break;
 
             case WifiManager.WIFI_MODE_NO_LOCKS_HELD:
@@ -552,20 +666,32 @@ public class WifiLockManager {
     private boolean setLowLatencyMode(boolean enabled) {
         int lowLatencySupport = getLowLatencyModeSupport();
 
-        if (lowLatencySupport == LOW_LATENCY_SUPPORTED) {
-            return mClientModeImpl.setLowLatencyMode(enabled);
-        } else if (lowLatencySupport == LOW_LATENCY_NOT_SUPPORTED) {
-            // Since low-latency mode is not supported, use power save instead
-            // Note: low-latency mode enabled ==> power-save disabled
-            if (mVerboseLoggingEnabled) {
-                Slog.d(TAG, "low-latency is not supported, using power-save instead");
-            }
-
-            return mClientModeImpl.setPowerSave(!enabled);
-        } else {
-            // Support undefined, no need to attempt either functions
+        if (lowLatencySupport == LOW_LATENCY_SUPPORT_UNDEFINED) {
+            // Support undefined, no action is taken
             return false;
         }
+
+        if (lowLatencySupport == LOW_LATENCY_SUPPORTED) {
+            if (!mClientModeImpl.setLowLatencyMode(enabled)) {
+                Slog.e(TAG, "Failed to set low latency mode");
+                return false;
+            }
+
+            if (!mClientModeImpl.setPowerSave(!enabled)) {
+                Slog.e(TAG, "Failed to set power save mode");
+                // Revert the low latency mode
+                mClientModeImpl.setLowLatencyMode(!enabled);
+                return false;
+            }
+        } else if (lowLatencySupport == LOW_LATENCY_NOT_SUPPORTED) {
+            // Only set power save mode
+            if (!mClientModeImpl.setPowerSave(!enabled)) {
+                Slog.e(TAG, "Failed to set power save mode");
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private synchronized WifiLock findLockByBinder(IBinder binder) {
@@ -589,10 +715,10 @@ public class WifiLockManager {
         return uidCount;
     }
 
-    private void setBlameHiPerfWs(WorkSource ws, boolean blame) {
+    private void setBlameHiPerfWs(WorkSource ws, boolean shouldBlame) {
         long ident = Binder.clearCallingIdentity();
         try {
-            if (blame) {
+            if (shouldBlame) {
                 mBatteryStats.noteFullWifiLockAcquiredFromSource(ws);
                 StatsLog.write(StatsLog.WIFI_LOCK_STATE_CHANGED, ws,
                         StatsLog.WIFI_LOCK_STATE_CHANGED__STATE__ON,
@@ -610,10 +736,10 @@ public class WifiLockManager {
         }
     }
 
-    private void setBlameLowLatencyUid(int uid, boolean blame) {
+    private void setBlameLowLatencyUid(int uid, boolean shouldBlame) {
         long ident = Binder.clearCallingIdentity();
         try {
-            if (blame) {
+            if (shouldBlame) {
                 mBatteryStats.noteFullWifiLockAcquired(uid);
                 StatsLog.write_non_chained(StatsLog.WIFI_LOCK_STATE_CHANGED, uid, null,
                         StatsLog.WIFI_LOCK_STATE_CHANGED__STATE__ON,
@@ -631,11 +757,14 @@ public class WifiLockManager {
         }
     }
 
-    private void setBlameLowLatencyWatchList(boolean blame) {
+    private void setBlameLowLatencyWatchList(boolean shouldBlame) {
         for (int idx = 0; idx < mLowLatencyUidWatchList.size(); idx++) {
             UidRec uidRec = mLowLatencyUidWatchList.valueAt(idx);
+            // Affect the blame for only UIDs running in foreground
+            // UIDs running in the background are already not blamed,
+            // and they should remain in that state.
             if (uidRec.mIsFg) {
-                setBlameLowLatencyUid(uidRec.mUid, blame);
+                setBlameLowLatencyUid(uidRec.mUid, shouldBlame);
             }
         }
     }
@@ -709,6 +838,7 @@ public class WifiLockManager {
         IBinder mBinder;
         int mMode;
         WorkSource mWorkSource;
+        long mAcqTimestamp;
 
         WifiLock(int lockMode, String tag, IBinder binder, WorkSource ws) {
             mTag = tag;
@@ -716,6 +846,7 @@ public class WifiLockManager {
             mUid = Binder.getCallingUid();
             mMode = lockMode;
             mWorkSource = ws;
+            mAcqTimestamp = mClock.getElapsedSinceBootMillis();
             try {
                 mBinder.linkToDeath(this, 0);
             } catch (RemoteException e) {
@@ -733,6 +864,10 @@ public class WifiLockManager {
 
         protected IBinder getBinder() {
             return mBinder;
+        }
+
+        protected long getAcqTimestamp() {
+            return mAcqTimestamp;
         }
 
         public void binderDied() {

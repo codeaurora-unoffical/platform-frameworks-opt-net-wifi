@@ -21,6 +21,7 @@ import android.annotation.Nullable;
 import android.content.Context;
 import android.net.IpMemoryStore;
 import android.net.ipmemorystore.Blob;
+import android.net.ipmemorystore.Status;
 import android.util.Log;
 
 import com.android.internal.util.Preconditions;
@@ -33,7 +34,7 @@ import java.util.Objects;
  */
 final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
     private static final String TAG = "WifiMemoryStoreImpl";
-    private static final boolean DBG = true; // TODO change to false
+    private static final boolean DBG = true;
 
     // The id of the client that stored this data
     public static final String WIFI_FRAMEWORK_IP_MEMORY_STORE_CLIENT_ID = "com.android.server.wifi";
@@ -43,21 +44,35 @@ final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
 
     @NonNull private final Context mContext;
     @NonNull private final WifiScoreCard mWifiScoreCard;
+    @NonNull private final WifiInjector mWifiInjector;
     @Nullable private IpMemoryStore mIpMemoryStore;
 
-    MemoryStoreImpl(Context context, WifiScoreCard wifiScoreCard) {
+    MemoryStoreImpl(Context context, WifiInjector wifiInjector, WifiScoreCard wifiScoreCard) {
         mContext = Preconditions.checkNotNull(context);
         mWifiScoreCard = Preconditions.checkNotNull(wifiScoreCard);
+        mWifiInjector = Preconditions.checkNotNull(wifiInjector);
         mIpMemoryStore = null;
     }
 
+    private boolean mBroken = false;
+    private void handleException(Exception e) {
+        Log.wtf(TAG, "Exception using IpMemoryStore - disabling WifiScoreReport persistence", e);
+        mBroken = true;
+    }
+
+
     @Override
     public void read(final String key, final BlobListener blobListener) {
-        mIpMemoryStore.retrieveBlob(
-                key,
-                WIFI_FRAMEWORK_IP_MEMORY_STORE_CLIENT_ID,
-                WIFI_FRAMEWORK_IP_MEMORY_STORE_DATA_NAME,
-                new CatchAFallingBlob(key, blobListener));
+        if (mBroken) return;
+        try {
+            mIpMemoryStore.retrieveBlob(
+                    key,
+                    WIFI_FRAMEWORK_IP_MEMORY_STORE_CLIENT_ID,
+                    WIFI_FRAMEWORK_IP_MEMORY_STORE_DATA_NAME,
+                    new CatchAFallingBlob(key, blobListener));
+        } catch (RuntimeException e) {
+            handleException(e);
+        }
     }
 
     /**
@@ -68,8 +83,7 @@ final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
      *
      */
     private static class CatchAFallingBlob
-            extends android.net.ipmemorystore.IOnBlobRetrievedListener.Default
-            implements android.net.ipmemorystore.IOnBlobRetrievedListener {
+            implements android.net.ipmemorystore.OnBlobRetrievedListener {
         private final String mL2Key;
         private final WifiScoreCard.BlobListener mBlobListener;
 
@@ -79,13 +93,7 @@ final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
         }
 
         @Override
-        public void onBlobRetrieved(
-                android.net.ipmemorystore.StatusParcelable statusParcelable,
-                String l2Key,
-                String name,
-                Blob data) {
-            android.net.ipmemorystore.Status status =
-                    new android.net.ipmemorystore.Status(statusParcelable);
+        public void onBlobRetrieved(Status status, String l2Key, String name, Blob data) {
             if (!Objects.equals(mL2Key, l2Key)) {
                 throw new IllegalArgumentException("l2Key does not match request");
             }
@@ -104,14 +112,19 @@ final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
 
     @Override
     public void write(String key, byte[] value) {
+        if (mBroken) return;
         final Blob blob = new Blob();
         blob.data = value;
-        mIpMemoryStore.storeBlob(
-                key,
-                WIFI_FRAMEWORK_IP_MEMORY_STORE_CLIENT_ID,
-                WIFI_FRAMEWORK_IP_MEMORY_STORE_DATA_NAME,
-                blob,
-                null /* no listener for now, just fire and forget */);
+        try {
+            mIpMemoryStore.storeBlob(
+                    key,
+                    WIFI_FRAMEWORK_IP_MEMORY_STORE_CLIENT_ID,
+                    WIFI_FRAMEWORK_IP_MEMORY_STORE_DATA_NAME,
+                    blob,
+                    null /* no listener for now, just fire and forget */);
+        } catch (RuntimeException e) {
+            handleException(e);
+        }
     }
 
     /**
@@ -121,7 +134,7 @@ final class MemoryStoreImpl implements WifiScoreCard.MemoryStore {
         if (mIpMemoryStore != null) {
             Log.w(TAG, "Reconnecting to IpMemoryStore service");
         }
-        mIpMemoryStore = (IpMemoryStore) mContext.getSystemService(Context.IP_MEMORY_STORE_SERVICE);
+        mIpMemoryStore = mWifiInjector.getIpMemoryStore();
         if (mIpMemoryStore == null) {
             Log.e(TAG, "No IpMemoryStore service!");
             return;

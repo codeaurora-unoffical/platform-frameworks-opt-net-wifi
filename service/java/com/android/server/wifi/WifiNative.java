@@ -37,6 +37,7 @@ import android.util.SparseArray;
 
 import com.android.internal.annotations.Immutable;
 import com.android.internal.util.HexDump;
+import com.android.server.connectivity.tethering.TetheringConfiguration;
 import com.android.server.net.BaseNetworkObserver;
 import com.android.server.wifi.util.FrameParser;
 import com.android.server.wifi.util.NativeUtil;
@@ -58,6 +59,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
@@ -141,6 +143,8 @@ public class WifiNative {
         public InterfaceCallback externalListener;
         /** Network observer registered for this interface */
         public NetworkObserverInternal networkObserver;
+        /** Interface feature set / capabilities */
+        public long featureSet;
 
         Iface(int id, @Iface.IfaceType int type) {
             this.id = id;
@@ -935,16 +939,13 @@ public class WifiNative {
             Log.e(TAG, "FST interface already added");
             return false;
         }
-        String defaultFstInterfaceName = "bond0"; // interface used for fst
-        String fstInterfaceName = SystemProperties.get("persist.vendor.fst.data.interface",
-                defaultFstInterfaceName);
 
         fstIface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_FST);
         if (fstIface == null) {
             Log.e(TAG, "Failed to allocate FST interface");
             return false;
         }
-        fstIface.name = fstInterfaceName;
+        fstIface.name = TetheringConfiguration.getFstInterfaceName();
         fstIface.externalListener = iface.externalListener;
         iface.externalListener = new InterfaceCallback() {
             public void onDestroyed(String ifaceName) {
@@ -1060,6 +1061,8 @@ public class WifiNative {
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             initializeNwParamsForClientInterface(iface.name);
             Log.i(TAG, "Successfully setup " + iface);
+
+            iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             return iface.name;
         }
     }
@@ -1111,6 +1114,8 @@ public class WifiNative {
             // update the interface state before we exit.
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             Log.i(TAG, "Successfully setup " + iface);
+
+            iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             return iface.name;
         }
     }
@@ -1171,6 +1176,8 @@ public class WifiNative {
             // update the interface state before we exit.
             onInterfaceStateChanged(iface, isInterfaceUp(iface.name));
             Log.i(TAG, "Successfully setup " + iface);
+
+            iface.featureSet = getSupportedFeatureSetInternal(iface.name);
             return iface.name;
         }
     }
@@ -1426,7 +1433,7 @@ public class WifiNative {
      */
     public boolean scan(
             @NonNull String ifaceName, int scanType, Set<Integer> freqs,
-            Set<String> hiddenNetworkSSIDs) {
+            List<String> hiddenNetworkSSIDs) {
         return mWificondControl.scan(ifaceName, scanType, freqs, hiddenNetworkSSIDs);
     }
 
@@ -2807,6 +2814,24 @@ public class WifiNative {
      * @return bitmask defined by WifiManager.WIFI_FEATURE_*
      */
     public long getSupportedFeatureSet(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            Iface iface = mIfaceMgr.getIface(ifaceName);
+            if (iface == null) {
+                Log.e(TAG, "Could not get Iface object for interface " + ifaceName);
+                return 0;
+            }
+
+            return iface.featureSet;
+        }
+    }
+
+    /**
+     * Get the supported features
+     *
+     * @param ifaceName Name of the interface.
+     * @return bitmask defined by WifiManager.WIFI_FEATURE_*
+     */
+    private long getSupportedFeatureSetInternal(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.getAdvancedKeyMgmtCapabilities(ifaceName)
                 | mWifiVendorHal.getSupportedFeatureSet(ifaceName);
     }

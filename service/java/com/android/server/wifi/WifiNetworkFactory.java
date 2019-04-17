@@ -56,6 +56,7 @@ import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.wifi.nano.WifiMetricsProto;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -63,6 +64,7 @@ import com.android.server.wifi.util.WifiPermissionsUtil;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -92,6 +94,9 @@ public class WifiNetworkFactory extends NetworkFactory {
     @VisibleForTesting
     public static final String UI_START_INTENT_EXTRA_APP_NAME =
             "com.android.settings.wifi.extra.APP_NAME";
+    @VisibleForTesting
+    public static final String UI_START_INTENT_EXTRA_REQUEST_IS_FOR_SINGLE_NETWORK =
+            "com.android.settings.wifi.extra.REQUEST_IS_FOR_SINGLE_NETWORK";
 
     private final Context mContext;
     private final ActivityManager mActivityManager;
@@ -104,6 +109,7 @@ public class WifiNetworkFactory extends NetworkFactory {
     private final WifiConfigManager mWifiConfigManager;
     private final WifiConfigStore mWifiConfigStore;
     private final WifiPermissionsUtil mWifiPermissionsUtil;
+    private final WifiMetrics mWifiMetrics;
     private final WifiScanner.ScanSettings mScanSettings;
     private final NetworkFactoryScanListener mScanListener;
     private final PeriodicScanAlarmListener mPeriodicScanTimerListener;
@@ -132,6 +138,8 @@ public class WifiNetworkFactory extends NetworkFactory {
     private boolean mPeriodicScanTimerSet = false;
     private boolean mConnectionTimeoutSet = false;
     private boolean mIsPeriodicScanPaused = false;
+    // We sent a new connection request and are waiting for connection success.
+    private boolean mPendingConnectionSuccess = false;
     private boolean mWifiEnabled = false;
     /**
      * Indicates that we have new data to serialize.
@@ -220,6 +228,12 @@ public class WifiNetworkFactory extends NetworkFactory {
             }
             List<ScanResult> matchedScanResults =
                     getNetworksMatchingActiveNetworkRequest(scanResults);
+            if (mActiveMatchedScanResults == null) {
+                // only note the first match size in metrics (chances of this changing in further
+                // scans is pretty low)
+                mWifiMetrics.incrementNetworkRequestApiMatchSizeHistogram(
+                        matchedScanResults.size());
+            }
             mActiveMatchedScanResults = matchedScanResults;
 
             ScanResult approvedScanResult = null;
@@ -234,6 +248,7 @@ public class WifiNetworkFactory extends NetworkFactory {
                         + "Triggering connect " + approvedScanResult);
                 handleConnectToNetworkUserSelectionInternal(
                         ScanResultUtil.createNetworkFromScanResult(approvedScanResult));
+                mWifiMetrics.incrementNetworkRequestApiNumUserApprovalBypass();
                 // TODO (b/122658039): Post notification.
             } else {
                 if (mVerboseLoggingEnabled) {
@@ -357,7 +372,8 @@ public class WifiNetworkFactory extends NetworkFactory {
                               WifiConnectivityManager connectivityManager,
                               WifiConfigManager configManager,
                               WifiConfigStore configStore,
-                              WifiPermissionsUtil wifiPermissionsUtil) {
+                              WifiPermissionsUtil wifiPermissionsUtil,
+                              WifiMetrics wifiMetrics) {
         super(looper, context, TAG, nc);
         mContext = context;
         mActivityManager = activityManager;
@@ -370,6 +386,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         mWifiConfigManager = configManager;
         mWifiConfigStore = configStore;
         mWifiPermissionsUtil = wifiPermissionsUtil;
+        mWifiMetrics = wifiMetrics;
         // Create the scan settings.
         mScanSettings = new WifiScanner.ScanSettings();
         mScanSettings.type = WifiScanner.TYPE_HIGH_ACCURACY;
@@ -573,6 +590,7 @@ public class WifiNetworkFactory extends NetworkFactory {
             mActiveSpecificNetworkRequestSpecifier = new WifiNetworkSpecifier(
                     wns.ssidPatternMatcher, wns.bssidPatternMatcher, wns.wifiConfiguration,
                     wns.requestorUid, wns.requestorPackageName);
+            mWifiMetrics.incrementNetworkRequestApiNumRequest();
 
             // Start UI to let the user grant/disallow this request from the app.
             startUi();
@@ -698,6 +716,9 @@ public class WifiNetworkFactory extends NetworkFactory {
         // necessary checks when processing CONNECT_NETWORK.
         int networkId = addNetworkToWifiConfigManager(network);
 
+        mWifiMetrics.setNominatorForNetwork(networkId,
+                WifiMetricsProto.ConnectionEvent.NOMINATOR_SPECIFIER);
+
         // Send the connect request to ClientModeImpl.
         // TODO(b/117601161): Refactor this.
         Message msg = Message.obtain();
@@ -719,12 +740,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         WifiConfiguration networkToConnect =
                 new WifiConfiguration(mActiveSpecificNetworkRequestSpecifier.wifiConfiguration);
         networkToConnect.SSID = network.SSID;
-        // If the request is for a specific SSID and BSSID, then set WifiConfiguration.BSSID field
-        // to prevent roaming.
-        if (isActiveRequestForSingleAccessPoint()) {
-            networkToConnect.BSSID =
-                    mActiveSpecificNetworkRequestSpecifier.bssidPatternMatcher.first.toString();
-        }
+        // Set the WifiConfiguration.BSSID field to prevent roaming.
+        networkToConnect.BSSID = findBestBssidFromActiveMatchedScanResultsForNetwork(network);
         // Mark the network ephemeral so that it's automatically removed at the end of connection.
         networkToConnect.ephemeral = true;
         networkToConnect.fromWifiNetworkSpecifier = true;
@@ -734,6 +751,8 @@ public class WifiNetworkFactory extends NetworkFactory {
 
         // Trigger connection to the network.
         connectToNetwork(networkToConnect);
+        // Triggered connection to network, now wait for the connection status.
+        mPendingConnectionSuccess = true;
     }
 
     private void handleConnectToNetworkUserSelection(WifiConfiguration network) {
@@ -752,6 +771,7 @@ public class WifiNetworkFactory extends NetworkFactory {
     private void handleRejectUserSelection() {
         Log.w(TAG, "User dismissed notification, cancelling " + mActiveSpecificNetworkRequest);
         teardownForActiveRequest();
+        mWifiMetrics.incrementNetworkRequestApiNumUserReject();
     }
 
     private boolean isUserSelectedNetwork(WifiConfiguration config) {
@@ -781,7 +801,10 @@ public class WifiNetworkFactory extends NetworkFactory {
      * Invoked by {@link ClientModeImpl} on successful connection to a network.
      */
     private void handleNetworkConnectionSuccess(@NonNull WifiConfiguration connectedNetwork) {
-        if (mUserSelectedNetwork == null || connectedNetwork == null) return;
+        if (mUserSelectedNetwork == null || connectedNetwork == null
+                || !mPendingConnectionSuccess) {
+            return;
+        }
         if (!isUserSelectedNetwork(connectedNetwork)) {
             Log.w(TAG, "Connected to unknown network " + connectedNetwork + ". Ignoring...");
             return;
@@ -797,13 +820,16 @@ public class WifiNetworkFactory extends NetworkFactory {
         }
         // transition the request from "active" to "connected".
         setupForConnectedRequest();
+        mWifiMetrics.incrementNetworkRequestApiNumConnectSuccess();
     }
 
     /**
      * Invoked by {@link ClientModeImpl} on failure to connect to a network.
      */
     private void handleNetworkConnectionFailure(@NonNull WifiConfiguration failedNetwork) {
-        if (mUserSelectedNetwork == null || failedNetwork == null) return;
+        if (mUserSelectedNetwork == null || failedNetwork == null || !mPendingConnectionSuccess) {
+            return;
+        }
         if (!isUserSelectedNetwork(failedNetwork)) {
             Log.w(TAG, "Connection failed to unknown network " + failedNetwork + ". Ignoring...");
             return;
@@ -888,6 +914,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         mUserSelectedNetworkConnectRetryCount = 0;
         mIsPeriodicScanPaused = false;
         mActiveMatchedScanResults = null;
+        mPendingConnectionSuccess = false;
         // Cancel periodic scan, connection timeout alarm.
         cancelPeriodicScans();
         cancelConnectionTimeout();
@@ -917,6 +944,7 @@ public class WifiNetworkFactory extends NetworkFactory {
         mConnectedSpecificNetworkRequestSpecifier = mActiveSpecificNetworkRequestSpecifier;
         mActiveSpecificNetworkRequest = null;
         mActiveSpecificNetworkRequestSpecifier = null;
+        mPendingConnectionSuccess = false;
         // Cancel connection timeout alarm.
         cancelConnectionTimeout();
     }
@@ -1110,6 +1138,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra(UI_START_INTENT_EXTRA_APP_NAME,
                 getAppName(mActiveSpecificNetworkRequestSpecifier.requestorPackageName));
+        intent.putExtra(UI_START_INTENT_EXTRA_REQUEST_IS_FOR_SINGLE_NETWORK,
+                isActiveRequestForSingleNetwork());
         mContext.startActivityAsUser(intent, UserHandle.getUserHandleForUid(
                 mActiveSpecificNetworkRequestSpecifier.requestorUid));
     }
@@ -1129,6 +1159,50 @@ public class WifiNetworkFactory extends NetworkFactory {
             return false;
         }
         return true;
+    }
+
+    // Helper method to determine if the specifier does not contain any patterns and matches
+    // a single network.
+    private boolean isActiveRequestForSingleNetwork() {
+        if (mActiveSpecificNetworkRequestSpecifier == null) return false;
+
+        if (mActiveSpecificNetworkRequestSpecifier.ssidPatternMatcher.getType()
+                == PatternMatcher.PATTERN_LITERAL) {
+            return true;
+        }
+        if (Objects.equals(
+                mActiveSpecificNetworkRequestSpecifier.bssidPatternMatcher.second,
+                MacAddress.BROADCAST_ADDRESS)) {
+            return true;
+        }
+        return false;
+    }
+
+    // Will return the best bssid to use for the current request's connection.
+    //
+    // Note: This will never return null, unless there is some internal error.
+    // For ex:
+    // i) The latest scan results were empty.
+    // ii) The latest scan result did not contain any BSSID for the SSID user chose.
+    private @Nullable String findBestBssidFromActiveMatchedScanResultsForNetwork(
+            @NonNull WifiConfiguration network) {
+        if (mActiveSpecificNetworkRequestSpecifier == null
+                || mActiveMatchedScanResults == null) return null;
+        ScanResult selectedScanResult = mActiveMatchedScanResults
+                .stream()
+                .filter(scanResult -> Objects.equals(
+                        ScanResultMatchInfo.fromScanResult(scanResult),
+                        ScanResultMatchInfo.fromWifiConfiguration(network)))
+                .max(Comparator.comparing(scanResult -> scanResult.level))
+                .orElse(null);
+        if (selectedScanResult == null) { // Should never happen.
+            Log.wtf(TAG, "Expected to find at least one matching scan result");
+            return null;
+        }
+        if (mVerboseLoggingEnabled) {
+            Log.v(TAG, "Best bssid selected for the request " + selectedScanResult);
+        }
+        return selectedScanResult.BSSID;
     }
 
     private @Nullable ScanResult
@@ -1183,6 +1257,8 @@ public class WifiNetworkFactory extends NetworkFactory {
         if (approvedAccessPoints == null) {
             approvedAccessPoints = new HashSet<>();
             mUserApprovedAccessPointMap.put(requestorPackageName, approvedAccessPoints);
+            // Note the new app in metrics.
+            mWifiMetrics.incrementNetworkRequestApiNumApps();
         }
         if (mVerboseLoggingEnabled) {
             Log.v(TAG, "Adding " + newUserApprovedAccessPoints

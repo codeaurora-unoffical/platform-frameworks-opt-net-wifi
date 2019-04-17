@@ -65,9 +65,9 @@ import android.net.Uri;
 import android.net.ip.IpClientUtil;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.INetworkRequestMatchCallback;
+import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.ITrafficStateCallback;
-import android.net.wifi.IWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiActivityEnergyInfo;
 import android.net.wifi.WifiConfiguration;
@@ -660,15 +660,23 @@ public class WifiServiceImpl extends BaseWifiService {
         }
     }
 
+    public void handleBootCompleted() {
+        Log.d(TAG, "Handle boot completed");
+        mClientModeImpl.handleBootCompleted();
+    }
+
     public void handleUserSwitch(int userId) {
+        Log.d(TAG, "Handle user switch " + userId);
         mClientModeImpl.handleUserSwitch(userId);
     }
 
     public void handleUserUnlock(int userId) {
+        Log.d(TAG, "Handle user unlock " + userId);
         mClientModeImpl.handleUserUnlock(userId);
     }
 
     public void handleUserStop(int userId) {
+        Log.d(TAG, "Handle user stop " + userId);
         mClientModeImpl.handleUserStop(userId);
     }
 
@@ -935,16 +943,29 @@ public class WifiServiceImpl extends BaseWifiService {
      */
     @Override
     public synchronized boolean setWifiEnabled(String packageName, boolean enable) {
-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.CHANGE_WIFI_STATE,
-                "WifiService");
-        // only privileged apps like settings, setup wizard, etc can toggle wifi.
-        if (!isPrivileged(Binder.getCallingPid(), Binder.getCallingUid())
-                // Default car dock app is allowed to turn on wifi (but, cannot turn off)
-                && !(isDefaultCarDock(packageName) && enable)) {
+        if (enforceChangePermission(packageName) != MODE_ALLOWED) {
+            return false;
+        }
+        boolean isPrivileged = isPrivileged(Binder.getCallingPid(), Binder.getCallingUid());
+        if (!isPrivileged
+                && !mWifiPermissionsUtil.isTargetSdkLessThan(packageName, Build.VERSION_CODES.Q)) {
             mLog.info("setWifiEnabled not allowed for uid=%")
                     .c(Binder.getCallingUid()).flush();
             return false;
         }
+        // If Airplane mode is enabled, only privileged apps are allowed to toggle Wifi
+        if (mSettingsStore.isAirplaneModeOn() && !isPrivileged) {
+            mLog.err("setWifiEnabled in Airplane mode: only Settings can toggle wifi").flush();
+            return false;
+        }
+
+        // If SoftAp is enabled, only privileged apps are allowed to toggle wifi
+        boolean apEnabled = mWifiApState == WifiManager.WIFI_AP_STATE_ENABLED;
+        if (apEnabled && !isPrivileged) {
+            mLog.err("setWifiEnabled SoftAp enabled: only Settings can toggle wifi").flush();
+            return false;
+        }
+
         mLog.info("setWifiEnabled package=% uid=% enable=%").c(packageName)
                 .c(Binder.getCallingUid()).c(enable).flush();
         long ident = Binder.clearCallingIdentity();
@@ -2865,6 +2886,9 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
             }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
         } else {
+            // Polls link layer stats and RSSI. This allows the stats to show up in
+            // WifiScoreReport's dump() output when taking a bug report even if the screen is off.
+            mClientModeImpl.updateLinkLayerStatsRssiAndScoreReport();
             pw.println("Wi-Fi is " + mClientModeImpl.syncGetWifiStateByName());
             pw.println("Verbose logging is " + (mVerboseLoggingEnabled ? "on" : "off"));
             pw.println("Stay-awake conditions: " +
@@ -3047,6 +3071,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 mWifiInjector.getWifiConfigManager().clearDeletedEphemeralNetworks();
                 mClientModeImpl.clearNetworkRequestUserApprovedAccessPoints();
                 mWifiNetworkSuggestionsManager.clear();
+                mWifiInjector.getWifiScoreCard().clear();
             });
         }
     }
@@ -3360,11 +3385,12 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("addNetworkSuggestions uid=%").c(Binder.getCallingUid()).flush();
         }
+        int callingUid = Binder.getCallingUid();
         Mutable<Integer> success = new Mutable<>();
         boolean runWithScissorsSuccess = mWifiInjector.getClientModeImplHandler().runWithScissors(
                 () -> {
                     success.value = mWifiNetworkSuggestionsManager.add(
-                            networkSuggestions, callingPackageName);
+                            networkSuggestions, callingUid, callingPackageName);
                 }, RUN_WITH_SCISSORS_TIMEOUT_MILLIS);
         if (!runWithScissorsSuccess) {
             Log.e(TAG, "Failed to post runnable to add network suggestions");
@@ -3779,21 +3805,21 @@ public class WifiServiceImpl extends BaseWifiService {
     }
 
     /**
-     * see {@link android.net.wifi.WifiManager#addWifiUsabilityStatsListener(Executor,
-     * WifiUsabilityStatsListener)}
+     * see {@link android.net.wifi.WifiManager#addOnWifiUsabilityStatsListener(Executor,
+     * OnWifiUsabilityStatsListener)}
      *
      * @param binder IBinder instance to allow cleanup if the app dies
      * @param listener WifiUsabilityStatsEntry listener to add
      * @param listenerIdentifier Unique ID of the adding listener. This ID will be used to
-     *        remove the listener. See {@link removeWifiUsabilityStatsListener(int)}
+     *        remove the listener. See {@link removeOnWifiUsabilityStatsListener(int)}
      *
      * @throws SecurityException if the caller does not have permission to add a listener
      * @throws RemoteException if remote exception happens
      * @throws IllegalArgumentException if the arguments are null or invalid
      */
     @Override
-    public void addWifiUsabilityStatsListener(IBinder binder,
-            IWifiUsabilityStatsListener listener, int listenerIdentifier) {
+    public void addOnWifiUsabilityStatsListener(IBinder binder,
+            IOnWifiUsabilityStatsListener listener, int listenerIdentifier) {
         // verify arguments
         if (binder == null) {
             throw new IllegalArgumentException("Binder must not be null");
@@ -3804,34 +3830,34 @@ public class WifiServiceImpl extends BaseWifiService {
         mContext.enforceCallingPermission(
                 android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
         if (mVerboseLoggingEnabled) {
-            mLog.info("addWifiUsabilityStatsListener uid=%")
+            mLog.info("addOnWifiUsabilityStatsListener uid=%")
                 .c(Binder.getCallingUid()).flush();
         }
         // Post operation to handler thread
         mWifiInjector.getClientModeImplHandler().post(() -> {
-            mWifiMetrics.addWifiUsabilityListener(binder, listener, listenerIdentifier);
+            mWifiMetrics.addOnWifiUsabilityListener(binder, listener, listenerIdentifier);
         });
     }
 
     /**
-     * see {@link android.net.wifi.WifiManager#removeWifiUsabilityStatsListener(
-     * WifiUsabilityStatsListener)}
+     * see {@link android.net.wifi.WifiManager#removeOnWifiUsabilityStatsListener(
+     * OnWifiUsabilityStatsListener)}
      *
      * @param listenerIdentifier Unique ID of the listener to be removed.
      *
      * @throws SecurityException if the caller does not have permission to add a listener
      */
     @Override
-    public void removeWifiUsabilityStatsListener(int listenerIdentifier) {
+    public void removeOnWifiUsabilityStatsListener(int listenerIdentifier) {
         mContext.enforceCallingPermission(
                 android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
         if (mVerboseLoggingEnabled) {
-            mLog.info("removeWifiUsabilityStatsListener uid=%")
+            mLog.info("removeOnWifiUsabilityStatsListener uid=%")
                     .c(Binder.getCallingUid()).flush();
         }
         // Post operation to handler thread
         mWifiInjector.getClientModeImplHandler().post(() -> {
-            mWifiMetrics.removeWifiUsabilityListener(listenerIdentifier);
+            mWifiMetrics.removeOnWifiUsabilityListener(listenerIdentifier);
         });
     }
 
@@ -3839,7 +3865,7 @@ public class WifiServiceImpl extends BaseWifiService {
      * Updates the Wi-Fi usability score.
      * @param seqNum Sequence number of the Wi-Fi usability score.
      * @param score The Wi-Fi usability score.
-     * @param predictionHorizonSec Prediction horizon of the Wi-Fi usability score.
+     * @param predictionHorizonSec Prediction horizon of the Wi-Fi usability score in second.
      */
     @Override
     public void updateWifiUsabilityScore(int seqNum, int score, int predictionHorizonSec) {
@@ -3847,7 +3873,7 @@ public class WifiServiceImpl extends BaseWifiService {
                 android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE, "WifiService");
 
         if (mVerboseLoggingEnabled) {
-            mLog.info("updateWifiUsability uid=% seqNum=% score=% predictionHorizonSec=%")
+            mLog.info("updateWifiUsabilityScore uid=% seqNum=% score=% predictionHorizonSec=%")
                     .c(Binder.getCallingUid())
                     .c(seqNum)
                     .c(score)
