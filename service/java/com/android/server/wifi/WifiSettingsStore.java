@@ -113,11 +113,11 @@ public class WifiSettingsStore {
             // Wifi disabled due to airplane on
             if (mPersistWifiState == WIFI_ENABLED) {
                 persistWifiState(WIFI_DISABLED_AIRPLANE_ON);
-                setWifiSavedState(WIFI_ENABLED);
             }
         } else {
             /* On airplane mode disable, restore wifi state if necessary */
             if (testAndClearWifiSavedState() ||
+                    mPersistWifiState == WIFI_DISABLED_AIRPLANE_ON ||
                     mPersistWifiState == WIFI_ENABLED_AIRPLANE_OVERRIDE) {
                 persistWifiState(WIFI_ENABLED);
             }
