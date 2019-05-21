@@ -20,9 +20,8 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
+import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
-import android.os.Message;
 import android.os.RemoteException;
 import android.os.WorkSource;
 import android.os.WorkSource.WorkChain;
@@ -31,9 +30,6 @@ import android.util.SparseArray;
 import android.util.StatsLog;
 
 import com.android.internal.app.IBatteryStats;
-import com.android.internal.util.AsyncChannel;
-import com.android.server.wifi.util.WifiAsyncChannel;
-import com.android.server.wifi.util.WifiHandler;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -62,9 +58,9 @@ public class WifiLockManager {
     private final FrameworkFacade mFrameworkFacade;
     private final ClientModeImpl mClientModeImpl;
     private final ActivityManager mActivityManager;
-    private final ClientModeImplInterfaceHandler mCmiIfaceHandler;
+    private final Handler mHandler;
     private final WifiMetrics mWifiMetrics;
-    private WifiAsyncChannel mClientModeImplChannel;
+    private final WifiNative mWifiNative;
 
     private final List<WifiLock> mWifiLocks = new ArrayList<>();
     // map UIDs to their corresponding records (for low-latency locks)
@@ -85,15 +81,16 @@ public class WifiLockManager {
     private long mCurrentSessionStartTimeMs;
 
     WifiLockManager(Context context, IBatteryStats batteryStats,
-            ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade, Looper looper,
-            Clock clock, WifiMetrics wifiMetrics) {
+            ClientModeImpl clientModeImpl, FrameworkFacade frameworkFacade, Handler handler,
+            WifiNative wifiNative, Clock clock, WifiMetrics wifiMetrics) {
         mContext = context;
         mBatteryStats = batteryStats;
         mClientModeImpl = clientModeImpl;
         mFrameworkFacade = frameworkFacade;
         mActivityManager = (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE);
-        mCmiIfaceHandler = new ClientModeImplInterfaceHandler(looper);
         mCurrentOpMode = WifiManager.WIFI_MODE_NO_LOCKS_HELD;
+        mWifiNative = wifiNative;
+        mHandler = handler;
         mClock = clock;
         mWifiMetrics = wifiMetrics;
 
@@ -147,7 +144,7 @@ public class WifiLockManager {
         mActivityManager.addOnUidImportanceListener(new ActivityManager.OnUidImportanceListener() {
             @Override
             public void onUidImportance(final int uid, final int importance) {
-                mCmiIfaceHandler.post(() -> {
+                mHandler.post(() -> {
                     UidRec uidRec = mLowLatencyUidWatchList.get(uid);
                     if (uidRec == null) {
                         // Not a uid in the watch list
@@ -177,8 +174,7 @@ public class WifiLockManager {
     /**
      * Method allowing a calling app to acquire a Wifi WakeLock in the supplied mode.
      *
-     * This method verifies that the caller has permission to make the call and that the lock mode
-     * is a valid WifiLock mode.
+     * This method checks that the lock mode is a valid WifiLock mode.
      * @param lockMode int representation of the Wifi WakeLock type.
      * @param tag String passed to WifiManager.WifiLock
      * @param binder IBinder for the calling app
@@ -187,28 +183,25 @@ public class WifiLockManager {
      * @return true if the lock was successfully acquired, false if the lockMode was invalid.
      */
     public boolean acquireWifiLock(int lockMode, String tag, IBinder binder, WorkSource ws) {
-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.WAKE_LOCK, null);
         if (!isValidLockMode(lockMode)) {
             throw new IllegalArgumentException("lockMode =" + lockMode);
         }
-        if (ws == null || ws.isEmpty()) {
-            ws = new WorkSource(Binder.getCallingUid());
-        } else {
-            mContext.enforceCallingOrSelfPermission(
-                    android.Manifest.permission.UPDATE_DEVICE_STATS, null);
-        }
-        return addLock(new WifiLock(lockMode, tag, binder, ws));
+
+        // Make a copy of the WorkSource before adding it to the WakeLock
+        // This is to make sure worksource value can not be changed by caller
+        // after function returns.
+        WorkSource newWorkSource = new WorkSource(ws);
+
+        return addLock(new WifiLock(lockMode, tag, binder, newWorkSource));
     }
 
     /**
-     * Method used by applications to release a WiFi Wake lock.  This method checks permissions for
-     * the caller and if allowed, releases the underlying WifiLock(s).
+     * Method used by applications to release a WiFi Wake lock.
      *
      * @param binder IBinder for the calling app.
      * @return true if the lock was released, false if the caller did not hold any locks
      */
     public boolean releaseWifiLock(IBinder binder) {
-        mContext.enforceCallingOrSelfPermission(android.Manifest.permission.WAKE_LOCK, null);
         return releaseLock(binder);
     }
 
@@ -264,9 +257,6 @@ public class WifiLockManager {
      * @param ws WorkSource to add to the existing WifiLock(s).
      */
     public synchronized void updateWifiLockWorkSource(IBinder binder, WorkSource ws) {
-        // Does the caller have permission to make this call?
-        mContext.enforceCallingOrSelfPermission(
-                android.Manifest.permission.UPDATE_DEVICE_STATS, null);
 
         // Now check if there is an active lock
         WifiLock wl = findLockByBinder(binder);
@@ -274,13 +264,10 @@ public class WifiLockManager {
             throw new IllegalArgumentException("Wifi lock not active");
         }
 
-        WorkSource newWorkSource;
-        if (ws == null || ws.isEmpty()) {
-            newWorkSource = new WorkSource(Binder.getCallingUid());
-        } else {
-            // Make a copy of the WorkSource before adding it to the WakeLock
-            newWorkSource = new WorkSource(ws);
-        }
+        // Make a copy of the WorkSource before adding it to the WakeLock
+        // This is to make sure worksource value can not be changed by caller
+        // after function returns.
+        WorkSource newWorkSource = new WorkSource(ws);
 
         if (mVerboseLoggingEnabled) {
             Slog.d(TAG, "updateWifiLockWakeSource: " + wl + ", newWorkSource=" + newWorkSource);
@@ -647,10 +634,13 @@ public class WifiLockManager {
     }
 
     private int getLowLatencyModeSupport() {
-        if (mLatencyModeSupport == LOW_LATENCY_SUPPORT_UNDEFINED
-                && mClientModeImplChannel != null) {
-            long supportedFeatures =
-                    mClientModeImpl.syncGetSupportedFeatures(mClientModeImplChannel);
+        if (mLatencyModeSupport == LOW_LATENCY_SUPPORT_UNDEFINED) {
+            String ifaceName = mWifiNative.getClientInterfaceName();
+            if (ifaceName == null) {
+                return LOW_LATENCY_SUPPORT_UNDEFINED;
+            }
+
+            long supportedFeatures = mWifiNative.getSupportedFeatureSet(ifaceName);
             if (supportedFeatures != 0) {
                 if ((supportedFeatures & WifiManager.WIFI_FEATURE_LOW_LATENCY) != 0) {
                     mLatencyModeSupport = LOW_LATENCY_SUPPORTED;
@@ -790,45 +780,6 @@ public class WifiLockManager {
             mVerboseLoggingEnabled = true;
         } else {
             mVerboseLoggingEnabled = false;
-        }
-    }
-
-    /**
-     * Handles interaction with ClientModeImpl
-     */
-    private class ClientModeImplInterfaceHandler extends WifiHandler {
-        private WifiAsyncChannel mCmiChannel;
-
-        ClientModeImplInterfaceHandler(Looper looper) {
-            super(TAG, looper);
-            mCmiChannel = mFrameworkFacade.makeWifiAsyncChannel(TAG);
-            mCmiChannel.connect(mContext, this, mClientModeImpl.getHandler());
-        }
-
-        @Override
-        public void handleMessage(Message msg) {
-            switch (msg.what) {
-                case AsyncChannel.CMD_CHANNEL_HALF_CONNECTED: {
-                    if (msg.arg1 == AsyncChannel.STATUS_SUCCESSFUL) {
-                        mClientModeImplChannel = mCmiChannel;
-                    } else {
-                        Slog.e(TAG, "ClientModeImpl connection failure, error=" + msg.arg1);
-                        mClientModeImplChannel = null;
-                    }
-                    break;
-                }
-                case AsyncChannel.CMD_CHANNEL_DISCONNECTED: {
-                    Slog.e(TAG, "ClientModeImpl channel lost, msg.arg1 =" + msg.arg1);
-                    mClientModeImplChannel = null;
-                    //Re-establish connection
-                    mCmiChannel.connect(mContext, this, mClientModeImpl.getHandler());
-                    break;
-                }
-                default: {
-                    Slog.d(TAG, "ClientModeImplInterfaceHandler.handleMessage ignoring msg=" + msg);
-                    break;
-                }
-            }
         }
     }
 

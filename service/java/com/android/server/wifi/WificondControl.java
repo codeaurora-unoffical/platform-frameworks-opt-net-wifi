@@ -18,7 +18,6 @@ package com.android.server.wifi;
 
 import android.annotation.NonNull;
 import android.app.AlarmManager;
-import android.net.MacAddress;
 import android.net.wifi.IApInterface;
 import android.net.wifi.IApInterfaceEventCallback;
 import android.net.wifi.IClientInterface;
@@ -272,6 +271,16 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
+    * Disable hostapd via Property Service.
+    */
+    public void disableHostapd() {
+        Log.i(TAG, "Terminate hostapd/hostapd_fst service if the service is running");
+        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd");
+        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd_fst");
+    }
+
+
+    /**
      * Initializes wificond & registers a death notification for wificond.
      * This method clears any existing state in wificond daemon.
      *
@@ -282,6 +291,8 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.e(TAG, "Death handler already present");
         }
         mDeathEventHandler = handler;
+        Log.i(TAG, "Make sure hostapd service is stopped to avoid failure on first SoftAP start");
+        disableHostapd();
         tearDownInterfaces();
         return true;
     }
@@ -790,9 +801,10 @@ public class WificondControl implements IBinder.DeathRecipient {
                     PnoNetwork condNetwork2 = new PnoNetwork();
                     condNetwork2.isHidden = condNetwork.isHidden;
                     condNetwork2.ssid = WifiGbk.toGbk(condNetwork.ssid);
+                    condNetwork2.frequencies = condNetwork.frequencies;
                     if (condNetwork2.ssid != null) {
                         settings.pnoNetworks.add(condNetwork2);
-                        Log.i(TAG, "WifiGbk - pnoScan add extra Gbk ssid for " + network.ssid);
+                        Log.i(TAG, "WifiGbk fixed - pnoScan add extra Gbk ssid for " + network.ssid);
                     }
                 }
                 //wifigbk--
@@ -910,29 +922,6 @@ public class WificondControl implements IBinder.DeathRecipient {
             }
         } catch (RemoteException e) {
             Log.e(TAG, "Exception in registering AP callback: " + e);
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * Set Mac address on the given interface
-     * @param interfaceName Name of the interface.
-     * @param mac Mac address to change into
-     * @return true on success, false otherwise.
-     */
-    public boolean setMacAddress(@NonNull String interfaceName, @NonNull MacAddress mac) {
-        IClientInterface mClientInterface = getClientInterface(interfaceName);
-        if (mClientInterface == null) {
-            Log.e(TAG, "No valid wificond client interface handler");
-            return false;
-        }
-        byte[] macByteArray = mac.toByteArray();
-
-        try {
-            mClientInterface.setMacAddress(macByteArray);
-        } catch (RemoteException e) {
-            Log.e(TAG, "Failed to setMacAddress due to remote exception");
             return false;
         }
         return true;

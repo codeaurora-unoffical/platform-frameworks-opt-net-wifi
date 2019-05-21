@@ -496,6 +496,7 @@ public class ClientModeImplTest {
         mOsuProvider = PasspointProvisioningTestUtil.generateOsuProvider(true);
         mConnectedNetwork = spy(WifiConfigurationTestUtil.createOpenNetwork());
         when(mNullAsyncChannel.sendMessageSynchronously(any())).thenReturn(null);
+        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(new Pair<>(null, null));
     }
 
     private void registerAsyncChannel(Consumer<AsyncChannel> consumer, Messenger messenger) {
@@ -618,6 +619,7 @@ public class ClientModeImplTest {
         assertEquals("DisconnectedState", getCurrentState().getName());
         assertEquals(ClientModeImpl.CONNECT_MODE, mCmi.getOperationalModeForTest());
         assertEquals(WifiManager.WIFI_STATE_ENABLED, mCmi.syncGetWifiState());
+        assertEquals("enabled", mCmi.syncGetWifiStateByName());
 
         // reset the expectations on mContext since we did get an expected broadcast, but we should
         // not on the next transition
@@ -630,6 +632,7 @@ public class ClientModeImplTest {
         assertEquals(ClientModeImpl.DISABLED_MODE, mCmi.getOperationalModeForTest());
         assertEquals("DefaultState", getCurrentState().getName());
         assertEquals(WifiManager.WIFI_STATE_DISABLED, mCmi.syncGetWifiState());
+        assertEquals("disabled", mCmi.syncGetWifiStateByName());
         verify(mContext, never()).sendStickyBroadcastAsUser(
                 (Intent) argThat(new WifiEnablingStateIntentMatcher()), any());
     }
@@ -1022,8 +1025,7 @@ public class ClientModeImplTest {
         triggerConnect();
 
         when(mCarrierNetworkConfig.isCarrierEncryptionInfoAvailable()).thenReturn(true);
-        when(mCarrierNetworkConfig.getEapIdentitySequence()).thenReturn(
-                CarrierNetworkConfig.IDENTITY_SEQUENCE_ANONYMOUS_THEN_IMSI);
+        when(mCarrierNetworkConfig.isSupportAnonymousIdentity()).thenReturn(true);
         when(mWifiConfigManager.getScanDetailCacheForNetwork(FRAMEWORK_NETWORK_ID))
                 .thenReturn(mScanDetailCache);
 
@@ -2102,7 +2104,7 @@ public class ClientModeImplTest {
 
     /**
      * Test that connected SSID and BSSID are exposed to system server.
-     * Also tests that {@link ClientModeImpl#syncRequestConnectionInfo(String)} always
+     * Also tests that {@link ClientModeImpl#syncRequestConnectionInfo()} always
      * returns a copy of WifiInfo.
      */
     @Test
@@ -2317,7 +2319,7 @@ public class ClientModeImplTest {
                 any(NetworkInfo.class), any(LinkProperties.class), any(NetworkCapabilities.class),
                 anyInt(), any(NetworkMisc.class), anyInt());
 
-        ArrayList<Integer> thresholdsArray = new ArrayList();
+        ArrayList<Integer> thresholdsArray = new ArrayList<>();
         thresholdsArray.add(RSSI_THRESHOLD_MAX);
         thresholdsArray.add(RSSI_THRESHOLD_MIN);
         Bundle thresholds = new Bundle();
@@ -2376,6 +2378,15 @@ public class ClientModeImplTest {
         assertEquals(signalPollResult.rxBitrate, wifiInfo.getRxLinkSpeedMbps());
         assertEquals(sFreq, wifiInfo.getFrequency());
         verify(mWifiScoreCard).noteSignalPoll(any());
+    }
+
+    /**
+     * Verify RSSI polling with verbose logging
+     */
+    @Test
+    public void verifyConnectedModeRssiPollingWithVerboseLogging() throws Exception {
+        mCmi.enableVerboseLogging(1);
+        verifyConnectedModeRssiPolling();
     }
 
     /**
@@ -2807,9 +2818,12 @@ public class ClientModeImplTest {
      */
     @Test
     public void testScoreCardNoteConnectionComplete() throws Exception {
+        Pair<String, String> l2KeyAndGroupHint = Pair.create("Wad", "Gab");
+        when(mWifiScoreCard.getL2KeyAndGroupHint(any())).thenReturn(l2KeyAndGroupHint);
         connect();
         mLooper.dispatchAll();
         verify(mWifiScoreCard).noteIpConfiguration(any());
+        verify(mIpClient).setL2KeyAndGroupHint(eq("Wad"), eq("Gab"));
     }
 
     /**
@@ -3260,7 +3274,8 @@ public class ClientModeImplTest {
 
         connect();
         // reset() should be called when RSSI polling is enabled and entering L2ConnectedState
-        verify(mLinkProbeManager).reset();
+        verify(mLinkProbeManager).resetOnNewConnection(); // called first time here
+        verify(mLinkProbeManager, never()).resetOnScreenTurnedOn(); // not called
         verify(mLinkProbeManager).updateConnectionStats(any(), any());
 
         mCmi.enableRssiPolling(false);
@@ -3269,7 +3284,8 @@ public class ClientModeImplTest {
         // becomes enabled
         mCmi.enableRssiPolling(true);
         mLooper.dispatchAll();
-        verify(mLinkProbeManager, times(2)).reset();
+        verify(mLinkProbeManager, times(1)).resetOnNewConnection(); // verify not called again
+        verify(mLinkProbeManager).resetOnScreenTurnedOn(); // verify called here
     }
 
     /**
@@ -3314,6 +3330,7 @@ public class ClientModeImplTest {
         initializeAndAddNetworkAndVerifySuccess();
         assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getFactoryMacAddress());
         verify(mWifiNative).getFactoryMacAddress(WIFI_IFACE_NAME);
+        verify(mWifiNative).getMacAddress(anyString()); // called once when setting up client mode
     }
 
     /**
@@ -3325,6 +3342,22 @@ public class ClientModeImplTest {
         when(mWifiNative.getFactoryMacAddress(WIFI_IFACE_NAME)).thenReturn(null);
         assertNull(mCmi.getFactoryMacAddress());
         verify(mWifiNative).getFactoryMacAddress(WIFI_IFACE_NAME);
+        verify(mWifiNative).getMacAddress(anyString()); // called once when setting up client mode
+    }
+
+    /**
+     * Verify that when WifiNative#getFactoryMacAddress fails, if the device does not support
+     * MAC randomization then the currently programmed MAC address gets returned.
+     */
+    @Test
+    public void testGetFactoryMacAddressFailWithNoMacRandomizationSupport() throws Exception {
+        mResources.setBoolean(R.bool.config_wifi_connected_mac_randomization_supported, false);
+        initializeCmi();
+        initializeAndAddNetworkAndVerifySuccess();
+        when(mWifiNative.getFactoryMacAddress(WIFI_IFACE_NAME)).thenReturn(null);
+        assertEquals(TEST_GLOBAL_MAC_ADDRESS.toString(), mCmi.getFactoryMacAddress());
+        verify(mWifiNative).getFactoryMacAddress(anyString());
+        verify(mWifiNative, times(2)).getMacAddress(WIFI_IFACE_NAME);
     }
 
     @Test
