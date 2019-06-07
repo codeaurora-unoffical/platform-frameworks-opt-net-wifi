@@ -317,10 +317,12 @@ public class WifiPermissionsUtil {
      *
      * @param pkgName package name of the application requesting access
      * @param uid The uid of the package
+     * @param needLocationModeEnabled indicates location mode must be enabled.
      *
      * @return true if caller has permission, false otherwise
      */
-    public boolean checkCanAccessWifiDirect(String pkgName, int uid) {
+    public boolean checkCanAccessWifiDirect(String pkgName, int uid,
+                                            boolean needLocationModeEnabled) {
         try {
             checkPackage(uid, pkgName);
         } catch (SecurityException se) {
@@ -333,8 +335,8 @@ public class WifiPermissionsUtil {
             return true;
         }
 
-        // Location mode must be enabled
-        if (!isLocationModeEnabled()) {
+        // Location mode must be enabled if needed.
+        if (needLocationModeEnabled && !isLocationModeEnabled()) {
             Slog.e(TAG, "Location mode is disabled for the device");
             return false;
         }
@@ -448,6 +450,15 @@ public class WifiPermissionsUtil {
     }
 
     /**
+     * Returns true if the |uid| holds LOCAL_MAC_ADDRESS permission.
+     */
+    public boolean checkLocalMacAddressPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(
+                android.Manifest.permission.LOCAL_MAC_ADDRESS, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
      * Returns true if the |uid| holds NETWORK_SETUP_WIZARD permission.
      */
     public boolean checkNetworkSetupWizardPermission(int uid) {
@@ -490,5 +501,19 @@ public class WifiPermissionsUtil {
         return mWifiPermissionsWrapper.getUidPermission(
                 android.Manifest.permission.NETWORK_CARRIER_PROVISIONING, uid)
                 == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Returns true if the |callingUid|/\callingPackage| holds SYSTEM_ALERT_WINDOW permission.
+     */
+    public boolean checkSystemAlertWindowPermission(int callingUid, String callingPackage) {
+        final int mode = mAppOps.noteOp(
+                AppOpsManager.OP_SYSTEM_ALERT_WINDOW, callingUid, callingPackage);
+        if (mode == AppOpsManager.MODE_DEFAULT) {
+            return mWifiPermissionsWrapper.getUidPermission(
+                    Manifest.permission.SYSTEM_ALERT_WINDOW, callingUid)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+        return mode == AppOpsManager.MODE_ALLOWED;
     }
 }
