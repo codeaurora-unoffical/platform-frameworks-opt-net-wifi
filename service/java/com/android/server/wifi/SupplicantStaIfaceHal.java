@@ -32,12 +32,7 @@ import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HS
 import static com.android.server.wifi.hotspot2.anqp.Constants.ANQPElementType.HSWANMetrics;
 
 import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_AUTH_SUCCESS;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NOT_COMPATIBLE;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_RESPONSE_PENDING;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_SCAN_PEER_QRCODE;
 import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_CONF;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_MISSING_AUTH;
-import static android.net.wifi.WifiDppConfig.DppResult.DPP_EVENT_NETWORK_ID;
 
 import android.annotation.NonNull;
 import android.content.Context;
@@ -48,6 +43,7 @@ import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIface;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaNetwork;
 import vendor.qti.hardware.wifi.supplicant.V2_0.ISupplicantVendorStaIfaceCallback;
+import vendor.qti.hardware.wifi.supplicant.V2_1.WifiGenerationStatus;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantIface;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantNetwork;
 import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIface;
@@ -2986,37 +2982,6 @@ public class SupplicantStaIfaceHal {
         }
 
         @Override
-        public void onDppNotCompatible(byte capab, boolean initiator) {
-            logCallback("onDppNotCompatible");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.capab = capab;
-                result.initiator = initiator;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NOT_COMPATIBLE, result);
-            }
-        }
-
-        @Override
-        public void onDppResponsePending() {
-            logCallback("onDppResponsePending");
-            synchronized (mLock) {
-                // For now we may discard this event
-                DppResult result = new DppResult();
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_RESPONSE_PENDING, result);
-            }
-        }
-
-        @Override
-        public void onDppScanPeerQrCode(ArrayList<Byte> bootstrapData) {
-            logCallback("onDppScanPeerQrCode");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.iBootstrapData = NativeUtil.stringFromByteArrayList(bootstrapData);
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_SCAN_PEER_QRCODE, result);
-            }
-        }
-
-        @Override
         public void onDppConf(byte type, ArrayList<Byte> ssid, String connector,
                               ArrayList<Byte> cSignKey, ArrayList<Byte> netAccessKey,
                               int netAccessExpiry, String passphrase, ArrayList<Byte> psk) {
@@ -3036,24 +3001,19 @@ public class SupplicantStaIfaceHal {
         }
 
         @Override
-        public void onDppMissingAuth(byte dppAuthParam) {
-            logCallback("onDppMissingAuth");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.authMissingParam = dppAuthParam;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_MISSING_AUTH, result);
-            }
-        }
+        public void onDppNotCompatible(byte capab, boolean initiator) {}
 
         @Override
-        public void onDppNetworkId(int netID) {
-            logCallback("onDppNetworkId");
-            synchronized (mLock) {
-                DppResult result = new DppResult();
-                result.netID = netID;
-                mWifiMonitor.broadcastDppEvent(mIfaceName, DPP_EVENT_NETWORK_ID, result);
-            }
-        }
+        public void onDppResponsePending() {}
+
+        @Override
+        public void onDppScanPeerQrCode(ArrayList<Byte> bootstrapData) {}
+
+        @Override
+        public void onDppMissingAuth(byte dppAuthParam) {}
+
+        @Override
+        public void onDppNetworkId(int netID) {}
         /* DPP Callbacks ends */
     }
 
@@ -3241,6 +3201,17 @@ public class SupplicantStaIfaceHal {
                                 mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
                     }
                 }
+
+                // For WEP password error: not check status code to avoid IoT issues with AP.
+                WifiConfiguration wificonfig = getCurrentNetworkLocalConfig(mIfaceName);
+                if (wificonfig != null && WifiConfigurationUtil.isConfigForWepNetwork(wificonfig)) {
+                    logCallback("WEP incorrect password");
+                    mWifiMonitor.broadcastAuthenticationFailureEvent(
+                        mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
+                    // Not broadcast ASSOC REJECT to avoid bssid get blacklisted.
+                    return;
+                }
+
                 mWifiMonitor.broadcastAssociationRejectionEvent(mIfaceName, statusCode, timedOut,
                         NativeUtil.macAddressFromByteArray(bssid));
             }
@@ -4276,5 +4247,44 @@ public class SupplicantStaIfaceHal {
      */
     public void registerDppCallback(DppEventCallback dppCallback) {
         mDppCallback = dppCallback;
+    }
+
+    protected vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface
+    getSupplicantVendorStaIfaceV2_1Mockable(ISupplicantVendorStaIface vendorIfaceV2_0) {
+        if (vendorIfaceV2_0 == null) return null;
+        return vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface.castFrom(
+                vendorIfaceV2_0);
+    }
+
+    public WifiNative.WifiGenerationStatus getWifiGenerationStatus(@NonNull String ifaceName) {
+        synchronized (mLock) {
+            final String methodStr = "getWifiGenerationStatus";
+            final Mutable<WifiNative.WifiGenerationStatus> STATUS = new Mutable<>();
+            ISupplicantVendorStaIface vendorIfaceV2_0 = getVendorStaIface(ifaceName);
+            if (vendorIfaceV2_0 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            vendor.qti.hardware.wifi.supplicant.V2_1.ISupplicantVendorStaIface vendorIfaceV2_1;
+            vendorIfaceV2_1 = getSupplicantVendorStaIfaceV2_1Mockable(vendorIfaceV2_0);
+            if (vendorIfaceV2_1 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", V2_1.ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            try {
+                vendorIfaceV2_1.getWifiGenerationStatus((SupplicantStatus status, WifiGenerationStatus generationStatus) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                STATUS.value = new WifiNative.WifiGenerationStatus(generationStatus.generation,
+                                                                                   generationStatus.vhtMax8SpatialStreamsSupport,
+                                                                                   generationStatus.twtSupport);
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return STATUS.value;
+        }
     }
 }

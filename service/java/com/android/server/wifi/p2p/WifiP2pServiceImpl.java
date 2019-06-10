@@ -266,6 +266,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
     // The empty device address set by wpa_supplicant.
     private static final String EMPTY_DEVICE_ADDRESS = "00:00:00:00:00:00";
 
+    // An anonymized device address. This is used instead of the own device MAC to prevent the
+    // latter from leaking to apps
+    private static final String ANONYMIZED_DEVICE_ADDRESS = "02:00:00:00:00:00";
+
     /**
      * Error code definition.
      * see the Table.8 in the WiFi Direct specification for the detail.
@@ -783,6 +787,13 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         // Is wifi on or off.
         private boolean mIsWifiEnabled = false;
 
+        // p2p start failure count.
+        // Current design keeps on calling setupIface even though p2p init fails in supplicant.
+        // Break this infinite loop by maintaining a temp counter for continuous setup failures.
+        private int mSetupFailureCount = 0;
+        // Threshold for continuous setup failure.
+        private static final int P2P_SETUP_FAILURE_COUNT_THRESHOLD = 10;
+
         // Saved WifiP2pConfig for an ongoing peer connection. This will never be null.
         // The deviceAddress will be an empty string when the device is inactive
         // or if it is connected without any ongoing join request
@@ -857,6 +868,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             checkAndReEnableP2p();
                         } else {
                             mIsWifiEnabled = false;
+                            mSetupFailureCount = 0;
                             // Teardown P2P if it's up already.
                             sendMessage(DISABLE_P2P);
                         }
@@ -867,21 +879,28 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 mContext.registerReceiver(new BroadcastReceiver() {
                     @Override
                     public void onReceive(Context context, Intent intent) {
-                        if (isLocationModeEnabled()) {
-                            checkAndReEnableP2p();
-                        } else {
-                            sendMessage(DISABLE_P2P);
+                        /* if location mode is off, ongoing discovery should be stopped.
+                         * possible ongoing discovery:
+                         * - peer discovery
+                         * - service discovery
+                         * - group joining scan in native service
+                         */
+                        if (!mWifiPermissionsUtil.isLocationModeEnabled()) {
+                            sendMessage(WifiP2pManager.STOP_DISCOVERY);
                         }
-                        checkAndSendP2pStateChangedBroadcast();
                     }
                 }, new IntentFilter(LocationManager.MODE_CHANGED_ACTION));
                 // Register for interface availability from HalDeviceManager
                 mWifiNative.registerInterfaceAvailableListener((boolean isAvailable) -> {
                     mIsHalInterfaceAvailable = isAvailable;
-                    if (isAvailable) {
-                        checkAndReEnableP2p();
+                    if (mSetupFailureCount < P2P_SETUP_FAILURE_COUNT_THRESHOLD) {
+                        if (isAvailable) {
+                            checkAndReEnableP2p();
+                        }
+                        checkAndSendP2pStateChangedBroadcast();
+                    } else {
+                        Log.i(TAG, "Ignore InterfaceAvailable for continuous failures. count=" +mSetupFailureCount);
                     }
-                    checkAndSendP2pStateChangedBroadcast();
                 }, getHandler());
 
                 mFrameworkFacade.registerContentObserver(mContext,
@@ -1094,22 +1113,23 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.REQUEST_GROUP_INFO:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.RESPONSE_GROUP_INFO, null);
                             // remain at this state.
                             break;
                         }
                         replyToMessage(message, WifiP2pManager.RESPONSE_GROUP_INFO,
-                                mGroup != null ? new WifiP2pGroup(mGroup) : null);
+                                maybeEraseOwnDeviceAddress(mGroup, message.sendingUid));
                         break;
                     case WifiP2pManager.REQUEST_PERSISTENT_GROUP_INFO:
                         replyToMessage(message, WifiP2pManager.RESPONSE_PERSISTENT_GROUP_INFO,
-                                new WifiP2pGroupList(mGroups, null));
+                                new WifiP2pGroupList(
+                                        maybeEraseOwnDeviceAddress(mGroups, message.sendingUid),
+                                        null));
                         break;
                     case WifiP2pManager.REQUEST_P2P_STATE:
                         replyToMessage(message, WifiP2pManager.RESPONSE_P2P_STATE,
-                                (mIsWifiEnabled && isHalInterfaceAvailable()
-                                && isLocationModeEnabled())
+                                (mIsWifiEnabled && isHalInterfaceAvailable())
                                 ? WifiP2pManager.WIFI_P2P_STATE_ENABLED
                                 : WifiP2pManager.WIFI_P2P_STATE_DISABLED);
                         break;
@@ -1243,12 +1263,12 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.REQUEST_DEVICE_INFO:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.RESPONSE_DEVICE_INFO, null);
                             break;
                         }
                         replyToMessage(message, WifiP2pManager.RESPONSE_DEVICE_INFO,
-                                new WifiP2pDevice(mThisDevice));
+                                maybeEraseOwnDeviceAddress(mThisDevice, message.sendingUid));
                         break;
                     default:
                         loge("Unhandled message " + message);
@@ -1422,10 +1442,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 if (mVerboseLoggingEnabled) logd(getName() + message.toString());
                 switch (message.what) {
                     case ENABLE_P2P:
-                        boolean isLocationEnabled = isLocationModeEnabled();
-                        if (!mIsWifiEnabled || !isLocationEnabled) {
-                            Log.e(TAG, "Ignore P2P enable since wifi is " + mIsWifiEnabled
-                                    + " and location is " + isLocationEnabled);
+                        if (!mIsWifiEnabled) {
+                            Log.e(TAG, "Ignore P2P enable since wifi is " + mIsWifiEnabled);
                             break;
                         }
                         mInterfaceName = mWifiNative.setupInterface((String ifaceName) -> {
@@ -1434,9 +1452,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             checkAndSendP2pStateChangedBroadcast();
                         }, getHandler());
                         if (mInterfaceName == null) {
+                            mSetupFailureCount++;
                             Log.e(TAG, "Failed to setup interface for P2P");
                             break;
                         }
+                        mSetupFailureCount = 0;
                         setupInterfaceFeatures(mInterfaceName);
                         try {
                             mNwService.setInterfaceUp(mInterfaceName);
@@ -1582,7 +1602,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.DISCOVER_PEERS:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, true)) {
                             replyToMessage(message, WifiP2pManager.DISCOVER_PEERS_FAILED,
                                     WifiP2pManager.ERROR);
                             // remain at this state.
@@ -1618,7 +1638,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.DISCOVER_SERVICES:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, true)) {
                             replyToMessage(message, WifiP2pManager.DISCOVER_SERVICES_FAILED,
                                     WifiP2pManager.ERROR);
                             // remain at this state.
@@ -1668,7 +1688,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.ADD_LOCAL_SERVICE:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.ADD_LOCAL_SERVICE_FAILED);
                             // remain at this state.
                             break;
@@ -1821,7 +1841,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.CONNECT:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.CONNECT_FAILED);
                             // remain at this state.
                             break;
@@ -1980,7 +2000,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.CREATE_GROUP:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.CREATE_GROUP_FAILED,
                                     WifiP2pManager.ERROR);
                             // remain at this state.
@@ -2839,7 +2859,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     case WifiP2pManager.CONNECT:
                         if (!mWifiPermissionsUtil.checkCanAccessWifiDirect(
                                 getCallingPkgName(message.sendingUid, message.replyTo),
-                                message.sendingUid)) {
+                                message.sendingUid, false)) {
                             replyToMessage(message, WifiP2pManager.CONNECT_FAILED);
                             // remain at this state.
                             break;
@@ -3009,21 +3029,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         // a) Wifi is enabled.
         // b) HAL (HIDL) interface is available.
         // c) There is atleast 1 client app which invoked initialize().
-        // d) Location is enabled.
         private void checkAndReEnableP2p() {
-            boolean isLocationEnabled = isLocationModeEnabled();
             boolean isHalInterfaceAvailable = isHalInterfaceAvailable();
             Log.d(TAG, "Wifi enabled=" + mIsWifiEnabled + ", P2P Interface availability="
                     + isHalInterfaceAvailable + ", Number of clients="
-                    + mDeathDataByBinder.size() + ", Location enabled=" + isLocationEnabled);
+                    + mDeathDataByBinder.size());
             if (mIsWifiEnabled && isHalInterfaceAvailable
-                    && isLocationEnabled && !mDeathDataByBinder.isEmpty()) {
+                    && !mDeathDataByBinder.isEmpty()) {
                 sendMessage(ENABLE_P2P);
             }
-        }
-
-        private boolean isLocationModeEnabled() {
-            return mWifiPermissionsUtil.isLocationModeEnabled();
         }
 
         // Ignore judgement if the device do not support HAL (HIDL) interface
@@ -3032,12 +3046,10 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         }
 
         private void checkAndSendP2pStateChangedBroadcast() {
-            boolean isLocationEnabled = isLocationModeEnabled();
             boolean isHalInterfaceAvailable = isHalInterfaceAvailable();
             Log.d(TAG, "Wifi enabled=" + mIsWifiEnabled + ", P2P Interface availability="
-                    + isHalInterfaceAvailable + ", Location enabled=" + isLocationEnabled);
-            sendP2pStateChangedBroadcast(mIsWifiEnabled && isHalInterfaceAvailable
-                    && isLocationEnabled);
+                    + isHalInterfaceAvailable);
+            sendP2pStateChangedBroadcast(mIsWifiEnabled && isHalInterfaceAvailable);
         }
 
         private void sendP2pStateChangedBroadcast(boolean enabled) {
@@ -3070,7 +3082,8 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         private void sendThisDeviceChangedBroadcast() {
             final Intent intent = new Intent(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
             intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-            intent.putExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE, new WifiP2pDevice(mThisDevice));
+            intent.putExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
+                    eraseOwnDeviceAddress(mThisDevice));
             mContext.sendBroadcastAsUserMultiplePermissions(intent, UserHandle.ALL,
                     RECEIVER_PERMISSIONS_FOR_BROADCAST);
         }
@@ -3090,7 +3103,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                     | Intent.FLAG_RECEIVER_REPLACE_PENDING);
             intent.putExtra(WifiP2pManager.EXTRA_WIFI_P2P_INFO, new WifiP2pInfo(mWifiP2pInfo));
             intent.putExtra(WifiP2pManager.EXTRA_NETWORK_INFO, new NetworkInfo(mNetworkInfo));
-            intent.putExtra(WifiP2pManager.EXTRA_WIFI_P2P_GROUP, new WifiP2pGroup(mGroup));
+            intent.putExtra(WifiP2pManager.EXTRA_WIFI_P2P_GROUP, eraseOwnDeviceAddress(mGroup));
             mContext.sendBroadcastAsUserMultiplePermissions(intent, UserHandle.ALL,
                     RECEIVER_PERMISSIONS_FOR_BROADCAST);
             if (mWifiChannel != null) {
@@ -3374,6 +3387,122 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             // before a connection
             mPeers.updateGroupCapability(config.deviceAddress, gc);
             return mPeers.get(config.deviceAddress);
+        }
+
+        /**
+         * Erase the MAC address of our interface if it is present in a given device, to prevent
+         * apps from having access to persistent identifiers.
+         *
+         * @param device a device possibly having the same physical address as the wlan interface.
+         * @return a copy of the input, possibly with the device address erased.
+         */
+        private WifiP2pDevice eraseOwnDeviceAddress(WifiP2pDevice device) {
+            if (device == null) {
+                return null;
+            }
+            WifiP2pDevice result = new WifiP2pDevice(device);
+            if (device.deviceAddress != null
+                    && mThisDevice.deviceAddress != null
+                    && device.deviceAddress.length() > 0
+                    && mThisDevice.deviceAddress.equals(device.deviceAddress)) {
+                result.deviceAddress = ANONYMIZED_DEVICE_ADDRESS;
+            }
+            return result;
+        }
+
+        /**
+         * Erase the MAC address of our interface if it is set as the device address for any of the
+         * devices in a group.
+         *
+         * @param group a p2p group containing p2p devices.
+         * @return a copy of the input, with any devices corresponding to our wlan interface having
+         *      their device address erased.
+         */
+        private WifiP2pGroup eraseOwnDeviceAddress(WifiP2pGroup group) {
+            if (group == null) {
+                return null;
+            }
+
+            WifiP2pGroup result = new WifiP2pGroup(group);
+
+            // Create copies of the clients so they're not shared with the original object.
+            for (WifiP2pDevice originalDevice : group.getClientList()) {
+                result.removeClient(originalDevice);
+                result.addClient(eraseOwnDeviceAddress(originalDevice));
+            }
+
+            WifiP2pDevice groupOwner = group.getOwner();
+            result.setOwner(eraseOwnDeviceAddress(groupOwner));
+
+            return result;
+        }
+
+        /**
+         * Erase the MAC address of our interface if it is present in a given device, to prevent
+         * apps from having access to persistent identifiers. If the requesting party holds the
+         * {@link Manifest.permission.LOCAL_MAC_ADDRESS} permission, the address is not erased.
+         *
+         * @param device a device possibly having the same physical address as the wlan interface.
+         * @param uid the user id of the app that requested the information.
+         * @return a copy of the input, possibly with the device address erased.
+         */
+        private WifiP2pDevice maybeEraseOwnDeviceAddress(WifiP2pDevice device, int uid) {
+            if (device == null) {
+                return null;
+            }
+            if (mWifiPermissionsUtil.checkLocalMacAddressPermission(uid)) {
+                // Calling app holds the LOCAL_MAC_ADDRESS permission, and is allowed to see this
+                // device's MAC.
+                return new WifiP2pDevice(device);
+            } else {
+                return eraseOwnDeviceAddress(device);
+            }
+        }
+
+        /**
+         * Erase the MAC address of our interface if it is set as the device address for any of the
+         * devices in a group. If the requesting party holds the
+         * {@link Manifest.permission.LOCAL_MAC_ADDRESS} permission, the address is not erased.
+         *
+         * @param group a p2p group containing p2p devices.
+         * @param uid the user id of the app that requested the information.
+         * @return a copy of the input, with any devices corresponding to our wlan interface having
+         *      their device address erased. If the requesting app holds the LOCAL_MAC_ADDRESS
+         *      permission, this method returns a copy of the input.
+         */
+        private WifiP2pGroup maybeEraseOwnDeviceAddress(WifiP2pGroup group, int uid) {
+            if (group == null) {
+                return null;
+            }
+            if (mWifiPermissionsUtil.checkLocalMacAddressPermission(uid)) {
+                // Calling app holds the LOCAL_MAC_ADDRESS permission, and is allowed to see this
+                // device's MAC.
+                return new WifiP2pGroup(group);
+            } else {
+                return eraseOwnDeviceAddress(group);
+            }
+        }
+
+        /**
+         * Erase the MAC address of our interface if it is set as the device address for any of the
+         * devices in a list of groups. If the requesting party holds the
+         * {@link Manifest.permission.LOCAL_MAC_ADDRESS} permission, the address is not erased.
+         *
+         * @param groupList a list of p2p groups containing p2p devices.
+         * @param uid the user id of the app that requested the information.
+         * @return a copy of the input, with any devices corresponding to our wlan interface having
+         *      their device address erased. If the requesting app holds the LOCAL_MAC_ADDRESS
+         *      permission, this method returns a copy of the input.
+         */
+        private WifiP2pGroupList maybeEraseOwnDeviceAddress(WifiP2pGroupList groupList, int uid) {
+            if (groupList == null) {
+                return null;
+            }
+            WifiP2pGroupList result = new WifiP2pGroupList();
+            for (WifiP2pGroup group : groupList.getGroupList()) {
+                result.add(maybeEraseOwnDeviceAddress(group, uid));
+            }
+            return result;
         }
 
         /**
@@ -4071,7 +4200,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         private WifiP2pDeviceList getPeers(String pkgName, int uid) {
             // getPeers() is guaranteed to be invoked after Wifi Service is up
             // This ensures getInstance() will return a non-null object now
-            if (mWifiPermissionsUtil.checkCanAccessWifiDirect(pkgName, uid)) {
+            if (mWifiPermissionsUtil.checkCanAccessWifiDirect(pkgName, uid, true)) {
                 return new WifiP2pDeviceList(mPeers);
             } else {
                 return new WifiP2pDeviceList();
