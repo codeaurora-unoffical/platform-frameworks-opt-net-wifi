@@ -128,10 +128,10 @@ public class ScanResultUtil {
 
     /**
      * Helper method to check if the provided |scanResult| corresponds to PSK-SAE transition
-     * network. This checks if the provided capabilities string contains PSK+SAE or not.
+     * network. This checks if the provided capabilities string contains both PSK and SAE or not.
      */
     public static boolean isScanResultForPskSaeTransitionNetwork(ScanResult scanResult) {
-        return scanResult.capabilities.contains("PSK+SAE");
+        return scanResult.capabilities.contains("PSK") && scanResult.capabilities.contains("SAE");
     }
 
     /**
@@ -183,6 +183,10 @@ public class ScanResultUtil {
             config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_WEP);
         } else if (isScanResultForOweNetwork(scanResult)) {
             config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
+        } else if (isScanResultForFilsSha256Network(scanResult)) {
+            config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_FILS_SHA256);
+        } else if (isScanResultForFilsSha384Network(scanResult)) {
+            config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_FILS_SHA384);
         } else {
             config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OPEN);
         }
