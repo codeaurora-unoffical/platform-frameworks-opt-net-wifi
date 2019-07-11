@@ -91,6 +91,7 @@ import android.os.RemoteException;
 import android.os.ResultReceiver;
 import android.os.SystemProperties;
 import android.os.ShellCallback;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.os.WorkSource;
@@ -856,6 +857,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         mLog.info("setWifiEnabled package=% uid=% enable=%").c(packageName)
                 .c(Binder.getCallingUid()).c(enable).flush();
 
+        if (SystemProperties.get("vendor.hw.variant").equals("LOW")) {
+            Slog.d(TAG, "=qcdbg= Block setWifiEnabled!");
+            return false;
+        }
+
         boolean isFromSettings = checkNetworkSettingsPermission(
                 Binder.getCallingPid(), Binder.getCallingUid());
 
@@ -1094,6 +1100,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
 
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
+        if (SystemProperties.get("vendor.hw.variant").equals("LOW")) {
+            Slog.d(TAG, "=qcdbg= Block startSoftAp!");
+            return false;
+        }
+
         synchronized (mLocalOnlyHotspotRequests) {
             // If a tethering request comes in while we have LOHS running (or requested), call stop
             // for softap mode and restart softap with the tethering config.
@@ -1140,6 +1151,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         // connectivity service since this method is protected with the NETWORK_STACK PERMISSION
 
         mLog.info("stopSoftAp uid=%").c(Binder.getCallingUid()).flush();
+
+        if (SystemProperties.get("vendor.hw.variant").equals("LOW")) {
+            Slog.d(TAG, "=qcdbg= Block stopSoftAp!");
+            return false;
+        }
 
         synchronized (mLocalOnlyHotspotRequests) {
             // If a tethering request comes in while we have LOHS running (or requested), call stop
@@ -1313,6 +1329,11 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         // need to check for WIFI_STATE_CHANGE and location permission
         final int uid = Binder.getCallingUid();
         final int pid = Binder.getCallingPid();
+
+        if (SystemProperties.get("vendor.hw.variant").equals("LOW")) {
+            Slog.d(TAG, "=qcdbg= Block startLocalOnlyHotspot!");
+            return LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED;
+        }
 
         enforceChangePermission();
         enforceLocationPermission(packageName, uid);
