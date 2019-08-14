@@ -33,6 +33,7 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkScoreCache;
 import android.net.wifi.WifiScanner;
 import android.os.BatteryStats;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -77,6 +78,8 @@ import java.util.Random;
 public class WifiInjector {
     private static final String BOOT_DEFAULT_WIFI_COUNTRY_CODE = "ro.boot.wificountrycode";
     private static final String WIFICOND_SERVICE_NAME = "wificond";
+    private static final String DEFAULT_P2P_TETHER_FILE =
+            Environment.getDataDirectory() + "/misc/wifi/ago.conf";
 
     static WifiInjector sWifiInjector = null;
 
@@ -89,6 +92,7 @@ public class WifiInjector {
     private final WifiCountryCode mCountryCode;
     private final BackupManagerProxy mBackupManagerProxy = new BackupManagerProxy();
     private final WifiApConfigStore mWifiApConfigStore;
+    private final WifiApConfigStore mWifiP2pConfigStore;
     private final WifiNative mWifiNative;
     private final WifiMonitor mWifiMonitor;
     private final WifiP2pNative mWifiP2pNative;
@@ -233,6 +237,9 @@ public class WifiInjector {
         mWifiApConfigStore = new WifiApConfigStore(
                 mContext, mWifiCoreHandlerThread.getLooper(), mBackupManagerProxy,
                 mFrameworkFacade);
+        mWifiP2pConfigStore = new WifiApConfigStore(
+                mContext, mWifiCoreHandlerThread.getLooper(), mBackupManagerProxy,
+                mFrameworkFacade, DEFAULT_P2P_TETHER_FILE);
 
         // WifiConfigManager/Store objects and their dependencies.
         // New config store
@@ -425,6 +432,10 @@ public class WifiInjector {
 
     public WifiApConfigStore getWifiApConfigStore() {
         return mWifiApConfigStore;
+    }
+
+    public WifiApConfigStore getWifiP2pConfigStore() {
+        return mWifiP2pConfigStore;
     }
 
     public SarManager getSarManager() {
