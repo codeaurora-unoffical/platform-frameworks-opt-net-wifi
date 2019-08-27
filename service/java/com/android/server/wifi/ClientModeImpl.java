@@ -2054,28 +2054,28 @@ public class ClientModeImpl extends StateMachine {
      * Trigger message to handle boot completed event.
      */
     public void handleBootCompleted() {
-        sendMessage(CMD_BOOT_COMPLETED);
+        //sendMessage(CMD_BOOT_COMPLETED);
     }
 
     /**
      * Trigger message to handle user switch event.
      */
     public void handleUserSwitch(int userId) {
-        sendMessage(CMD_USER_SWITCH, userId);
+        //sendMessage(CMD_USER_SWITCH, userId);
     }
 
     /**
      * Trigger message to handle user unlock event.
      */
     public void handleUserUnlock(int userId) {
-        sendMessage(CMD_USER_UNLOCK, userId);
+        //sendMessage(CMD_USER_UNLOCK, userId);
     }
 
     /**
      * Trigger message to handle user stop event.
      */
     public void handleUserStop(int userId) {
-        sendMessage(CMD_USER_STOP, userId);
+        //sendMessage(CMD_USER_STOP, userId);
     }
 
     /**
@@ -3655,10 +3655,10 @@ public class ClientModeImpl extends StateMachine {
                     }
                     break;
                 case CMD_USER_UNLOCK:
-                    mWifiConfigManager.handleUserUnlock(message.arg1);
+                    //mWifiConfigManager.handleUserUnlock(message.arg1);
                     break;
                 case CMD_USER_STOP:
-                    mWifiConfigManager.handleUserStop(message.arg1);
+                    //mWifiConfigManager.handleUserStop(message.arg1);
                     break;
                 case CMD_QUERY_OSU_ICON:
                 case CMD_MATCH_PROVIDER_NETWORK:
