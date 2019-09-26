@@ -1297,6 +1297,30 @@ public class WifiNative {
         return connected;
     }
 
+
+    private static final int WAIT_HOSTAPD_DEATH_RETRY_INTERVAL_MS = 100;
+    private static final int WAIT_HOSTAPD_DEATH_RETRY_TIMES = 5;
+    /**
+     * This method is called to wait for previous hostapd dying.
+     *
+     * @return true if hostapd died, false otherwise.
+     */
+    private boolean waitForPreviousHostapdDie() {
+        int waitTries = 0;
+        while (waitTries++ < WAIT_HOSTAPD_DEATH_RETRY_TIMES) {
+            if (!mHostapdHal.isInitializationComplete()) {
+                Log.d(TAG, "Previous hostapd died completely");
+                return true;
+            }
+            Log.e(TAG, "Previous hostapd does NOT die completely");
+            try {
+                Thread.sleep(WAIT_HOSTAPD_DEATH_RETRY_INTERVAL_MS);
+            } catch (InterruptedException ignore) {
+            }
+        }
+        return false;
+    }
+
     /**
      * Start Soft AP operation using the provided configuration.
      *
@@ -1307,6 +1331,10 @@ public class WifiNative {
      */
     public boolean startSoftAp(
             @NonNull String ifaceName, WifiConfiguration config, SoftApListener listener) {
+        if (!waitForPreviousHostapdDie()) {
+            Log.e(TAG, "Failed to wait for previous hostapd dying");
+            return false;
+        }
         if (!mWificondControl.startHostapd(ifaceName, listener)) {
             Log.e(TAG, "Failed to start hostapd");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
