@@ -2054,14 +2054,14 @@ public class ClientModeImpl extends StateMachine {
      * Trigger message to handle boot completed event.
      */
     public void handleBootCompleted() {
-        //sendMessage(CMD_BOOT_COMPLETED);
+        sendMessage(CMD_BOOT_COMPLETED);
     }
 
     /**
      * Trigger message to handle user switch event.
      */
     public void handleUserSwitch(int userId) {
-        //sendMessage(CMD_USER_SWITCH, userId);
+        sendMessage(CMD_USER_SWITCH, userId);
     }
 
     /**
