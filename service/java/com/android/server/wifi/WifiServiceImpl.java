@@ -2542,8 +2542,9 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("isDualBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        return mContext.getResources().getBoolean(
-                com.android.internal.R.bool.config_wifi_dual_band_support);
+        return (mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_wifi_dual_band_support)
+                   && mClientModeImpl.is5GhzBandSupported());
     }
 
     private int getMaxApInterfacesCount() {
@@ -3878,5 +3879,19 @@ public class WifiServiceImpl extends BaseWifiService {
         mWifiInjector.getClientModeImplHandler().post(
                 () -> mClientModeImpl.updateWifiUsabilityScore(seqNum, score,
                         predictionHorizonSec));
+    }
+
+    /**
+     * Gets SoftAP Wi-Fi Generation
+     * @return Wi-Fi generation if SoftAp enabled or -1.
+     */
+    @Override
+    public int getSoftApWifiGeneration() {
+        enforceAccessPermission();
+        if (mSoftApState == WifiManager.WIFI_AP_STATE_ENABLED) {
+            return mWifiApConfigStore.getWifiGeneration();
+        } else {
+            return -1;
+        }
     }
 }
