@@ -129,6 +129,7 @@ public class SupplicantStaIfaceHal {
     private SupplicantDeathEventHandler mDeathEventHandler;
     private final Context mContext;
     private final WifiMonitor mWifiMonitor;
+    private boolean mStateIsFourway = false;
 
     private final IServiceNotification mServiceNotificationCallback =
             new IServiceNotification.Stub() {
@@ -2679,7 +2680,6 @@ public class SupplicantStaIfaceHal {
 
     private class SupplicantVendorStaIfaceHalCallback extends ISupplicantVendorStaIfaceCallback.Stub {
         private String mIfaceName;
-        private boolean mStateIsFourway = false; // Used to help check for PSK password mismatch
 
         SupplicantVendorStaIfaceHalCallback(@NonNull String ifaceName) {
             mIfaceName = ifaceName;
@@ -2789,7 +2789,6 @@ public class SupplicantStaIfaceHal {
 
     private class SupplicantStaIfaceHalCallback extends ISupplicantStaIfaceCallback.Stub {
         private String mIfaceName;
-        private boolean mStateIsFourway = false; // Used to help check for PSK password mismatch
 
         SupplicantStaIfaceHalCallback(@NonNull String ifaceName) {
             mIfaceName = ifaceName;
@@ -2941,6 +2940,7 @@ public class SupplicantStaIfaceHal {
                         && (!locallyGenerated || reasonCode != ReasonCode.IE_IN_4WAY_DIFFERS)) {
                     mWifiMonitor.broadcastAuthenticationFailureEvent(
                             mIfaceName, WifiManager.ERROR_AUTH_FAILURE_WRONG_PSWD, -1);
+                    mStateIsFourway = false;
                 }
                 mWifiMonitor.broadcastNetworkDisconnectionEvent(
                         mIfaceName, locallyGenerated ? 1 : 0, reasonCode,
