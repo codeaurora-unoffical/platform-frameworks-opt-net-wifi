@@ -18,6 +18,7 @@ package com.android.server.wifi.util;
 
 import android.annotation.NonNull;
 import android.os.SystemProperties;
+import android.os.ServiceManager;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.text.TextUtils;
@@ -224,6 +225,10 @@ public class DataIntegrityChecker {
 
     private SecretKey getOrCreateSecretKey(String keyAlias) {
         SecretKey secretKey = null;
+        if (null == ServiceManager.getService("android.security.keystore")) {
+            Log.e(TAG, "Service of 'android.security.keystore' is null");
+            return null;
+        }
         try {
             KeyStore keyStore = KeyStore.getInstance(KEY_STORE);
             keyStore.load(null);
