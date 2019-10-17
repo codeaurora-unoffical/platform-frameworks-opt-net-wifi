@@ -31,8 +31,8 @@ public class KnownBandsChannelHelper extends ChannelHelper {
 
     private WifiScanner.ChannelSpec[][] mBandsToChannels;
 
-    protected void setBandChannels(int[] channels2G, int[] channels5G, int[] channelsDfs) {
-        mBandsToChannels = new WifiScanner.ChannelSpec[8][];
+    protected void setBandChannels(int[] channels2G, int[] channels5G, int[] channelsDfs, int[] channels6G) {
+        mBandsToChannels = new WifiScanner.ChannelSpec[10][];
 
         mBandsToChannels[0] = NO_CHANNELS;
 
@@ -62,6 +62,16 @@ public class KnownBandsChannelHelper extends ChannelHelper {
         copyChannels(mBandsToChannels[7], 0, channels2G);
         copyChannels(mBandsToChannels[7], channels2G.length, channels5G);
         copyChannels(mBandsToChannels[7], channels2G.length + channels5G.length, channelsDfs);
+
+        mBandsToChannels[8] = new WifiScanner.ChannelSpec[channels6G.length];
+        copyChannels(mBandsToChannels[8], 0, channels6G);
+
+        mBandsToChannels[9] = new WifiScanner.ChannelSpec[
+                channels2G.length + channels5G.length + channelsDfs.length + channels6G.length];
+        copyChannels(mBandsToChannels[9], 0, channels2G);
+        copyChannels(mBandsToChannels[9], channels2G.length, channels5G);
+        copyChannels(mBandsToChannels[9], channels2G.length + channels5G.length, channelsDfs);
+        copyChannels(mBandsToChannels[9], channels2G.length + channels5G.length + channelsDfs.length, channels6G);
     }
 
     private static void copyChannels(
@@ -73,7 +83,7 @@ public class KnownBandsChannelHelper extends ChannelHelper {
 
     @Override
     public WifiScanner.ChannelSpec[] getAvailableScanChannels(int band) {
-        if (band < WifiScanner.WIFI_BAND_24_GHZ || band > WifiScanner.WIFI_BAND_BOTH_WITH_DFS) {
+        if (band < WifiScanner.WIFI_BAND_24_GHZ || band > WifiScanner.WIFI_TRI_BANDS) {
             // invalid value for band
             return NO_CHANNELS;
         } else {
@@ -199,7 +209,7 @@ public class KnownBandsChannelHelper extends ChannelHelper {
 
         @Override
         public boolean isAllChannels() {
-            return getAvailableScanChannels(WifiScanner.WIFI_BAND_BOTH_WITH_DFS).length ==
+            return getAvailableScanChannels(WifiScanner.WIFI_TRI_BANDS).length ==
                     mChannels.size();
         }
 
@@ -264,7 +274,7 @@ public class KnownBandsChannelHelper extends ChannelHelper {
 
         @Override
         public Set<Integer> getScanFreqs() {
-            if (mExactBands == WifiScanner.WIFI_BAND_BOTH_WITH_DFS) {
+            if (mExactBands == WifiScanner.WIFI_TRI_BANDS) {
                 return null;
             } else {
                 return new ArraySet<Integer>(mChannels);
