@@ -108,6 +108,10 @@ public class WificondControl implements IBinder.DeathRecipient {
     private boolean mIsEnhancedOpenSupportedInitialized = false;
     private boolean mIsEnhancedOpenSupported;
 
+    private boolean mReport8SS = false;
+    private boolean mIsWifiGenerationCapabilitiesFetched =  false;
+    private WifiNative.WifiGenerationCapabilities mWifiGenerationCapabilities;
+
     private static final int MAX_SSID_LEN = 32;
 
     private class ScanEventHandler extends IScanEvent.Stub {
@@ -277,16 +281,6 @@ public class WificondControl implements IBinder.DeathRecipient {
     }
 
     /**
-    * Disable hostapd via Property Service.
-    */
-    public void disableHostapd() {
-        Log.i(TAG, "Terminate hostapd/hostapd_fst service if the service is running");
-        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd");
-        mWifiInjector.getPropertyService().set("ctl.stop", "hostapd_fst");
-    }
-
-
-    /**
      * Initializes wificond & registers a death notification for wificond.
      * This method clears any existing state in wificond daemon.
      *
@@ -297,8 +291,6 @@ public class WificondControl implements IBinder.DeathRecipient {
             Log.e(TAG, "Death handler already present");
         }
         mDeathEventHandler = handler;
-        Log.i(TAG, "Make sure hostapd service is stopped to avoid failure on first SoftAP start");
-        disableHostapd();
         tearDownInterfaces();
         return true;
     }
@@ -625,7 +617,21 @@ public class WificondControl implements IBinder.DeathRecipient {
             } else {
                 nativeResults = scannerImpl.getPnoScanResults();
             }
-            WifiNative.WifiGenerationCapabilities wifiGenerationCapa = getWifiGenerationCapabilities();
+            WifiNative.WifiGenerationCapabilities wifiGenerationCapa;
+
+            if(mIsWifiGenerationCapabilitiesFetched == true) {
+                wifiGenerationCapa = mWifiGenerationCapabilities;
+            }
+            else {
+                wifiGenerationCapa =  getWifiGenerationCapabilities();
+                // wifiGenerationCapa is null means failed to fetch generation capabilities
+                if(wifiGenerationCapa != null) {
+                    mReport8SS = mWifiInjector.getReport8SS();
+                    mWifiGenerationCapabilities = wifiGenerationCapa;
+                    mIsWifiGenerationCapabilitiesFetched = true;
+                }
+            }
+
             for (NativeScanResult result : nativeResults) {
                 WifiSsid wifiSsid = WifiSsid.createFromByteArray(result.ssid);
                 String bssid;
@@ -652,6 +658,7 @@ public class WificondControl implements IBinder.DeathRecipient {
                     capabilities.reportVht = wifiGenerationCapa.vhtSupport5g;
                     capabilities.reportHe = wifiGenerationCapa.staHeSupport5g;
                 }
+                capabilities.report8SS = mReport8SS;
                 capabilities.from(ies, result.capability, isEnhancedOpenSupported());
                 String flags = capabilities.generateCapabilitiesString();
                 NetworkDetail networkDetail;
