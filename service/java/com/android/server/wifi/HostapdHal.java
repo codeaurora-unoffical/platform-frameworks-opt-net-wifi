@@ -40,6 +40,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -55,11 +58,14 @@ public class HostapdHal {
     private static final String TAG = "HostapdHal";
     @VisibleForTesting
     public static final String HAL_INSTANCE_NAME = "default";
+    @VisibleForTesting
+    public static final long WAIT_FOR_DEATH_TIMEOUT_MS = 50L;
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
     private final Handler mEventHandler;
     private final boolean mEnableAcs;
+    private final boolean mAcsShouldExcludeDfs;
     private final boolean mEnableIeee80211AC;
     private final List<android.hardware.wifi.hostapd.V1_1.IHostapd.AcsChannelRange>
             mAcsChannelRanges;
@@ -135,6 +141,7 @@ public class HostapdHal {
     public HostapdHal(Context context, Looper looper) {
         mEventHandler = new Handler(looper);
         mEnableAcs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_supported);
+        mAcsShouldExcludeDfs = context.getResources().getBoolean(R.bool.config_wifi_softap_acs_should_exclude_dfs);
         mEnableIeee80211AC =
                 context.getResources().getBoolean(R.bool.config_wifi_softap_ieee80211ac_supported);
         mAcsChannelRanges = toAcsChannelRanges(context.getResources().getString(
@@ -257,11 +264,11 @@ public class HostapdHal {
      * Link to death for IHostapd object.
      * @return true on success, false otherwise.
      */
-    private boolean linkToHostapdDeath() {
+    private boolean linkToHostapdDeath(HwRemoteBinder.DeathRecipient deathRecipient, long cookie) {
         synchronized (mLock) {
             if (mIHostapd == null) return false;
             try {
-                if (!mIHostapd.linkToDeath(mHostapdDeathRecipient, ++mDeathRecipientCookie)) {
+                if (!mIHostapd.linkToDeath(deathRecipient, cookie)) {
                     Log.wtf(TAG, "Error on linkToDeath on IHostapd");
                     hostapdServiceDiedHandler(mDeathRecipientCookie);
                     return false;
@@ -309,7 +316,7 @@ public class HostapdHal {
                 Log.e(TAG, "Got null IHostapd service. Stopping hostapd HIDL startup");
                 return false;
             }
-            if (!linkToHostapdDeath()) {
+            if (!linkToHostapdDeath(mHostapdDeathRecipient, ++mDeathRecipientCookie)) {
                 mIHostapd = null;
                 return false;
             }
@@ -351,7 +358,9 @@ public class HostapdHal {
             }
             if (mEnableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
-                ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                if(mAcsShouldExcludeDfs) {
+                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                }
             } else {
                 // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
                 // is not supported.
@@ -520,16 +529,56 @@ public class HostapdHal {
     }
 
     /**
-     * Terminate the hostapd daemon.
+     * Terminate the hostapd daemon & wait for it's death.
      */
     public void terminate() {
         synchronized (mLock) {
+            // Register for a new death listener to block until hostapd is dead.
+            final long waitForDeathCookie = new Random().nextLong();
+            final CountDownLatch waitForDeathLatch = new CountDownLatch(1);
+            linkToHostapdDeath((cookie) -> {
+                Log.d(TAG, "IHostapd died: cookie=" + cookie);
+                if (cookie != waitForDeathCookie) return;
+                waitForDeathLatch.countDown();
+            }, waitForDeathCookie);
+
             final String methodStr = "terminate";
             if (!checkHostapdAndLogFailure(methodStr)) return;
             try {
                 mIHostapd.terminate();
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
+            }
+
+            // Now wait for death listener callback to confirm that it's dead.
+            try {
+                if (!waitForDeathLatch.await(WAIT_FOR_DEATH_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    Log.w(TAG, "Timed out waiting for confirmation of hostapd death");
+                }
+            } catch (InterruptedException e) {
+                Log.w(TAG, "Failed to wait for hostapd death");
+            }
+        }
+    }
+
+    /**
+     * Terminate the hostapd daemon if already running, otherwise ignore.
+     */
+    public void terminateIfRunning() {
+        synchronized (mLock) {
+            WifiInjector wifiInjector = WifiInjector.getInstance();
+            if (wifiInjector.getPropertyService().get("init.svc.hostapd", "").equals("running") ||
+                     wifiInjector.getPropertyService().get("init.svc.hostapd_fst", "").equals("running")) {
+                try {
+                    Log.i(TAG, "Hostapd daemon is running, Terminate gracefully");
+                    IHostapd.getService().terminate();
+                } catch (RemoteException e) {
+                    Log.e(TAG, "IHostapd.getService.terminate exception: " + e);
+                } catch (NoSuchElementException e) {
+                    // |NoSuchElementException| expected when hostapd is not running
+                    // It shouldn't happen as we are calling getService only when hostapd is running
+                    Log.e(TAG, "NoSuchElementException on calling IHostapd.getService though hostapd service is running.");
+                }
             }
         }
     }
@@ -823,7 +872,9 @@ public class HostapdHal {
             }
             if (mEnableAcs) {
                 ifaceParams.channelParams.enableAcs = true;
-                ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                if(mAcsShouldExcludeDfs) {
+                    ifaceParams.channelParams.acsShouldExcludeDfs = true;
+                }
             } else {
                 // Downgrade IHostapd.Band.BAND_ANY to IHostapd.Band.BAND_2_4_GHZ if ACS
                 // is not supported.
