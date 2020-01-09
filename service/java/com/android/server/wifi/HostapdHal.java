@@ -58,6 +58,11 @@ public class HostapdHal {
     @VisibleForTesting
     public static final long WAIT_FOR_DEATH_TIMEOUT_MS = 50L;
 
+    // Vendor Encryption Types
+    // (see HostapdVendor::enum class VendorEncryptionType)
+    private static final int VENDOR_ENCRYPTION_TYPE_SAE = 6;
+    private static final int VENDOR_ENCRYPTION_TYPE_OWE = 7;
+
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
     private final Handler mEventHandler;
@@ -591,6 +596,12 @@ public class HostapdHal {
                 break;
             case WifiConfiguration.KeyMgmt.WPA2_PSK:
                 encryptionType = IHostapd.EncryptionType.WPA2;
+                break;
+            case WifiConfiguration.KeyMgmt.SAE:
+                encryptionType = VENDOR_ENCRYPTION_TYPE_SAE;
+                break;
+            case WifiConfiguration.KeyMgmt.OWE:
+                encryptionType = VENDOR_ENCRYPTION_TYPE_OWE;
                 break;
             default:
                 // We really shouldn't default to None, but this was how NetworkManagementService
