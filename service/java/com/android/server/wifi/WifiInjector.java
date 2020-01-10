@@ -82,6 +82,7 @@ public class WifiInjector {
 
     private final Context mContext;
     private final FrameworkFacade mFrameworkFacade = new FrameworkFacade();
+    private final DeviceConfigFacade mDeviceConfigFacade;
     private final HandlerThread mWifiServiceHandlerThread;
     private final HandlerThread mWifiCoreHandlerThread;
     private final HandlerThread mWifiP2pServiceHandlerThread;
@@ -168,6 +169,7 @@ public class WifiInjector {
         sWifiInjector = this;
 
         mContext = context;
+        mDeviceConfigFacade = new DeviceConfigFacade();
         mWifiScoreCard = new WifiScoreCard(mClock,
                 Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID));
         mSettingsStore = new WifiSettingsStore(mContext);
@@ -202,7 +204,7 @@ public class WifiInjector {
                 mCellularLinkLayerStatsCollector);
         // Modules interacting with Native.
         mWifiMonitor = new WifiMonitor(this);
-        mHalDeviceManager = new HalDeviceManager(mClock);
+        mHalDeviceManager = new HalDeviceManager(mClock, clientModeImplLooper);
         mWifiVendorHal =
                 new WifiVendorHal(mHalDeviceManager, mWifiCoreHandlerThread.getLooper());
         mSupplicantStaIfaceHal =
@@ -239,7 +241,7 @@ public class WifiInjector {
         mWifiKeyStore = new WifiKeyStore(mKeyStore);
         mWifiConfigStore = new WifiConfigStore(
                 mContext, clientModeImplLooper, mClock, mWifiMetrics,
-                WifiConfigStore.createSharedFile(UserManager.get(mContext)));
+                WifiConfigStore.createSharedFile());
         SubscriptionManager subscriptionManager =
                 mContext.getSystemService(SubscriptionManager.class);
         // Config Manager
@@ -299,7 +301,8 @@ public class WifiInjector {
         mWifiDiagnostics = new WifiDiagnostics(
                 mContext, this, mWifiNative, mBuildProperties,
                 new LastMileLogger(this), mClock);
-        mWifiDataStall = new WifiDataStall(mContext, mFrameworkFacade, mWifiMetrics);
+        mWifiDataStall = new WifiDataStall(mContext, mFrameworkFacade, mWifiMetrics,
+                mDeviceConfigFacade, clientModeImplLooper, mClock);
         mWifiMetrics.setWifiDataStall(mWifiDataStall);
         mLinkProbeManager = new LinkProbeManager(mClock, mWifiNative, mWifiMetrics,
                 mFrameworkFacade, mWifiCoreHandlerThread.getLooper(), mContext);
@@ -365,11 +368,13 @@ public class WifiInjector {
         return sWifiInjector;
     }
 
+    private int mVerboseLoggingEnabled = 0;
     /**
      * Enable verbose logging in Injector objects. Called from the WifiServiceImpl (based on
      * binder call).
      */
     public void enableVerboseLogging(int verbose) {
+        mVerboseLoggingEnabled = verbose;
         mWifiLastResortWatchdog.enableVerboseLogging(verbose);
         mWifiBackupRestore.enableVerboseLogging(verbose);
         mHalDeviceManager.enableVerboseLogging(verbose);
@@ -379,6 +384,7 @@ public class WifiInjector {
         mWifiNetworkSuggestionsManager.enableVerboseLogging(verbose);
         LogcatLog.enableVerboseLogging(verbose);
         mDppManager.enableVerboseLogging(verbose);
+        mActiveModeWarden.enableVerboseLogging(verbose);
     }
 
     public UserManager getUserManager() {
@@ -542,7 +548,7 @@ public class WifiInjector {
                                            @NonNull SoftApModeConfiguration config) {
         return new SoftApManager(mContext, mWifiCoreHandlerThread.getLooper(),
                 mFrameworkFacade, mWifiNative, mCountryCode.getCountryCode(), callback,
-                mWifiApConfigStore, config, mWifiMetrics, mSarManager);
+                mWifiApConfigStore, config, mWifiMetrics, mSarManager, mWifiDiagnostics);
     }
 
     /**
@@ -612,8 +618,9 @@ public class WifiInjector {
                 mWifiCoreHandlerThread.getLooper(), mFrameworkFacade, mClock, mWifiMetrics,
                 mWifiConfigManager, mWifiConfigStore, clientModeImpl,
                 new ConnectToNetworkNotificationBuilder(mContext, mFrameworkFacade));
-        mWifiLastResortWatchdog = new WifiLastResortWatchdog(this, mClock,
-                mWifiMetrics, clientModeImpl, clientModeImpl.getHandler().getLooper());
+        mWifiLastResortWatchdog = new WifiLastResortWatchdog(this, mContext, mClock,
+                mWifiMetrics, clientModeImpl, clientModeImpl.getHandler().getLooper(),
+                mDeviceConfigFacade);
         return new WifiConnectivityManager(mContext, getScoringParams(),
                 clientModeImpl, this,
                 mWifiConfigManager, clientModeImpl.getWifiInfo(),
@@ -751,5 +758,67 @@ public class WifiInjector {
 
     public IpMemoryStore getIpMemoryStore() {
         return mIpMemoryStore;
+    }
+
+    public HostapdHal getHostapdHal() {
+        return mHostapdHal;
+    }
+
+    /**
+     * Create a QtiClientModeManager
+     *
+     * @param id interface id for  QtiClientModeManager
+     * @param listener listener for QtiClientModeManager state changes
+     * @return a new instance of QtiClientModeManager
+     */
+    public QtiClientModeManager makeQtiClientModeManager(int id, QtiClientModeManager.Listener listener) {
+        return new QtiClientModeManager(mContext, mWifiCoreHandlerThread.getLooper(),
+                mWifiNative, listener, this, id);
+    }
+
+    /**
+     * Construct a new instance of QtiClientModeImpl to manage addtional stations.
+     *
+     * Create and return a new QtiClientModeImpl.
+     * @param identity staId.
+     * @param listener listener for QtiClientModeManager state changes
+     */
+    public QtiClientModeImpl makeQtiClientModeImpl(int id, QtiClientModeManager.Listener listener) {
+        return new QtiClientModeImpl(mContext, mFrameworkFacade, mWifiCoreHandlerThread.getLooper(),
+                       this, mWifiNative, new WrongPasswordNotifier(mContext, mFrameworkFacade),
+                       mWifiTrafficPoller, mLinkProbeManager, id, listener);
+    }
+
+    /**
+     * Construct a new instance of QtiWifiConnectivityManager and its dependencies.
+     *
+     * Create and return a new QtiWifiConnectivityManager.
+     * @param identity staId.
+     * @param qtiClientModeImpl Instance of client mode impl.
+     */
+    public QtiWifiConnectivityManager makeQtiWifiConnectivityManager(int id, QtiClientModeImpl qtiClientModeImpl) {
+        WifiConnectivityHelper mQtiWifiConnectivityHelper = new WifiConnectivityHelper(mWifiNative);
+
+        WifiNetworkSelector mQtiWifiNetworkSelector = new WifiNetworkSelector(mContext, mWifiScoreCard,
+                                   mScoringParams, mWifiConfigManager, mClock, mConnectivityLocalLog,
+                                   mWifiMetrics, mWifiNative);
+        SavedNetworkEvaluator mQtiSavedNetworkEvaluator = new SavedNetworkEvaluator(mContext, mScoringParams,
+                                   mWifiConfigManager, mClock, mConnectivityLocalLog, mQtiWifiConnectivityHelper,
+                                   mContext.getSystemService(SubscriptionManager.class));
+        // Register the saved network evaluator with the network selector.
+        mQtiWifiNetworkSelector.registerNetworkEvaluator(mQtiSavedNetworkEvaluator);
+        // TODO: UT: check if we need to add PasspointNetworkEvaluator.
+
+        mQtiWifiNetworkSelector.setStaId(id);
+        mQtiSavedNetworkEvaluator.setStaId(id);
+
+        return new QtiWifiConnectivityManager(mContext, getScoringParams(),
+                qtiClientModeImpl, this, mWifiConfigManager, mQtiWifiNetworkSelector,
+                mQtiWifiConnectivityHelper, mWifiCoreHandlerThread.getLooper(),
+                mClock, mConnectivityLocalLog, id);
+    }
+
+    public int getVerboseLogging() {
+        return mVerboseLoggingEnabled;
     }
 }

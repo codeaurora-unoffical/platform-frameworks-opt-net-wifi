@@ -290,8 +290,10 @@ public class WifiConnectivityManager {
 
         localLog(listenerName + " onResults: start network selection");
 
+        List<ScanDetail> filteredScans = mStateMachine.qtiGetFilteredScan(scanDetails);
+
         WifiConfiguration candidate =
-                mNetworkSelector.selectNetwork(scanDetails, buildBssidBlacklist(), mWifiInfo,
+                mNetworkSelector.selectNetwork(filteredScans, buildBssidBlacklist(), mWifiInfo,
                 mStateMachine.isConnected(), mStateMachine.isDisconnected(),
                 mUntrustedConnectionAllowed);
         mWifiLastResortWatchdog.updateAvailableNetworks(
@@ -782,8 +784,8 @@ public class WifiConnectivityManager {
             // Framework specifies the connection target BSSID if firmware doesn't support
             // {@link android.net.wifi.WifiManager#WIFI_FEATURE_CONTROL_ROAMING} or the
             // candidate configuration contains a specified BSSID.
-            if (mConnectivityHelper.isFirmwareRoamingSupported() && (candidate.BSSID == null
-                      || candidate.BSSID.equals(ClientModeImpl.SUPPLICANT_BSSID_ANY))) {
+            if (!mStateMachine.isActiveDualMode() && mConnectivityHelper.isFirmwareRoamingSupported()
+                && (candidate.BSSID == null || candidate.BSSID.equals(ClientModeImpl.SUPPLICANT_BSSID_ANY))) {
                 targetBssid = ClientModeImpl.SUPPLICANT_BSSID_ANY;
                 localLog("connectToNetwork: Connect to " + candidate.SSID + ":" + targetBssid
                         + " from " + currentAssociationId);
@@ -943,11 +945,14 @@ public class WifiConnectivityManager {
         settings.reportEvents = WifiScanner.REPORT_EVENT_FULL_SCAN_RESULT
                             | WifiScanner.REPORT_EVENT_AFTER_EACH_SCAN;
         settings.numBssidsPerScan = 0;
-
+        // retrieve the list of hidden network SSIDs from saved network to scan for
         List<ScanSettings.HiddenNetwork> hiddenNetworkList =
-                mConfigManager.retrieveHiddenNetworkList();
+                new ArrayList<>(mConfigManager.retrieveHiddenNetworkList());
+        // retrieve the list of hidden network SSIDs from Network suggestion to scan for
+        hiddenNetworkList.addAll(
+                mWifiInjector.getWifiNetworkSuggestionsManager().retrieveHiddenNetworkList());
         settings.hiddenNetworks =
-                hiddenNetworkList.toArray(new ScanSettings.HiddenNetwork[hiddenNetworkList.size()]);
+                hiddenNetworkList.toArray(new ScanSettings.HiddenNetwork[0]);
 
         SingleScanListener singleScanListener =
                 new SingleScanListener(isFullBandScan);
