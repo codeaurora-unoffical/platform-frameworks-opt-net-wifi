@@ -72,6 +72,7 @@ public class ApConfigUtil {
                                       int[] allowed5GFreqList) {
         if (apBand != WifiConfiguration.AP_BAND_2GHZ
                 && apBand != WifiConfiguration.AP_BAND_5GHZ
+                    && apBand != WifiConfiguration.AP_BAND_DUAL
                         && apBand != WifiConfiguration.AP_BAND_ANY) {
             Log.e(TAG, "Invalid band: " + apBand);
             return -1;
@@ -124,7 +125,8 @@ public class ApConfigUtil {
         }
 
         /* Country code is mandatory for 5GHz band. */
-        if (config.apBand == WifiConfiguration.AP_BAND_5GHZ
+        if ((config.apBand == WifiConfiguration.AP_BAND_5GHZ
+             || config.apBand == WifiConfiguration.AP_BAND_DUAL)
                 && countryCode == null) {
             Log.e(TAG, "5GHz band is not allowed without country code");
             return ERROR_GENERIC;

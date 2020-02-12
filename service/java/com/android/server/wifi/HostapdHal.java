@@ -62,6 +62,8 @@ public class HostapdHal {
     // (see HostapdVendor::enum class VendorEncryptionType)
     private static final int VENDOR_ENCRYPTION_TYPE_SAE = 6;
     private static final int VENDOR_ENCRYPTION_TYPE_OWE = 7;
+    // Vendor Band option
+    private static final int IHOSTAPD_HAL_BAND_DUAL = 3;
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
@@ -623,6 +625,9 @@ public class HostapdHal {
                 break;
             case WifiConfiguration.AP_BAND_ANY:
                 bandType = IHostapd.Band.BAND_ANY;
+                break;
+            case WifiConfiguration.AP_BAND_DUAL:
+                bandType = IHOSTAPD_HAL_BAND_DUAL;
                 break;
             default:
                 throw new IllegalArgumentException();
