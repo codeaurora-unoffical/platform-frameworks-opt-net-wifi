@@ -85,6 +85,7 @@ public class WifiInjector {
 
     private final Context mContext;
     private final FrameworkFacade mFrameworkFacade = new FrameworkFacade();
+    private final DeviceConfigFacade mDeviceConfigFacade;
     private final HandlerThread mWifiServiceHandlerThread;
     private final HandlerThread mWifiCoreHandlerThread;
     private final HandlerThread mWifiP2pServiceHandlerThread;
@@ -172,6 +173,7 @@ public class WifiInjector {
         sWifiInjector = this;
 
         mContext = context;
+        mDeviceConfigFacade = new DeviceConfigFacade();
         mWifiScoreCard = new WifiScoreCard(mClock,
                 Secure.getString(mContext.getContentResolver(), Secure.ANDROID_ID));
         mSettingsStore = new WifiSettingsStore(mContext);
@@ -206,7 +208,7 @@ public class WifiInjector {
                 mCellularLinkLayerStatsCollector);
         // Modules interacting with Native.
         mWifiMonitor = new WifiMonitor(this);
-        mHalDeviceManager = new HalDeviceManager(mClock);
+        mHalDeviceManager = new HalDeviceManager(mClock, clientModeImplLooper);
         mWifiVendorHal =
                 new WifiVendorHal(mHalDeviceManager, mWifiCoreHandlerThread.getLooper());
         mSupplicantStaIfaceHal =
@@ -306,7 +308,8 @@ public class WifiInjector {
         mWifiDiagnostics = new WifiDiagnostics(
                 mContext, this, mWifiNative, mBuildProperties,
                 new LastMileLogger(this), mClock);
-        mWifiDataStall = new WifiDataStall(mContext, mFrameworkFacade, mWifiMetrics);
+        mWifiDataStall = new WifiDataStall(mContext, mFrameworkFacade, mWifiMetrics,
+                mDeviceConfigFacade, clientModeImplLooper, mClock);
         mWifiMetrics.setWifiDataStall(mWifiDataStall);
         mLinkProbeManager = new LinkProbeManager(mClock, mWifiNative, mWifiMetrics,
                 mFrameworkFacade, mWifiCoreHandlerThread.getLooper(), mContext);
@@ -546,7 +549,7 @@ public class WifiInjector {
                                            @NonNull SoftApModeConfiguration config) {
         return new SoftApManager(mContext, mWifiCoreHandlerThread.getLooper(),
                 mFrameworkFacade, mWifiNative, mCountryCode.getCountryCode(), callback,
-                mWifiApConfigStore, config, mWifiMetrics, mSarManager);
+                mWifiApConfigStore, config, mWifiMetrics, mSarManager, mWifiDiagnostics);
     }
 
     /**
@@ -616,8 +619,9 @@ public class WifiInjector {
                 mWifiCoreHandlerThread.getLooper(), mFrameworkFacade, mClock, mWifiMetrics,
                 mWifiConfigManager, mWifiConfigStore, clientModeImpl,
                 new ConnectToNetworkNotificationBuilder(mContext, mFrameworkFacade));
-        mWifiLastResortWatchdog = new WifiLastResortWatchdog(this, mClock,
-                mWifiMetrics, clientModeImpl, clientModeImpl.getHandler().getLooper());
+        mWifiLastResortWatchdog = new WifiLastResortWatchdog(this, mContext, mClock,
+                mWifiMetrics, clientModeImpl, clientModeImpl.getHandler().getLooper(),
+                mDeviceConfigFacade);
         return new WifiConnectivityManager(mContext, getScoringParams(),
                 clientModeImpl, this,
                 mWifiConfigManager, clientModeImpl.getWifiInfo(),
@@ -755,5 +759,9 @@ public class WifiInjector {
 
     public IpMemoryStore getIpMemoryStore() {
         return mIpMemoryStore;
+    }
+
+    public HostapdHal getHostapdHal() {
+        return mHostapdHal;
     }
 }
