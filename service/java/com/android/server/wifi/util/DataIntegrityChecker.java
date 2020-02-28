@@ -32,6 +32,7 @@ import java.security.KeyStoreException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
+import java.security.ProviderException;
 import java.security.UnrecoverableEntryException;
 import java.security.cert.CertificateException;
 
@@ -251,7 +252,11 @@ public class DataIntegrityChecker {
             reportException(e, "getOrCreateSecretKey cannot find crypto provider");
         } catch (UnrecoverableEntryException e) {
             reportException(e, "getOrCreateSecretKey had an unrecoverable entry exception.");
+        } catch (ProviderException e) {
+            Log.e(TAG, "catch keystore ProviderException");
+            reportException(e, "getOrCreateSecretKey had a ProviderException exception.");
         }
+
         return secretKey;
     }
 
