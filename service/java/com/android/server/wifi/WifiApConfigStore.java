@@ -288,7 +288,7 @@ public class WifiApConfigStore {
 
             int authType = in.readInt();
             config.allowedKeyManagement.set(authType);
-            if (authType != KeyMgmt.NONE) {
+            if (authType != KeyMgmt.NONE && authType != KeyMgmt.OWE) {
                 config.preSharedKey = in.readUTF();
             }
         } catch (IOException e) {
@@ -320,7 +320,7 @@ public class WifiApConfigStore {
             out.writeBoolean(config.hiddenSSID);
             int authType = config.getAuthType();
             out.writeInt(authType);
-            if (authType != KeyMgmt.NONE) {
+            if (authType != KeyMgmt.NONE && authType != KeyMgmt.OWE) {
                 out.writeUTF(config.preSharedKey);
             }
         } catch (IOException e) {
@@ -450,13 +450,13 @@ public class WifiApConfigStore {
             return false;
         }
 
-        if (authType == KeyMgmt.NONE) {
+        if (authType == KeyMgmt.NONE || authType == KeyMgmt.OWE) {
             // open networks should not have a password
             if (hasPreSharedKey) {
-                Log.d(TAG, "open softap network should not have a password");
+                Log.d(TAG, "open or owe softap network should not have a password");
                 return false;
             }
-        } else if (authType == KeyMgmt.WPA2_PSK) {
+        } else if (authType == KeyMgmt.WPA2_PSK || authType == KeyMgmt.SAE) {
             // this is a config that should have a password - check that first
             if (!hasPreSharedKey) {
                 Log.d(TAG, "softap network password must be set");
@@ -469,7 +469,7 @@ public class WifiApConfigStore {
             }
         } else {
             // this is not a supported security type
-            Log.d(TAG, "softap configs must either be open or WPA2 PSK networks");
+            Log.d(TAG, "softap configs must either be open or WPA2 PSK or OWE or SAE networks");
             return false;
         }
 
