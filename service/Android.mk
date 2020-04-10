@@ -48,7 +48,8 @@ LOCAL_STATIC_JAVA_LIBRARIES := \
 	android.hardware.wifi.supplicant-V1.2-java \
 	wifi_service_proto \
 	ksoap2 \
-	libnanohttpd
+	libnanohttpd \
+	vendor.qti.hardware.wifi.supplicant-V2.0-java
 
 LOCAL_REQUIRED_MODULES := \
 	services \
