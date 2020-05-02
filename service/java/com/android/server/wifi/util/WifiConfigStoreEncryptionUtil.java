@@ -142,10 +142,6 @@ public class WifiConfigStoreEncryptionUtil {
 
     private SecretKey getOrCreateSecretKey(String keyAlias) {
         SecretKey secretKey = null;
-        if (null == ServiceManager.getService("android.security.keystore")) {
-            Log.e(TAG, "Service of 'android.security.keystore' is null");
-            return null;
-        }
         try {
             KeyStore keyStore = AndroidKeyStoreProvider.getKeyStoreForUid(Process.WIFI_UID);
             if (keyStore.containsAlias(keyAlias)) { // The key exists in key store. Get the key.
@@ -183,11 +179,7 @@ public class WifiConfigStoreEncryptionUtil {
             reportException(e, "getOrCreateSecretKey cannot find crypto provider");
         } catch (UnrecoverableEntryException e) {
             reportException(e, "getOrCreateSecretKey had an unrecoverable entry exception.");
-        } catch (ProviderException e) {
-            Log.e(TAG, "catch keystore ProviderException");
-            reportException(e, "getOrCreateSecretKey had a ProviderException exception.");
         }
-
         return secretKey;
     }
 
