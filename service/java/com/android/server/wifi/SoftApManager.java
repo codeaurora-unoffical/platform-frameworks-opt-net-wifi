@@ -31,6 +31,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -287,6 +288,7 @@ public class SoftApManager implements ActiveModeManager {
         if (localConfig.hiddenSSID) {
             Log.d(TAG, "SoftAP is a hidden network");
         }
+
         if (!mWifiNative.startSoftAp(mApInterfaceName, localConfig, mSoftApListener)) {
             Log.e(TAG, "Soft AP start failed");
             return ERROR_GENERIC;
@@ -367,6 +369,12 @@ public class SoftApManager implements ActiveModeManager {
             public boolean processMessage(Message message) {
                 switch (message.what) {
                     case CMD_START:
+                        // FIXME: Use a global property to indicate AP+AP, ideally
+                        // this expects HIDL/AIDL API change in upcoming Android R.
+                        WifiConfiguration config = (WifiConfiguration) message.obj;
+                        SystemProperties.set("persist.vendor.wifi.softap.dualband",
+                            (config.apBand == WifiConfiguration.AP_BAND_DUAL) ? "1" : "0");
+
                         mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
                                 mWifiNativeInterfaceCallback);
                         if (TextUtils.isEmpty(mApInterfaceName)) {

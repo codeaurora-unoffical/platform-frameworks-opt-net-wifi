@@ -106,6 +106,7 @@ import com.android.server.wifi.util.WifiPermissionsWrapper;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -156,6 +157,11 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             android.Manifest.permission.ACCESS_FINE_LOCATION,
             android.Manifest.permission.ACCESS_WIFI_STATE
     };
+
+    // Maximum number of bytes allowed for a network name, i.e. SSID.
+    private static final int MAX_NETWORK_NAME_BYTES = 32;
+    // Minimum number of bytes for a network name, i.e. DIRECT-xy.
+    private static final int MIN_NETWORK_NAME_BYTES = 9;
 
     // Two minutes comes from the wpa_supplicant setting
     private static final int GROUP_CREATING_WAIT_TIME_MS = 120 * 1000;
@@ -384,6 +390,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
             switch (msg.what) {
                 case WifiP2pManager.SET_DEVICE_NAME:
                 case WifiP2pManager.SET_WFD_INFO:
+                case WifiP2pManager.SET_WFDR2_INFO:
                 case WifiP2pManager.DISCOVER_PEERS:
                 case WifiP2pManager.STOP_DISCOVERY:
                 case WifiP2pManager.CONNECT:
@@ -1134,6 +1141,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                     WifiP2pManager.BUSY);
                         }
                         break;
+                    case WifiP2pManager.SET_WFDR2_INFO:
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.BUSY);
+                        }
+                        break;
                     case WifiP2pManager.REQUEST_PEERS:
                         replyToMessage(message, WifiP2pManager.RESPONSE_PEERS,
                                 getPeers(getCallingPkgName(message.sendingUid, message.replyTo),
@@ -1386,6 +1402,15 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                                     WifiP2pManager.P2P_UNSUPPORTED);
                         }
                         break;
+                    case WifiP2pManager.SET_WFDR2_INFO:
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.P2P_UNSUPPORTED);
+                        }
+                        break;
                     case WifiP2pManager.START_WPS:
                         replyToMessage(message, WifiP2pManager.START_WPS_FAILED,
                                 WifiP2pManager.P2P_UNSUPPORTED);
@@ -1595,6 +1620,20 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                             notifyP2pGroupAlreadyCreated();
                         }
                         return NOT_HANDLED;
+                    case WifiP2pManager.SET_WFDR2_INFO:
+                    {
+                        WifiP2pWfdInfo d = (WifiP2pWfdInfo) message.obj;
+                        if (!getWfdPermission(message.sendingUid)) {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        } else if (d != null && setWfdR2Info(d)) {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_SUCCEEDED);
+                        } else {
+                            replyToMessage(message, WifiP2pManager.SET_WFDR2_INFO_FAILED,
+                                    WifiP2pManager.ERROR);
+                        }
+                        break;
+                    }
                     case BLOCK_DISCOVERY:
                         boolean blocked = (message.arg1 == ENABLED ? true : false);
                         if (mDiscoveryBlocked == blocked) break;
@@ -3557,6 +3596,23 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         }
 
         /**
+         * Check the network name complies standard SSID naming rules.
+         *
+         * The network name of a group is also the broadcasting SSID,
+         * as a result, the network name must complies standard SSID naming
+         * rules.
+         */
+        private boolean isValidNetworkName(String networkName) {
+            if (TextUtils.isEmpty(networkName)) return false;
+
+            byte[] ssidBytes = networkName.getBytes(StandardCharsets.UTF_8);
+            if (ssidBytes.length < MIN_NETWORK_NAME_BYTES) return false;
+            if (ssidBytes.length > MAX_NETWORK_NAME_BYTES) return false;
+
+            return true;
+        }
+
+        /**
          * A config is valid as a group if it has network name and passphrase.
          * Supplicant can construct a group on the fly for creating a group with specified config
          * or join a group without negotiation and WPS.
@@ -3566,7 +3622,7 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
         private boolean isConfigValidAsGroup(WifiP2pConfig config) {
             if (config == null) return false;
             if (TextUtils.isEmpty(config.deviceAddress)) return false;
-            if (!TextUtils.isEmpty(config.networkName)
+            if (isValidNetworkName(config.networkName)
                     && !TextUtils.isEmpty(config.passphrase)) {
                 return true;
             }
@@ -3941,6 +3997,27 @@ public class WifiP2pServiceImpl extends IWifiP2pManager.Stub {
                 success =
                     mWifiNative.setWfdEnable(true)
                     && mWifiNative.setWfdDeviceInfo(wfdInfo.getDeviceInfoHex());
+            }
+
+            if (!success) {
+                loge("Failed to set wfd properties");
+                return false;
+            }
+
+            mThisDevice.wfdInfo = wfdInfo;
+            sendThisDeviceChangedBroadcast();
+            return true;
+        }
+
+        private boolean setWfdR2Info(WifiP2pWfdInfo wfdInfo) {
+            boolean success;
+
+            if (!wfdInfo.isWfdEnabled()) {
+                success = mWifiNative.setWfdEnable(false);
+            } else {
+                success =
+                    mWifiNative.setWfdEnable(true)
+                    && mWifiNative.setWfdR2DeviceInfo(wfdInfo.getR2DeviceInfoHex());
             }
 
             if (!success) {
