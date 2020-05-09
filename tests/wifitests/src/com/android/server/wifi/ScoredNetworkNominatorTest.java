@@ -16,6 +16,7 @@
 
 package com.android.server.wifi;
 
+import static com.android.server.wifi.ScoredNetworkNominator.SETTINGS_GLOBAL_USE_OPEN_WIFI_PACKAGE;
 import static com.android.server.wifi.WifiConfigurationTestUtil.SECURITY_NONE;
 import static com.android.server.wifi.WifiConfigurationTestUtil.SECURITY_PSK;
 
@@ -25,10 +26,14 @@ import static org.mockito.Mockito.*;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
 import android.net.NetworkKey;
 import android.net.NetworkScoreManager;
+import android.net.Uri;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.LocalLog;
 
@@ -57,11 +62,13 @@ import java.util.List;
 public class ScoredNetworkNominatorTest extends WifiBaseTest {
     private static final String TEST_PACKAGE_NAME = "name.package.test";
     private static final int TEST_UID = 12345;
+    private ContentObserver mContentObserver;
     private int mThresholdQualifiedRssi2G;
     private int mThresholdQualifiedRssi5G;
 
     @Mock private Context mContext;
     @Mock private Clock mClock;
+    @Mock private FrameworkFacade mFrameworkFacade;
     @Mock private NetworkScoreManager mNetworkScoreManager;
     @Mock private PackageManager mPackageManager;
     @Mock private WifiConfigManager mWifiConfigManager;
@@ -80,19 +87,26 @@ public class ScoredNetworkNominatorTest extends WifiBaseTest {
 
         MockitoAnnotations.initMocks(this);
 
+        when(mFrameworkFacade.getStringSetting(mContext,
+                SETTINGS_GLOBAL_USE_OPEN_WIFI_PACKAGE))
+                .thenReturn("test");
         ApplicationInfo appInfo = new ApplicationInfo();
         appInfo.uid = TEST_UID;
-        when(mPackageManager.getApplicationInfo(any(), anyInt()))
+        when(mPackageManager.getApplicationInfo(eq(TEST_PACKAGE_NAME), anyInt()))
                 .thenReturn(appInfo);
-
-        mScoreCache = new WifiNetworkScoreCache(mContext);
-        mScoredNetworkNominator = new ScoredNetworkNominator(mNetworkScoreManager,
-                mPackageManager, mWifiConfigManager, new LocalLog(0), mScoreCache,
-                mWifiPermissionsUtil);
-
-        reset(mNetworkScoreManager);
         when(mNetworkScoreManager.getActiveScorerPackage())
                 .thenReturn(TEST_PACKAGE_NAME);
+
+        ArgumentCaptor<ContentObserver> observerCaptor =
+                ArgumentCaptor.forClass(ContentObserver.class);
+        mScoreCache = new WifiNetworkScoreCache(mContext);
+        mScoredNetworkNominator = new ScoredNetworkNominator(mContext,
+                new Handler(Looper.getMainLooper()), mFrameworkFacade, mNetworkScoreManager,
+                mPackageManager, mWifiConfigManager, new LocalLog(0), mScoreCache,
+                mWifiPermissionsUtil);
+        verify(mFrameworkFacade).registerContentObserver(eq(mContext), any(Uri.class), eq(false),
+                observerCaptor.capture());
+        mContentObserver = observerCaptor.getValue();
 
         when(mClock.getElapsedSinceBootMillis()).thenReturn(SystemClock.elapsedRealtime());
     }
@@ -115,10 +129,13 @@ public class ScoredNetworkNominatorTest extends WifiBaseTest {
                 .setupScanDetailsAndConfigStore(
                 ssids, bssids, freqs, caps, levels, securities, mWifiConfigManager, mClock);
 
-        when(mNetworkScoreManager.getActiveScorerPackage()).thenReturn(null);
+        when(mFrameworkFacade.getStringSetting(mContext,
+                SETTINGS_GLOBAL_USE_OPEN_WIFI_PACKAGE))
+                .thenReturn(null);
+
+        mContentObserver.onChange(false /* unused */);
 
         mScoredNetworkNominator.update(scanDetailsAndConfigs.getScanDetails());
-        verify(mNetworkScoreManager).getActiveScorerPackage();
 
         verifyZeroInteractions(mNetworkScoreManager);
     }
@@ -137,7 +154,6 @@ public class ScoredNetworkNominatorTest extends WifiBaseTest {
                         ssids, bssids, freqs, caps, levels, securities, mWifiConfigManager, mClock);
 
         mScoredNetworkNominator.update(new ArrayList<ScanDetail>());
-        verify(mNetworkScoreManager).getActiveScorerPackage();
 
         verifyZeroInteractions(mNetworkScoreManager);
     }
@@ -202,12 +218,15 @@ public class ScoredNetworkNominatorTest extends WifiBaseTest {
 
     @Test
     public void testEvaluateNetworks_recommendationsDisabled() {
-        when(mNetworkScoreManager.getActiveScorerPackage()).thenReturn(null);
+        when(mFrameworkFacade.getStringSetting(mContext,
+                SETTINGS_GLOBAL_USE_OPEN_WIFI_PACKAGE))
+                .thenReturn(null);
+
+        mContentObserver.onChange(false /* unused */);
 
         mScoredNetworkNominator.nominateNetworks(null, null, null, false, false,
                 mOnConnectableListener);
 
-        verify(mNetworkScoreManager).getActiveScorerPackage();
         verifyZeroInteractions(mWifiConfigManager, mNetworkScoreManager);
     }
 
@@ -281,7 +300,7 @@ public class ScoredNetworkNominatorTest extends WifiBaseTest {
         when(mWifiConfigManager.getConfiguredNetworkForScanDetailAndCache(any(ScanDetail.class)))
                 .thenReturn(null);
         // But when we create one, this is should be it.
-        when(mWifiConfigManager.addOrUpdateNetwork(any(), anyInt()))
+        when(mWifiConfigManager.addOrUpdateNetwork(any(), eq(TEST_UID), eq(TEST_PACKAGE_NAME)))
                 .thenReturn(new NetworkUpdateResult(1));
         // Untrusted networks allowed.
         mScoredNetworkNominator.nominateNetworks(scanDetails,

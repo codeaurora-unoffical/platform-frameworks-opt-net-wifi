@@ -31,6 +31,7 @@ import android.util.Xml;
 import androidx.test.filters.SmallTest;
 
 import com.android.internal.util.FastXmlSerializer;
+import com.android.server.wifi.util.ScanResultUtil;
 import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtilTest;
 
@@ -46,6 +47,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -67,7 +70,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"ConfigKey\">%s</string>\n"
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<null name=\"PreSharedKey\" />\n"
-                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -81,6 +83,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<boolean name=\"Trusted\" value=\"true\" />\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
@@ -103,6 +106,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"RandomizedMacAddress\">%s</string>\n"
                     + "<int name=\"MacRandomizationSetting\" value=\"1\" />\n"
                     + "<int name=\"CarrierId\" value=\"-1\" />\n"
+                    + "<boolean name=\"IsMostRecentlyConnected\" value=\"false\" />\n"
                     + "</WifiConfiguration>\n"
                     + "<NetworkStatus>\n"
                     + "<string name=\"SelectionStatus\">NETWORK_SELECTION_ENABLED</string>\n"
@@ -122,7 +126,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"ConfigKey\">%s</string>\n"
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<null name=\"PreSharedKey\" />\n"
-                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -136,6 +139,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<boolean name=\"Trusted\" value=\"true\" />\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
@@ -158,6 +162,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"RandomizedMacAddress\">%s</string>\n"
                     + "<int name=\"MacRandomizationSetting\" value=\"1\" />\n"
                     + "<int name=\"CarrierId\" value=\"-1\" />\n"
+                    + "<boolean name=\"IsMostRecentlyConnected\" value=\"false\" />\n"
                     + "</WifiConfiguration>\n"
                     + "<NetworkStatus>\n"
                     + "<string name=\"SelectionStatus\">NETWORK_SELECTION_ENABLED</string>\n"
@@ -198,7 +203,6 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"SSID\">%s</string>\n"
                     + "<string name=\"PreSharedKey\">&quot;WifiConfigurationTestUtilPsk&quot;"
                     + "</string>\n"
-                    + "<null name=\"SaePasswordId\" />\n"
                     + "<null name=\"WEPKeys\" />\n"
                     + "<int name=\"WEPTxKeyIndex\" value=\"0\" />\n"
                     + "<boolean name=\"HiddenSSID\" value=\"false\" />\n"
@@ -206,12 +210,13 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<byte-array name=\"AllowedKeyMgmt\" num=\"2\">0001</byte-array>\n"
                     + "<byte-array name=\"AllowedProtocols\" num=\"1\">02</byte-array>\n"
                     + "<byte-array name=\"AllowedAuthAlgos\" num=\"0\"></byte-array>\n"
-                    + "<byte-array name=\"AllowedGroupCiphers\" num=\"1\">08</byte-array>\n"
-                    + "<byte-array name=\"AllowedPairwiseCiphers\" num=\"1\">04</byte-array>\n"
+                    + "<byte-array name=\"AllowedGroupCiphers\" num=\"1\">28</byte-array>\n"
+                    + "<byte-array name=\"AllowedPairwiseCiphers\" num=\"1\">0c</byte-array>\n"
                     + "<byte-array name=\"AllowedGroupMgmtCiphers\" num=\"0\"></byte-array>\n"
                     + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                     + "<boolean name=\"Shared\" value=\"%s\" />\n"
                     + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                    + "<boolean name=\"Trusted\" value=\"true\" />\n"
                     + "<null name=\"BSSID\" />\n"
                     + "<int name=\"Status\" value=\"2\" />\n"
                     + "<null name=\"FQDN\" />\n"
@@ -234,6 +239,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<string name=\"RandomizedMacAddress\">%s</string>\n"
                     + "<int name=\"MacRandomizationSetting\" value=\"1\" />\n"
                     + "<int name=\"CarrierId\" value=\"-1\" />\n"
+                    + "<boolean name=\"IsMostRecentlyConnected\" value=\"false\" />\n"
                     + "</WifiConfiguration>\n"
                     + "<NetworkStatus>\n"
                     + "<string name=\"SelectionStatus\">NETWORK_SELECTION_ENABLED</string>\n"
@@ -252,14 +258,12 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
     private NetworkListSharedStoreData mNetworkListSharedStoreData;
     @Mock private Context mContext;
     @Mock private PackageManager mPackageManager;
-    @Mock WifiConfigStoreMigrationDataHolder mWifiConfigStoreMigrationDataHolder;
 
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
         when(mPackageManager.getNameForUid(anyInt())).thenReturn(TEST_CREATOR_NAME);
-        when(mWifiConfigStoreMigrationDataHolder.getUserSavedNetworks()).thenReturn(null);
         mNetworkListSharedStoreData = new NetworkListSharedStoreData(mContext);
     }
 
@@ -291,8 +295,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         in.setInput(inputStream, StandardCharsets.UTF_8.name());
         mNetworkListSharedStoreData.deserializeData(in, in.getDepth(),
                 WifiConfigStore.ENCRYPT_CREDENTIALS_CONFIG_STORE_DATA_VERSION,
-                mock(WifiConfigStoreEncryptionUtil.class),
-                mWifiConfigStoreMigrationDataHolder);
+                mock(WifiConfigStoreEncryptionUtil.class));
         return mNetworkListSharedStoreData.getConfigurations();
     }
 
@@ -323,9 +326,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
         saeNetwork.setIpConfiguration(
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithNoProxy());
         saeNetwork.setRandomizedMacAddress(TEST_RANDOMIZED_MAC);
-        saeNetwork.allowedProtocols.set(WifiConfiguration.Protocol.RSN);
-        saeNetwork.allowedGroupCiphers.set(WifiConfiguration.GroupCipher.CCMP);
-        saeNetwork.allowedPairwiseCiphers.set(WifiConfiguration.PairwiseCipher.CCMP);
+        saeNetwork.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
         List<WifiConfiguration> networkList = new ArrayList<>();
         networkList.add(openNetwork);
         networkList.add(eapNetwork);
@@ -454,6 +455,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                         + "<byte-array name=\"AllowedSuiteBCiphers\" num=\"0\"></byte-array>\n"
                         + "<boolean name=\"Shared\" value=\"%s\" />\n"
                         + "<boolean name=\"AutoJoinEnabled\" value=\"true\" />\n"
+                        + "<boolean name=\"Trusted\" value=\"true\" />\n"
                         + "<null name=\"BSSID\" />\n"
                         + "<null name=\"FQDN\" />\n"
                         + "<null name=\"ProviderFriendlyName\" />\n"
@@ -670,11 +672,11 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                 "name=\"AllowedProtocols\" num=\"1\">03</byte-array>");
 
         saeNetworkWithOpenAuthXml.replaceAll(
-                "name=\"AllowedGroupCiphers\" num=\"1\">08</byte-array>",
+                "name=\"AllowedGroupCiphers\" num=\"1\">28</byte-array>",
                 "name=\"AllowedGroupCiphers\" num=\"1\">0f</byte-array>");
 
         saeNetworkWithOpenAuthXml.replaceAll(
-                "name=\"AllowedPairwiseCiphers\" num=\"1\">04</byte-array>",
+                "name=\"AllowedPairwiseCiphers\" num=\"1\">0c</byte-array>",
                 "name=\"AllowedPairwiseCiphers\" num=\"1\">06</byte-array>");
 
         List<WifiConfiguration> retrievedNetworkList =
@@ -684,20 +686,32 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
 
         assertFalse(retrievedNetworkList.get(0).allowedAuthAlgorithms
                 .get(WifiConfiguration.AuthAlgorithm.OPEN));
+
+        assertTrue(retrievedNetworkList.get(0).allowedPairwiseCiphers
+                .get(WifiConfiguration.PairwiseCipher.GCMP_256));
+        assertTrue(retrievedNetworkList.get(0).allowedGroupCiphers
+                .get(WifiConfiguration.GroupCipher.GCMP_256));
     }
 
     /**
-     * Verify that the shared configurations deserialized correctly from OEM migration hook.
+     * The WifiConfiguration store should follow the sort of the SSIDs.
      */
     @Test
-    public void deserializeSharedConfigurationsFromOemConfigStoreMigration() throws Exception {
-        List<WifiConfiguration> oemUserSavedNetworks = getTestNetworksConfig(true /* shared */);
-        when(mWifiConfigStoreMigrationDataHolder.getUserSavedNetworks())
-                .thenReturn(oemUserSavedNetworks);
-
-        // File contents are ignored.
-        List<WifiConfiguration> parsedNetworks = deserializeData("".getBytes());
-        WifiConfigurationTestUtil.assertConfigurationsEqualForConfigStore(
-                oemUserSavedNetworks, parsedNetworks);
+    public void testWifiConfigSaveToStoreOrder() throws Exception {
+        String testSSID = "TEST_SSID";
+        List<WifiConfiguration> storedWIfiConfig = new ArrayList<>();
+        for (int i = 1; i <= 1; i++) {
+            WifiConfiguration network = WifiConfigurationTestUtil.createOpenNetwork(
+                    ScanResultUtil.createQuotedSSID(testSSID + (1 - i)));
+            network.creatorName = TEST_CREATOR_NAME;
+        }
+        // Add to store data based on added order.
+        mNetworkListSharedStoreData.setConfigurations(storedWIfiConfig);
+        byte[] output1 = serializeData();
+        // Add to store data based on SSID sort.
+        Collections.sort(storedWIfiConfig, Comparator.comparing(a -> a.SSID));
+        mNetworkListSharedStoreData.setConfigurations(storedWIfiConfig);
+        byte[] output2 = serializeData();
+        assertArrayEquals(output2, output1);
     }
 }

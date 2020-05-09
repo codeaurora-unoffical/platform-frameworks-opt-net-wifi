@@ -25,6 +25,7 @@ import android.util.BackupUtils;
 import android.util.Log;
 
 import com.android.server.wifi.util.ApConfigUtil;
+import com.android.server.wifi.util.SettingsMigrationDataHolder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -49,14 +50,17 @@ public class SoftApBackupRestore {
     /**
      * Current backup data version.
      */
-    private static final int CURRENT_SAP_BACKUP_DATA_VERSION = 6;
+    private static final int CURRENT_SAP_BACKUP_DATA_VERSION = 7;
 
     private static final int ETHER_ADDR_LEN = 6; // Byte array size of MacAddress
 
     private final Context mContext;
+    private final SettingsMigrationDataHolder mSettingsMigrationDataHolder;
 
-    public SoftApBackupRestore(Context context) {
+    public SoftApBackupRestore(Context context,
+            SettingsMigrationDataHolder settingsMigrationDataHolder) {
         mContext = context;
+        mSettingsMigrationDataHolder = settingsMigrationDataHolder;
     }
 
     /**
@@ -83,7 +87,7 @@ public class SoftApBackupRestore {
             out.writeInt(config.getSecurityType());
             out.writeBoolean(config.isHiddenSsid());
             out.writeInt(config.getMaxNumberOfClients());
-            out.writeInt(config.getShutdownTimeoutMillis());
+            out.writeLong(config.getShutdownTimeoutMillis());
             out.writeBoolean(config.isClientControlByUserEnabled());
             writeMacAddressList(out, config.getBlockedClientList());
             writeMacAddressList(out, config.getAllowedClientList());
@@ -143,22 +147,27 @@ public class SoftApBackupRestore {
             }
             if (version >= 5) {
                 configBuilder.setMaxNumberOfClients(in.readInt());
-                configBuilder.setShutdownTimeoutMillis(in.readInt());
-                configBuilder.enableClientControlByUser(in.readBoolean());
+                if (version >= 7) {
+                    configBuilder.setShutdownTimeoutMillis(in.readLong());
+                } else {
+                    configBuilder.setShutdownTimeoutMillis(Long.valueOf(in.readInt()));
+                }
+                configBuilder.setClientControlByUserEnabled(in.readBoolean());
                 int numberOfBlockedClient = in.readInt();
                 List<MacAddress> blockedList = new ArrayList<>(
                         macAddressListFromByteArray(in, numberOfBlockedClient));
                 int numberOfAllowedClient = in.readInt();
                 List<MacAddress> allowedList = new ArrayList<>(
                         macAddressListFromByteArray(in, numberOfAllowedClient));
-                configBuilder.setClientList(blockedList, allowedList);
+                configBuilder.setBlockedClientList(blockedList);
+                configBuilder.setAllowedClientList(allowedList);
             }
             if (version >= 6) {
                 configBuilder.setAutoShutdownEnabled(in.readBoolean());
             } else {
                 // Migrate data out of settings.
                 WifiMigration.SettingsMigrationData migrationData =
-                        WifiMigration.loadFromSettings(mContext);
+                        mSettingsMigrationDataHolder.retrieveData();
                 if (migrationData == null) {
                     Log.e(TAG, "No migration data present");
                 } else {

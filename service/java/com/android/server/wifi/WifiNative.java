@@ -813,10 +813,10 @@ public class WifiNative {
      * For devices which do not the support the HAL, this will bypass HalDeviceManager &
      * teardown any existing iface.
      */
-    private String createStaIface(@NonNull Iface iface, boolean lowPrioritySta) {
+    private String createStaIface(@NonNull Iface iface) {
         synchronized (mLock) {
             if (mWifiVendorHal.isVendorHalSupported()) {
-                return mWifiVendorHal.createStaIface(lowPrioritySta,
+                return mWifiVendorHal.createStaIface(
                         new InterfaceDestoyedListenerInternal(iface.id));
             } else {
                 Log.i(TAG, "Vendor Hal not supported, ignoring createStaIface.");
@@ -1039,7 +1039,7 @@ public class WifiNative {
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface, /* lowPrioritySta */ false);
+            iface.name = createStaIface(iface);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create STA iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -1101,7 +1101,7 @@ public class WifiNative {
                 return null;
             }
             iface.externalListener = interfaceCallback;
-            iface.name = createStaIface(iface, /* lowPrioritySta */ false);
+            iface.name = createStaIface(iface);
             if (TextUtils.isEmpty(iface.name)) {
                 Log.e(TAG, "Failed to create iface in vendor HAL");
                 mIfaceMgr.removeIface(iface.id);
@@ -1409,16 +1409,6 @@ public class WifiNative {
     }
 
     /**
-     * Fetch TX packet counters on current connection from wificond.
-     * @param ifaceName Name of the interface.
-     * Returns an TxPacketCounters object.
-     * Returns null on failure.
-     */
-    public WifiNl80211Manager.TxPacketCounters getTxPacketCounters(@NonNull String ifaceName) {
-        return mWifiCondManager.getTxPacketCounters(ifaceName);
-    }
-
-    /**
      * Query the list of valid frequencies for the provided band.
      * The result depends on the on the country code that has been set.
      *
@@ -1532,7 +1522,7 @@ public class WifiNative {
         return results;
     }
 
-    @ScanResult.WifiStandard
+    @WifiAnnotations.WifiStandard
     private static int wifiModeToWifiStandard(int wifiMode) {
         switch (wifiMode) {
             case InformationElementUtil.WifiMode.MODE_11A:
@@ -1582,6 +1572,7 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean startPnoScan(@NonNull String ifaceName, PnoSettings pnoSettings) {
+        removeAllNetworks(ifaceName);
         return mWifiCondManager.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
                 Runnable::run,
                 new WifiNl80211Manager.PnoScanRequestCallback() {
@@ -2855,6 +2846,15 @@ public class WifiNative {
     }
 
     /**
+     * Returns whether STA/AP concurrency is supported or not.
+     */
+    public boolean isStaApConcurrencySupported() {
+        synchronized (mLock) {
+            return mWifiVendorHal.isStaApConcurrencySupported();
+        }
+    }
+
+    /**
      * Get the supported features
      *
      * @param ifaceName Name of the interface.
@@ -2888,7 +2888,7 @@ public class WifiNative {
      * Class to retrieve connection capability parameters after association
      */
     public static class ConnectionCapabilities {
-        public @ScanResult.WifiStandard int wifiStandard;
+        public @WifiAnnotations.WifiStandard int wifiStandard;
         public int channelBandwidth;
         public int maxNumberTxSpatialStreams;
         public int maxNumberRxSpatialStreams;
@@ -3538,7 +3538,7 @@ public class WifiNative {
      * @return true if the wifi standard is supported on this interface, false otherwise.
      */
     public boolean isWifiStandardSupported(@NonNull String ifaceName,
-            @ScanResult.WifiStandard int standard) {
+            @WifiAnnotations.WifiStandard int standard) {
         synchronized (mLock) {
             Iface iface = mIfaceMgr.getIface(ifaceName);
             if (iface == null || iface.phyCapabilities == null) {
