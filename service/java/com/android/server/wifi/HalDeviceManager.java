@@ -572,6 +572,11 @@ public class HalDeviceManager {
     private class WifiIfaceInfo {
         public String name;
         public IWifiIface iface;
+
+        @Override
+        public String toString() {
+            return "{name=" + name + ", iface=" + iface + "}";
+        }
     }
 
     private class WifiChipInfo {
@@ -591,7 +596,7 @@ public class HalDeviceManager {
             for (int type: IFACE_TYPES_BY_PRIORITY) {
                 sb.append(", ifaces[" + type + "].length=").append(ifaces[type].length);
             }
-            sb.append(")");
+            sb.append("}");
             return sb.toString();
         }
     }
@@ -1630,8 +1635,8 @@ public class HalDeviceManager {
             IWifiChip.ChipMode chipMode, int[] chipIfaceCombo, int ifaceType, boolean lowPriority) {
         if (VDBG) {
             Log.d(TAG, "canIfaceComboSupportRequest: chipInfo=" + chipInfo + ", chipMode="
-                    + chipMode + ", chipIfaceCombo=" + chipIfaceCombo + ", ifaceType=" + ifaceType
-                    + ", lowPriority=" + lowPriority);
+                    + chipMode + ", chipIfaceCombo=" + Arrays.toString(chipIfaceCombo)
+                    + ", ifaceType=" + ifaceType + ", lowPriority=" + lowPriority);
         }
 
         // short-circuit: does the chipIfaceCombo even support the requested type?
@@ -1702,9 +1707,9 @@ public class HalDeviceManager {
                     return null;
                 }
 
-                // delete the most recently created interfaces or LOW priority interfaces
-                interfacesToBeRemovedFirst = selectInterfacesToDelete(tooManyInterfaces,
-                        chipInfo.ifaces[type]);
+                // delete the most recently created interfaces
+                interfacesToBeRemovedFirst.addAll(selectInterfacesToDelete(tooManyInterfaces,
+                        chipInfo.ifaces[type]));
             }
         }
 
@@ -1782,7 +1787,7 @@ public class HalDeviceManager {
      * Type-specific rules (but note that the general rules are appied first):
      * 4. Request for AP or STA will destroy any other interface
      * 5. Request for P2P will destroy NAN-only (but will destroy a second STA per #3)
-     * 6. Request for NAN will not destroy any interface (but will destroy a second STA per #3)
+     * 6. Request for NAN will destroy P2P-only (but will destroy a second STA per #3)
      *
      * Note: the 'numNecessaryInterfaces' is used to specify how many interfaces would be needed to
      * be deleted. This is used to determine whether there are that many low priority interfaces
@@ -1818,14 +1823,14 @@ public class HalDeviceManager {
             return true;
         }
 
-        // rule 6
-        if (requestedIfaceType == IfaceType.NAN) {
-            return false;
-        }
-
         // rule 5
         if (requestedIfaceType == IfaceType.P2P) {
             return existingIfaceType == IfaceType.NAN;
+        }
+
+        // rule 6
+        if (requestedIfaceType == IfaceType.NAN) {
+            return existingIfaceType == IfaceType.P2P;
         }
 
         // rule 4, the requestIfaceType is either AP or STA
