@@ -23,6 +23,8 @@ import android.hardware.wifi.supplicant.V1_0.ISupplicantStaIfaceCallback;
 import android.net.wifi.EAPConstants;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApCapability;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -202,6 +204,7 @@ public class WifiMetrics {
     private WifiDataStall mWifiDataStall;
     private WifiLinkLayerStats mLastLinkLayerStats;
     private WifiHealthMonitor mWifiHealthMonitor;
+    private WifiScoreCard mWifiScoreCard;
     private String mLastBssid;
     private int mLastFrequency = -1;
     private int mSeqNumInsideFramework = 0;
@@ -440,8 +443,31 @@ public class WifiMetrics {
     // Connection duration stats collected while link layer stats reports are on
     private final ConnectionDurationStats mConnectionDurationStats = new ConnectionDurationStats();
 
+    private static final int[] CHANNEL_UTILIZATION_BUCKETS =
+            {25, 50, 75, 100, 125, 150, 175, 200, 225};
+
+    private final IntHistogram mChannelUtilizationHistogram2G =
+            new IntHistogram(CHANNEL_UTILIZATION_BUCKETS);
+
+    private final IntHistogram mChannelUtilizationHistogramAbove2G =
+            new IntHistogram(CHANNEL_UTILIZATION_BUCKETS);
+
+    private static final int[] THROUGHPUT_MBPS_BUCKETS =
+            {1, 5, 10, 15, 25, 50, 100, 150, 200, 300, 450, 600, 800, 1200, 1600};
+    private final IntHistogram mTxThroughputMbpsHistogram2G =
+            new IntHistogram(THROUGHPUT_MBPS_BUCKETS);
+    private final IntHistogram mRxThroughputMbpsHistogram2G =
+            new IntHistogram(THROUGHPUT_MBPS_BUCKETS);
+    private final IntHistogram mTxThroughputMbpsHistogramAbove2G =
+            new IntHistogram(THROUGHPUT_MBPS_BUCKETS);
+    private final IntHistogram mRxThroughputMbpsHistogramAbove2G =
+            new IntHistogram(THROUGHPUT_MBPS_BUCKETS);
+
     // Wi-Fi off metrics
     private final WifiOffMetrics mWifiOffMetrics = new WifiOffMetrics();
+
+    private final SoftApConfigLimitationMetrics mSoftApConfigLimitationMetrics =
+            new SoftApConfigLimitationMetrics();
 
     @VisibleForTesting
     static class NetworkSelectionExperimentResults {
@@ -954,6 +980,8 @@ public class WifiMetrics {
                         sb.append("CREATOR_CARRIER");
                         break;
                 }
+                sb.append(", numConsecutiveConnectionFailure="
+                        + mConnectionEvent.numConsecutiveConnectionFailure);
             }
             return sb.toString();
         }
@@ -996,6 +1024,49 @@ public class WifiMetrics {
             return sb.toString();
         }
     }
+
+    class SoftApConfigLimitationMetrics {
+        // Collect the number of softap security setting reset to default during the restore
+        public int numSecurityTypeResetToDefault = 0;
+        // Collect the number of softap max client setting reset to default during the restore
+        public int numMaxClientSettingResetToDefault = 0;
+        // Collect the number of softap client control setting reset to default during the restore
+        public int numClientControlByUserResetToDefault = 0;
+        // Collect the max client setting when reach it cause client is blocked
+        public final IntCounter maxClientSettingWhenReachHistogram = new IntCounter();
+
+        public WifiMetricsProto.SoftApConfigLimitationMetrics toProto() {
+            WifiMetricsProto.SoftApConfigLimitationMetrics proto =
+                    new WifiMetricsProto.SoftApConfigLimitationMetrics();
+            proto.numSecurityTypeResetToDefault = numSecurityTypeResetToDefault;
+            proto.numMaxClientSettingResetToDefault = numMaxClientSettingResetToDefault;
+            proto.numClientControlByUserResetToDefault = numClientControlByUserResetToDefault;
+            proto.maxClientSettingWhenReachHistogram = maxClientSettingWhenReachHistogram.toProto();
+            return proto;
+        }
+
+        public void clear() {
+            numSecurityTypeResetToDefault = 0;
+            numMaxClientSettingResetToDefault = 0;
+            numClientControlByUserResetToDefault = 0;
+            maxClientSettingWhenReachHistogram.clear();
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("numSecurityTypeResetToDefault=")
+                    .append(numSecurityTypeResetToDefault)
+                    .append(", numMaxClientSettingResetToDefault=")
+                    .append(numMaxClientSettingResetToDefault)
+                    .append(", numClientControlByUserResetToDefault=")
+                    .append(numClientControlByUserResetToDefault)
+                    .append(", maxClientSettingWhenReachHistogram=")
+                    .append(maxClientSettingWhenReachHistogram);
+            return sb.toString();
+        }
+    }
+
 
     public WifiMetrics(Context context, FrameworkFacade facade, Clock clock, Looper looper,
             WifiAwareMetrics awareMetrics, RttMetrics rttMetrics,
@@ -1064,6 +1135,11 @@ public class WifiMetrics {
     /** Sets internal WifiHealthMonitor member */
     public void setWifiHealthMonitor(WifiHealthMonitor wifiHealthMonitor) {
         mWifiHealthMonitor = wifiHealthMonitor;
+    }
+
+    /** Sets internal WifiScoreCard member */
+    public void setWifiScoreCard(WifiScoreCard wifiScoreCard) {
+        mWifiScoreCard = wifiScoreCard;
     }
 
     /**
@@ -1324,6 +1400,14 @@ public class WifiMetrics {
                 } else {
                     mCurrentConnectionEvent.mConnectionEvent.networkCreator =
                             WifiMetricsProto.ConnectionEvent.CREATOR_UNKNOWN;
+                }
+
+                mCurrentConnectionEvent.mConnectionEvent.screenOn = mScreenOn;
+                if (mCurrentConnectionEvent.mConfigSsid != null) {
+                    WifiScoreCard.NetworkConnectionStats recentStats = mWifiScoreCard.lookupNetwork(
+                            mCurrentConnectionEvent.mConfigSsid).getRecentStats();
+                    mCurrentConnectionEvent.mConnectionEvent.numConsecutiveConnectionFailure =
+                            recentStats.getCount(WifiScoreCard.CNT_CONSECUTIVE_CONNECTION_FAILURE);
                 }
             }
         }
@@ -1991,6 +2075,54 @@ public class WifiMetrics {
     }
 
     /**
+     * Increment occurrence count of channel utilization
+     * @param channelUtilization Channel utilization of current network
+     * @param frequency Channel frequency of current network
+     */
+    @VisibleForTesting
+    public void incrementChannelUtilizationCount(int channelUtilization, int frequency) {
+        if (channelUtilization < InformationElementUtil.BssLoad.MIN_CHANNEL_UTILIZATION
+                || channelUtilization > InformationElementUtil.BssLoad.MAX_CHANNEL_UTILIZATION) {
+            return;
+        }
+        synchronized (mLock) {
+            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+                mChannelUtilizationHistogram2G.increment(channelUtilization);
+            } else {
+                mChannelUtilizationHistogramAbove2G.increment(channelUtilization);
+            }
+        }
+    }
+
+    /**
+     * Increment occurrence count of Tx and Rx throughput
+     * @param txThroughputKbps Tx throughput of current network in Kbps
+     * @param rxThroughputKbps Rx throughput of current network in Kbps
+     * @param frequency Channel frequency of current network in MHz
+     */
+    @VisibleForTesting
+    public void incrementThroughputKbpsCount(int txThroughputKbps, int rxThroughputKbps,
+            int frequency) {
+        synchronized (mLock) {
+            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+                if (txThroughputKbps >= 0) {
+                    mTxThroughputMbpsHistogram2G.increment(txThroughputKbps / 1000);
+                }
+                if (rxThroughputKbps >= 0) {
+                    mRxThroughputMbpsHistogram2G.increment(rxThroughputKbps / 1000);
+                }
+            } else {
+                if (txThroughputKbps >= 0) {
+                    mTxThroughputMbpsHistogramAbove2G.increment(txThroughputKbps / 1000);
+                }
+                if (rxThroughputKbps >= 0) {
+                    mRxThroughputMbpsHistogramAbove2G.increment(rxThroughputKbps / 1000);
+                }
+            }
+        }
+    }
+
+    /**
      * Increment count of Watchdog successes.
      */
     public void incrementNumLastResortWatchdogSuccesses() {
@@ -2195,6 +2327,14 @@ public class WifiMetrics {
                 mSoftApManagerReturnCodeCounts.put(
                         WifiMetricsProto.SoftApReturnCodeCount.SOFT_AP_FAILED_NO_CHANNEL,
                         count + 1);
+            } else if (failureCode == WifiManager.SAP_START_FAILURE_UNSUPPORTED_CONFIGURATION) {
+                int count = mSoftApManagerReturnCodeCounts.get(
+                        WifiMetricsProto.SoftApReturnCodeCount
+                        .SOFT_AP_FAILED_UNSUPPORTED_CONFIGURATION);
+                mSoftApManagerReturnCodeCounts.put(
+                        WifiMetricsProto.SoftApReturnCodeCount
+                        .SOFT_AP_FAILED_UNSUPPORTED_CONFIGURATION,
+                        count + 1);
             } else {
                 // failure mode not tracked at this time...  count as a general error for now.
                 int count = mSoftApManagerReturnCodeCounts.get(
@@ -2209,11 +2349,12 @@ public class WifiMetrics {
     /**
      * Adds a record indicating the current up state of soft AP
      */
-    public void addSoftApUpChangedEvent(boolean isUp, int mode) {
+    public void addSoftApUpChangedEvent(boolean isUp, int mode, long defaultShutdownTimeoutMillis) {
         SoftApConnectedClientsEvent event = new SoftApConnectedClientsEvent();
         event.eventType = isUp ? SoftApConnectedClientsEvent.SOFT_AP_UP :
                 SoftApConnectedClientsEvent.SOFT_AP_DOWN;
         event.numConnectedClients = 0;
+        event.defaultShutdownTimeoutSetting = defaultShutdownTimeoutMillis;
         addSoftApConnectedClientsEvent(event, mode);
     }
 
@@ -2276,6 +2417,66 @@ public class WifiMetrics {
                 if (event != null && event.eventType == SoftApConnectedClientsEvent.SOFT_AP_UP) {
                     event.channelFrequency = frequency;
                     event.channelBandwidth = bandwidth;
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Updates current soft AP events with softap configuration
+     */
+    public void updateSoftApConfiguration(SoftApConfiguration config, int mode) {
+        synchronized (mLock) {
+            List<SoftApConnectedClientsEvent> softApEventList;
+            switch (mode) {
+                case WifiManager.IFACE_IP_MODE_TETHERED:
+                    softApEventList = mSoftApEventListTethered;
+                    break;
+                case WifiManager.IFACE_IP_MODE_LOCAL_ONLY:
+                    softApEventList = mSoftApEventListLocalOnly;
+                    break;
+                default:
+                    return;
+            }
+
+            for (int index = softApEventList.size() - 1; index >= 0; index--) {
+                SoftApConnectedClientsEvent event = softApEventList.get(index);
+
+                if (event != null && event.eventType == SoftApConnectedClientsEvent.SOFT_AP_UP) {
+                    event.maxNumClientsSettingInSoftapConfiguration =
+                            config.getMaxNumberOfClients();
+                    event.shutdownTimeoutSettingInSoftapConfiguration =
+                            config.getShutdownTimeoutMillis();
+                    event.clientControlIsEnabled = config.isClientControlByUserEnabled();
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Updates current soft AP events with softap capability
+     */
+    public void updateSoftApCapability(SoftApCapability capability, int mode) {
+        synchronized (mLock) {
+            List<SoftApConnectedClientsEvent> softApEventList;
+            switch (mode) {
+                case WifiManager.IFACE_IP_MODE_TETHERED:
+                    softApEventList = mSoftApEventListTethered;
+                    break;
+                case WifiManager.IFACE_IP_MODE_LOCAL_ONLY:
+                    softApEventList = mSoftApEventListLocalOnly;
+                    break;
+                default:
+                    return;
+            }
+
+            for (int index = softApEventList.size() - 1; index >= 0; index--) {
+                SoftApConnectedClientsEvent event = softApEventList.get(index);
+                if (event != null && event.eventType == SoftApConnectedClientsEvent.SOFT_AP_UP) {
+                    event.maxNumClientsSettingInSoftapCapability =
+                            capability.getMaxSupportedClients();
                     break;
                 }
             }
@@ -2922,6 +3123,8 @@ public class WifiMetrics {
                         + mWifiLogProto.numForceScanDueToSteeringRequest);
                 pw.println("mWifiLogProto.numMboCellularSwitchRequest="
                         + mWifiLogProto.numMboCellularSwitchRequest);
+                pw.println("mWifiLogProto.numSteeringRequestIncludingMboAssocRetryDelay="
+                        + mWifiLogProto.numSteeringRequestIncludingMboAssocRetryDelay);
                 pw.println("mWifiLogProto.numConnectRequestWithFilsAkm="
                         + mWifiLogProto.numConnectRequestWithFilsAkm);
                 pw.println("mWifiLogProto.numL2ConnectionThroughFilsAuthentication="
@@ -2947,6 +3150,10 @@ public class WifiMetrics {
                         WifiMetricsProto.SoftApReturnCodeCount.SOFT_AP_FAILED_GENERAL_ERROR));
                 pw.println("  FAILED_NO_CHANNEL: " + mSoftApManagerReturnCodeCounts.get(
                         WifiMetricsProto.SoftApReturnCodeCount.SOFT_AP_FAILED_NO_CHANNEL));
+                pw.println("  FAILED_UNSUPPORTED_CONFIGURATION: "
+                        + mSoftApManagerReturnCodeCounts.get(
+                        WifiMetricsProto.SoftApReturnCodeCount
+                        .SOFT_AP_FAILED_UNSUPPORTED_CONFIGURATION));
                 pw.print("\n");
                 pw.println("mWifiLogProto.numHalCrashes="
                         + mWifiLogProto.numHalCrashes);
@@ -3106,6 +3313,15 @@ public class WifiMetrics {
                     eventLine.append(",num_connected_clients=" + event.numConnectedClients);
                     eventLine.append(",channel_frequency=" + event.channelFrequency);
                     eventLine.append(",channel_bandwidth=" + event.channelBandwidth);
+                    eventLine.append(",max_num_clients_setting_in_softap_configuration="
+                            + event.maxNumClientsSettingInSoftapConfiguration);
+                    eventLine.append(",max_num_clients_setting_in_softap_capability="
+                            + event.maxNumClientsSettingInSoftapCapability);
+                    eventLine.append(",shutdown_timeout_setting_in_softap_configuration="
+                            + event.shutdownTimeoutSettingInSoftapConfiguration);
+                    eventLine.append(",default_shutdown_timeout_setting="
+                            + event.defaultShutdownTimeoutSetting);
+                    eventLine.append(",client_control_is_enabled=" + event.clientControlIsEnabled);
                     pw.println(eventLine.toString());
                 }
                 pw.println("mSoftApLocalOnlyEvents:");
@@ -3116,6 +3332,15 @@ public class WifiMetrics {
                     eventLine.append(",num_connected_clients=" + event.numConnectedClients);
                     eventLine.append(",channel_frequency=" + event.channelFrequency);
                     eventLine.append(",channel_bandwidth=" + event.channelBandwidth);
+                    eventLine.append(",max_num_clients_setting_in_softap_configuration="
+                            + event.maxNumClientsSettingInSoftapConfiguration);
+                    eventLine.append(",max_num_clients_setting_in_softap_capability="
+                            + event.maxNumClientsSettingInSoftapCapability);
+                    eventLine.append(",shutdown_timeout_setting_in_softap_configuration="
+                            + event.shutdownTimeoutSettingInSoftapConfiguration);
+                    eventLine.append(",default_shutdown_timeout_setting="
+                            + event.defaultShutdownTimeoutSetting);
+                    eventLine.append(",client_control_is_enabled=" + event.clientControlIsEnabled);
                     pw.println(eventLine.toString());
                 }
 
@@ -3262,6 +3487,20 @@ public class WifiMetrics {
                         + mWifiLogProto.isExternalWifiScorerOn);
                 pw.println("mWifiLogProto.wifiOffMetrics="
                         + mWifiOffMetrics.toString());
+                pw.println("mWifiLogProto.softApConfigLimitationMetrics="
+                        + mSoftApConfigLimitationMetrics.toString());
+                pw.println("mChannelUtilizationHistogram2G:\n"
+                        + mChannelUtilizationHistogram2G);
+                pw.println("mChannelUtilizationHistogramAbove2G:\n"
+                        + mChannelUtilizationHistogramAbove2G);
+                pw.println("mTxThroughputMbpsHistogram2G:\n"
+                        + mTxThroughputMbpsHistogram2G);
+                pw.println("mRxThroughputMbpsHistogram2G:\n"
+                        + mRxThroughputMbpsHistogram2G);
+                pw.println("mTxThroughputMbpsHistogramAbove2G:\n"
+                        + mTxThroughputMbpsHistogramAbove2G);
+                pw.println("mRxThroughputMbpsHistogramAbove2G:\n"
+                        + mRxThroughputMbpsHistogramAbove2G);
             }
         }
     }
@@ -3832,6 +4071,23 @@ public class WifiMetrics {
             mWifiLogProto.bssidBlocklistStats = mBssidBlocklistStats.toProto();
             mWifiLogProto.connectionDurationStats = mConnectionDurationStats.toProto();
             mWifiLogProto.wifiOffMetrics = mWifiOffMetrics.toProto();
+            mWifiLogProto.softApConfigLimitationMetrics = mSoftApConfigLimitationMetrics.toProto();
+            mWifiLogProto.channelUtilizationHistogram =
+                    new WifiMetricsProto.ChannelUtilizationHistogram();
+            mWifiLogProto.channelUtilizationHistogram.utilization2G =
+                    mChannelUtilizationHistogram2G.toProto();
+            mWifiLogProto.channelUtilizationHistogram.utilizationAbove2G =
+                    mChannelUtilizationHistogramAbove2G.toProto();
+            mWifiLogProto.throughputMbpsHistogram =
+                    new WifiMetricsProto.ThroughputMbpsHistogram();
+            mWifiLogProto.throughputMbpsHistogram.tx2G =
+                    mTxThroughputMbpsHistogram2G.toProto();
+            mWifiLogProto.throughputMbpsHistogram.txAbove2G =
+                    mTxThroughputMbpsHistogramAbove2G.toProto();
+            mWifiLogProto.throughputMbpsHistogram.rx2G =
+                    mRxThroughputMbpsHistogram2G.toProto();
+            mWifiLogProto.throughputMbpsHistogram.rxAbove2G =
+                    mRxThroughputMbpsHistogramAbove2G.toProto();
         }
     }
 
@@ -4024,12 +4280,19 @@ public class WifiMetrics {
             mWifiLockLowLatencyActiveSessionDurationSecHistogram.clear();
             mWifiLockStats.clear();
             mWifiToggleStats.clear();
+            mChannelUtilizationHistogram2G.clear();
+            mChannelUtilizationHistogramAbove2G.clear();
+            mTxThroughputMbpsHistogram2G.clear();
+            mRxThroughputMbpsHistogram2G.clear();
+            mTxThroughputMbpsHistogramAbove2G.clear();
+            mRxThroughputMbpsHistogramAbove2G.clear();
             mPasspointProvisionFailureCounts.clear();
             mNumProvisionSuccess = 0;
             mBssidBlocklistStats = new BssidBlocklistStats();
             mConnectionDurationStats.clear();
             mWifiLogProto.isExternalWifiScorerOn = false;
             mWifiOffMetrics.clear();
+            mSoftApConfigLimitationMetrics.clear();
 
         }
     }
@@ -4701,8 +4964,17 @@ public class WifiMetrics {
      */
     public void updateWifiUsabilityStatsEntries(WifiInfo info, WifiLinkLayerStats stats) {
         synchronized (mLock) {
-            if (info == null || stats == null) {
+            if (info == null) {
                 return;
+            }
+            if (stats == null) {
+                // For devices lacking vendor hal, fill in the parts that we can
+                stats = new WifiLinkLayerStats();
+                stats.timeStampInMs = mClock.getElapsedSinceBootMillis();
+                stats.txmpdu_be = info.txSuccess;
+                stats.retries_be = info.txRetries;
+                stats.lostmpdu_be = info.txBad;
+                stats.rxmpdu_be = info.rxSuccess;
             }
             WifiUsabilityStatsEntry wifiUsabilityStatsEntry =
                     mWifiUsabilityStatsEntriesList.size()
@@ -5671,6 +5943,16 @@ public class WifiMetrics {
     }
 
     /**
+     * Increment number of times STA received steering request
+     * including MBO association retry delay.
+     */
+    public void incrementSteeringRequestCountIncludingMboAssocRetryDelay() {
+        synchronized (mLock) {
+            mWifiLogProto.numSteeringRequestIncludingMboAssocRetryDelay++;
+        }
+    }
+
+    /**
      * Increment number of connect request to AP adding FILS AKM.
      */
     public void incrementConnectRequestWithFilsAkmCount() {
@@ -5687,5 +5969,31 @@ public class WifiMetrics {
         synchronized (mLock) {
             mWifiLogProto.numL2ConnectionThroughFilsAuthentication++;
         }
+    }
+
+    /**
+     * Note SoftapConfig Reset Metrics
+     */
+    public void noteSoftApConfigReset(SoftApConfiguration originalConfig,
+            SoftApConfiguration newConfig) {
+        synchronized (mLock) {
+            if (originalConfig.getSecurityType() != newConfig.getSecurityType()) {
+                mSoftApConfigLimitationMetrics.numSecurityTypeResetToDefault++;
+            }
+            if (originalConfig.getMaxNumberOfClients() != newConfig.getMaxNumberOfClients()) {
+                mSoftApConfigLimitationMetrics.numMaxClientSettingResetToDefault++;
+            }
+            if (originalConfig.isClientControlByUserEnabled()
+                    != newConfig.isClientControlByUserEnabled()) {
+                mSoftApConfigLimitationMetrics.numClientControlByUserResetToDefault++;
+            }
+        }
+    }
+
+    /**
+     * Note Softap client blocked due to max client limitation
+     */
+    public void noteSoftApClientBlocked(int maxClient) {
+        mSoftApConfigLimitationMetrics.maxClientSettingWhenReachHistogram.increment(maxClient);
     }
 }

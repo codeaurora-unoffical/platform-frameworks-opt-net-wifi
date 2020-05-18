@@ -59,10 +59,12 @@ import android.net.NetworkProvider;
 import android.net.SocketKeepalive;
 import android.net.StaticIpConfiguration;
 import android.net.TcpKeepalivePacketData;
+import android.net.Uri;
 import android.net.ip.IIpClient;
 import android.net.ip.IpClientCallbacks;
 import android.net.ip.IpClientManager;
 import android.net.shared.Inet4AddressUtils;
+import android.net.shared.Layer2Information;
 import android.net.shared.ProvisioningConfiguration;
 import android.net.shared.ProvisioningConfiguration.ScanResultInfo;
 import android.net.util.NetUtils;
@@ -151,6 +153,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -463,7 +466,7 @@ public class ClientModeImpl extends StateMachine {
     private byte[] mRssiRanges;
 
     // Used to filter out requests we couldn't possibly satisfy.
-    private final NetworkCapabilities mNetworkCapabilitiesFilter = new NetworkCapabilities();
+    private final NetworkCapabilities mNetworkCapabilitiesFilter;
 
     private final ExternalCallbackTracker<IActionListener> mProcessingActionListeners;
 
@@ -852,16 +855,18 @@ public class ClientModeImpl extends StateMachine {
                 mWifiMetrics, mWifiInfo, mWifiNative, mBssidBlocklistMonitor,
                 mWifiInjector.getWifiThreadRunner());
 
-        mNetworkCapabilitiesFilter.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
-        mNetworkCapabilitiesFilter.addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
-        mNetworkCapabilitiesFilter.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
-        mNetworkCapabilitiesFilter.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING);
-        mNetworkCapabilitiesFilter.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
-        mNetworkCapabilitiesFilter.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
-        // TODO - needs to be a bit more dynamic
-        mNetworkCapabilitiesFilter.setLinkUpstreamBandwidthKbps(1024 * 1024);
-        mNetworkCapabilitiesFilter.setLinkDownstreamBandwidthKbps(1024 * 1024);
-        mNetworkCapabilitiesFilter.setNetworkSpecifier(new MatchAllNetworkSpecifier());
+        mNetworkCapabilitiesFilter = new NetworkCapabilities.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                // TODO - needs to be a bit more dynamic
+                .setLinkUpstreamBandwidthKbps(1024 * 1024)
+                .setLinkDownstreamBandwidthKbps(1024 * 1024)
+                .setNetworkSpecifier(new MatchAllNetworkSpecifier())
+                .build();
         // Make the network factories.
         mNetworkFactory = mWifiInjector.makeWifiNetworkFactory(
                 mNetworkCapabilitiesFilter, mWifiConnectivityManager);
@@ -1163,12 +1168,31 @@ public class ClientModeImpl extends StateMachine {
             mWifiNative.removeNetworkCachedData(config.networkId);
         }
 
-
         @Override
-        public void onNetworkUpdated(WifiConfiguration config) {
-            // User might have changed meteredOverride, so update capabilities
-            if (config.networkId == mLastNetworkId) {
-                updateCapabilities();
+        public void onNetworkUpdated(WifiConfiguration newConfig, WifiConfiguration oldConfig) {
+            // Check if user/app change meteredOverride for connected network.
+            if (newConfig.networkId != mLastNetworkId
+                    || newConfig.meteredOverride == oldConfig.meteredOverride) {
+                // nothing to do.
+                return;
+            }
+            boolean isMetered = WifiConfiguration.isMetered(newConfig, mWifiInfo);
+            boolean wasMetered = WifiConfiguration.isMetered(oldConfig, mWifiInfo);
+            if (isMetered == wasMetered) {
+                // no meteredness change, nothing to do.
+                if (mVerboseLoggingEnabled) {
+                    Log.v(TAG, "User/app changed meteredOverride, but no change in meteredness");
+                }
+                return;
+            }
+            // If unmetered->metered trigger a disconnect.
+            // If metered->unmetered update capabilities.
+            if (isMetered) {
+                Log.w(TAG, "Network marked metered, triggering disconnect");
+                sendMessage(CMD_DISCONNECT);
+            } else {
+                Log.i(TAG, "Network marked unmetered, triggering capabilities update");
+                updateCapabilities(newConfig);
             }
         }
 
@@ -1453,7 +1477,7 @@ public class ClientModeImpl extends StateMachine {
             throws InvalidPacketException {
         try {
             InetAddress gateway = NetUtils.selectBestRoute(
-                    mLinkProperties.getRoutes(), packetData.dstAddress).getGateway();
+                    mLinkProperties.getRoutes(), packetData.getDstAddress()).getGateway();
             String dstMacStr = macAddressFromRoute(gateway.getHostAddress());
             return NativeUtil.macAddressToByteArray(dstMacStr);
         } catch (NullPointerException | IllegalArgumentException e) {
@@ -1463,9 +1487,9 @@ public class ClientModeImpl extends StateMachine {
 
     private static int getEtherProtoForKeepalive(KeepalivePacketData packetData)
             throws InvalidPacketException {
-        if (packetData.dstAddress instanceof Inet4Address) {
+        if (packetData.getDstAddress() instanceof Inet4Address) {
             return OsConstants.ETH_P_IP;
-        } else if (packetData.dstAddress instanceof Inet6Address) {
+        } else if (packetData.getDstAddress() instanceof Inet6Address) {
             return OsConstants.ETH_P_IPV6;
         } else {
             throw new InvalidPacketException(InvalidPacketException.ERROR_INVALID_IP_ADDRESS);
@@ -1483,7 +1507,7 @@ public class ClientModeImpl extends StateMachine {
             dstMac = getDstMacForKeepalive(packetData);
             proto = getEtherProtoForKeepalive(packetData);
         } catch (InvalidPacketException e) {
-            return e.error;
+            return e.getError();
         }
 
         int ret = mWifiNative.startSendingOffloadedPacket(
@@ -1674,6 +1698,32 @@ public class ClientModeImpl extends StateMachine {
         // use the CMD_SET_OPERATIONAL_MODE to force the transitions before other messages are
         // handled.
         sendMessageAtFrontOfQueue(CMD_SET_OPERATIONAL_MODE);
+    }
+
+    private void checkAbnormalConnectionFailureAndTakeBugReport(String ssid) {
+        if (mWifiInjector.getDeviceConfigFacade()
+                .isAbnormalConnectionFailureBugreportEnabled()) {
+            int reasonCode = mWifiScoreCard.detectAbnormalConnectionFailure(ssid);
+            if (reasonCode != WifiHealthMonitor.REASON_NO_FAILURE) {
+                String bugTitle = "Wi-Fi BugReport";
+                String bugDetail = "Detect abnormal "
+                        + WifiHealthMonitor.FAILURE_REASON_NAME[reasonCode];
+                takeBugReport(bugTitle, bugDetail);
+            }
+        }
+    }
+
+    private void checkAbnormalDisconnectionAndTakeBugReport() {
+        if (mWifiInjector.getDeviceConfigFacade()
+                .isAbnormalDisconnectionBugreportEnabled()) {
+            int reasonCode = mWifiScoreCard.detectAbnormalDisconnection();
+            if (reasonCode != WifiHealthMonitor.REASON_NO_FAILURE) {
+                String bugTitle = "Wi-Fi BugReport";
+                String bugDetail = "Detect abnormal "
+                        + WifiHealthMonitor.FAILURE_REASON_NAME[reasonCode];
+                takeBugReport(bugTitle, bugDetail);
+            }
+        }
     }
 
     /**
@@ -2709,12 +2759,16 @@ public class ClientModeImpl extends StateMachine {
             mWifiInfo.setSSID(null);
             mWifiInfo.setWifiStandard(ScanResult.WIFI_STANDARD_UNKNOWN);
         }
-        updateL2KeyAndGroupHint();
+        updateLayer2Information();
         // SSID might have been updated, so call updateCapabilities
         updateCapabilities();
 
-        final WifiConfiguration config = getCurrentWifiConfiguration();
-        if (config != null) {
+        WifiConfiguration config = getCurrentWifiConfiguration();
+        if (config == null) {
+            // If not connected, this should be non-null.
+            config = getTargetWifiConfiguration();
+        }
+        if (config != null && config.networkId == mWifiInfo.getNetworkId()) {
             mWifiInfo.setEphemeral(config.ephemeral);
             mWifiInfo.setTrusted(config.trusted);
             mWifiInfo.setOsuAp(config.osu);
@@ -2775,13 +2829,16 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
-     * Tells IpClient what L2Key and GroupHint to use for IpMemoryStore.
+     * Tells IpClient what BSSID, L2Key and GroupHint to use for IpMemoryStore.
      */
-    private void updateL2KeyAndGroupHint() {
+    private void updateLayer2Information() {
         if (mIpClient != null) {
             Pair<String, String> p = mWifiScoreCard.getL2KeyAndGroupHint(mWifiInfo);
             if (!p.equals(mLastL2KeyAndGroupHint)) {
-                if (mIpClient.setL2KeyAndGroupHint(p.first, p.second)) {
+                final Layer2Information l2Information = new Layer2Information(
+                        p.first, p.second,
+                        mLastBssid != null ? MacAddress.fromString(mLastBssid) : null);
+                if (mIpClient.updateLayer2Information(l2Information)) {
                     mLastL2KeyAndGroupHint = p;
                 } else {
                     mLastL2KeyAndGroupHint = null;
@@ -2855,9 +2912,10 @@ public class ClientModeImpl extends StateMachine {
         mLastNetworkId = WifiConfiguration.INVALID_NETWORK_ID;
         mLastSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         mLastSimBasedConnectionCarrierName = null;
+        checkAbnormalDisconnectionAndTakeBugReport();
         mWifiScoreCard.resetConnectionState();
         mWifiDataStall.reset();
-        updateL2KeyAndGroupHint();
+        updateLayer2Information();
     }
 
     void handlePreDhcpSetup() {
@@ -3085,18 +3143,7 @@ public class ClientModeImpl extends StateMachine {
                         : configuration.networkId;
                 int scanRssi = mWifiConfigManager.findScanRssi(networkId, SCAN_RSSI_VALID_TIME_MS);
                 mWifiScoreCard.noteConnectionFailure(mWifiInfo, scanRssi, ssid, blocklistReason);
-                boolean isNonWrongPwdAuthFailure =
-                        blocklistReason == BssidBlocklistMonitor.REASON_AUTHENTICATION_FAILURE
-                        || blocklistReason == BssidBlocklistMonitor.REASON_EAP_FAILURE;
-                boolean isEnterpriseNetwork = configuration != null && configuration.isEnterprise();
-                if (isNonWrongPwdAuthFailure && isEnterpriseNetwork && mWifiInjector
-                        .getDeviceConfigFacade().isAbnormalEapAuthFailureBugreportEnabled()
-                        && mWifiScoreCard.detectAbnormalAuthFailure(ssid)) {
-                    String bugTitle = "Wi-Fi BugReport";
-                    String bugDetail = "Abnormal authentication failure with enterprise network";
-                    mWifiDiagnostics.takeBugReport(bugTitle, bugDetail);
-                }
-
+                checkAbnormalConnectionFailureAndTakeBugReport(ssid);
                 boolean isLowRssi = false;
                 int sufficientRssi = getSufficientRssi(networkId, bssid);
                 if (scanRssi != WifiInfo.INVALID_RSSI && sufficientRssi != WifiInfo.INVALID_RSSI) {
@@ -3791,6 +3838,7 @@ public class ClientModeImpl extends StateMachine {
 
         // Let's remove any ephemeral or passpoint networks.
         mWifiConfigManager.removeAllEphemeralOrPasspointConfiguredNetworks();
+        mWifiConfigManager.clearUserTemporarilyDisabledList();
     }
 
     void registerConnected() {
@@ -4643,43 +4691,42 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private NetworkCapabilities getCapabilities(WifiConfiguration currentWifiConfiguration) {
-        final NetworkCapabilities result = new NetworkCapabilities(mNetworkCapabilitiesFilter);
+        final NetworkCapabilities.Builder builder =
+                new NetworkCapabilities.Builder(mNetworkCapabilitiesFilter);
         // MatchAllNetworkSpecifier set in the mNetworkCapabilitiesFilter should never be set in the
         // agent's specifier.
-        result.setNetworkSpecifier(null);
+        builder.setNetworkSpecifier(null);
         if (currentWifiConfiguration == null) {
-            return result;
+            return builder.build();
         }
 
-        if (!mWifiInfo.isTrusted()) {
-            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
+        if (mWifiInfo.isTrusted()) {
+            builder.addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
         } else {
-            result.addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED);
         }
 
-        result.setOwnerUid(currentWifiConfiguration.creatorUid);
-        result.setAdministratorUids(new int[] {currentWifiConfiguration.creatorUid});
+        builder.setOwnerUid(currentWifiConfiguration.creatorUid);
+        builder.setAdministratorUids(new int[] {currentWifiConfiguration.creatorUid});
 
         if (!WifiConfiguration.isMetered(currentWifiConfiguration, mWifiInfo)) {
-            result.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+            builder.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
         } else {
-            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
         }
 
         if (mWifiInfo.getRssi() != WifiInfo.INVALID_RSSI) {
-            result.setSignalStrength(mWifiInfo.getRssi());
+            builder.setSignalStrength(mWifiInfo.getRssi());
         } else {
-            result.setSignalStrength(NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED);
+            builder.setSignalStrength(NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED);
         }
 
         if (currentWifiConfiguration.osu) {
-            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
         }
 
         if (!mWifiInfo.getSSID().equals(WifiManager.UNKNOWN_SSID)) {
-            result.setSSID(mWifiInfo.getSSID());
-        } else {
-            result.setSSID(null);
+            builder.setSsid(mWifiInfo.getSSID());
         }
         Pair<Integer, String> specificRequestUidAndPackageName =
                 mNetworkFactory.getSpecificNetworkRequestUidAndPackageName(
@@ -4687,19 +4734,19 @@ public class ClientModeImpl extends StateMachine {
         // There is an active specific request.
         if (specificRequestUidAndPackageName.first != Process.INVALID_UID) {
             // Remove internet capability.
-            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
             // Fill up the uid/packageName for this connection.
-            result.setRequestorUid(specificRequestUidAndPackageName.first);
-            result.setRequestorPackageName(specificRequestUidAndPackageName.second);
+            builder.setRequestorUid(specificRequestUidAndPackageName.first);
+            builder.setRequestorPackageName(specificRequestUidAndPackageName.second);
             // Fill up the network agent specifier for this connection.
-            result.setNetworkSpecifier(createNetworkAgentSpecifier(
+            builder.setNetworkSpecifier(createNetworkAgentSpecifier(
                     currentWifiConfiguration, getCurrentBSSID()));
         }
-        updateLinkBandwidth(result);
-        return result;
+        updateLinkBandwidth(builder);
+        return builder.build();
     }
 
-    private void updateLinkBandwidth(NetworkCapabilities networkCapabilities) {
+    private void updateLinkBandwidth(NetworkCapabilities.Builder networkCapabilitiesBuilder) {
         int rssiDbm = mWifiInfo.getRssi();
         int txTputKbps = INVALID_THROUGHPUT;
         int rxTputKbps = INVALID_THROUGHPUT;
@@ -4727,10 +4774,10 @@ public class ClientModeImpl extends StateMachine {
             logd("rx tput in kbps: " + rxTputKbps);
         }
         if (txTputKbps > 0) {
-            networkCapabilities.setLinkUpstreamBandwidthKbps(txTputKbps);
+            networkCapabilitiesBuilder.setLinkUpstreamBandwidthKbps(txTputKbps);
         }
         if (rxTputKbps > 0) {
-            networkCapabilities.setLinkDownstreamBandwidthKbps(rxTputKbps);
+            networkCapabilitiesBuilder.setLinkDownstreamBandwidthKbps(rxTputKbps);
         }
     }
 
@@ -4742,10 +4789,14 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void updateCapabilities(WifiConfiguration currentWifiConfiguration) {
+        updateCapabilities(getCapabilities(currentWifiConfiguration));
+    }
+
+    private void updateCapabilities(NetworkCapabilities networkCapabilities) {
         if (mNetworkAgent == null) {
             return;
         }
-        mNetworkAgent.sendNetworkCapabilities(getCapabilities(currentWifiConfiguration));
+        mNetworkAgent.sendNetworkCapabilities(networkCapabilities);
     }
 
     private void handleEapAuthFailure(int networkId, int errorCode) {
@@ -4786,7 +4837,7 @@ public class ClientModeImpl extends StateMachine {
         }
 
         @Override
-        public void onValidationStatus(int status, @Nullable String redirectUrl) {
+        public void onValidationStatus(int status, @Nullable Uri redirectUri) {
             if (this != mNetworkAgent) return;
             if (status == mLastNetworkStatus) return;
             mLastNetworkStatus = status;
@@ -4813,10 +4864,10 @@ public class ClientModeImpl extends StateMachine {
         }
 
         @Override
-        public void onStartSocketKeepalive(int slot, int intervalSeconds,
+        public void onStartSocketKeepalive(int slot, @NonNull Duration interval,
                 @NonNull KeepalivePacketData packet) {
             ClientModeImpl.this.sendMessage(
-                    CMD_START_IP_PACKET_OFFLOAD, slot, intervalSeconds, packet);
+                    CMD_START_IP_PACKET_OFFLOAD, slot, (int) interval.getSeconds(), packet);
         }
 
         @Override
@@ -4947,6 +4998,10 @@ public class ClientModeImpl extends StateMachine {
                     .build();
             final NetworkCapabilities nc = getCapabilities(getCurrentWifiConfiguration());
             synchronized (mNetworkAgentLock) {
+                // This should never happen.
+                if (mNetworkAgent != null) {
+                    Log.wtf(TAG, "mNetworkAgent is not null: " + mNetworkAgent);
+                }
                 mNetworkAgent = new WifiNetworkAgent(mContext, getHandler().getLooper(),
                         "WifiNetworkAgent", nc, mLinkProperties, 60, naConfig,
                         mNetworkFactory.getProvider());
@@ -4959,7 +5014,8 @@ public class ClientModeImpl extends StateMachine {
             clearTargetBssid("L2ConnectedState");
             mCountryCode.setReadyForChange(false);
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_ASSOCIATED);
-            mWifiScoreCard.noteNetworkAgentCreated(mWifiInfo, mNetworkAgent.getNetwork().netId);
+            mWifiScoreCard.noteNetworkAgentCreated(mWifiInfo,
+                    mNetworkAgent.getNetwork().getNetId());
             mBssidBlocklistMonitor.handleBssidConnectionSuccess(mLastBssid, mWifiInfo.getSSID());
         }
 
@@ -5395,7 +5451,7 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void sendConnectedState() {
-        mNetworkAgent.setConnected();
+        mNetworkAgent.markConnected();
         sendNetworkChangeBroadcast(DetailedState.CONNECTED);
     }
 
@@ -5584,7 +5640,8 @@ public class ClientModeImpl extends StateMachine {
             //Inform WifiLockManager
             WifiLockManager wifiLockManager = mWifiInjector.getWifiLockManager();
             wifiLockManager.updateWifiClientConnected(true);
-            mWifiScoreReport.startConnectedNetworkScorer(mNetworkAgent.getNetwork().netId);
+            mWifiScoreReport.startConnectedNetworkScorer(mNetworkAgent.getNetwork().getNetId());
+            updateLinkLayerStatsRssiAndScoreReport();
         }
         @Override
         public boolean processMessage(Message message) {
@@ -6362,6 +6419,22 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Approve all access points from {@link WifiNetworkFactory} for the provided package.
+     * Used by shell commands.
+     */
+    public void setNetworkRequestUserApprovedApp(@NonNull String packageName, boolean approved) {
+        mNetworkFactory.setUserApprovedApp(packageName, approved);
+    }
+
+    /**
+     * Whether all access points are approved for the specified app.
+     * Used by shell commands.
+     */
+    public boolean hasNetworkRequestUserApprovedApp(@NonNull String packageName) {
+        return mNetworkFactory.hasUserApprovedApp(packageName);
+    }
+
+    /**
      * Remove all approved access points from {@link WifiNetworkFactory} for the provided package.
      */
     public void removeNetworkRequestUserApprovedAccessPointsForApp(@NonNull String packageName) {
@@ -6737,11 +6810,6 @@ public class ClientModeImpl extends StateMachine {
             return;
         }
 
-        boolean isImminentBit = (frameData.mBssTmDataFlagsMask
-                & (MboOceConstants.BTM_DATA_FLAG_DISASSOCIATION_IMMINENT
-                | MboOceConstants.BTM_DATA_FLAG_BSS_TERMINATION_INCLUDED
-                | MboOceConstants.BTM_DATA_FLAG_ESS_DISASSOCIATION_IMMINENT)) != 0;
-
         if ((frameData.mBssTmDataFlagsMask
                 & MboOceConstants.BTM_DATA_FLAG_MBO_CELL_DATA_CONNECTION_PREFERENCE_INCLUDED)
                 != 0) {
@@ -6749,12 +6817,14 @@ public class ClientModeImpl extends StateMachine {
         }
 
 
-        if (isImminentBit) {
+        if ((frameData.mBssTmDataFlagsMask
+                & MboOceConstants.BTM_DATA_FLAG_MBO_ASSOC_RETRY_DELAY_INCLUDED)
+                != 0) {
             long duration = frameData.mBlackListDurationMs;
+            mWifiMetrics.incrementSteeringRequestCountIncludingMboAssocRetryDelay();
             if (duration == 0) {
                 /*
-                 * When AP sets one of the imminent bits and disassociation timer / BSS termination
-                 * duration / MBO assoc retry delay is set to zero(reserved as per spec),
+                 * When MBO assoc retry delay is set to zero(reserved as per spec),
                  * blacklist the BSS for sometime to avoid AP rejecting the re-connect request.
                  */
                 duration = MboOceConstants.DEFAULT_BLACKLIST_DURATION_MS;
@@ -7017,7 +7087,8 @@ public class ClientModeImpl extends StateMachine {
                             new ScanResultInfo.InformationElement(ie.getId(), ie.getBytes());
                     ies.add(scanResultInfoIe);
                 }
-                scanResultInfo = new ProvisioningConfiguration.ScanResultInfo(scanResult.SSID, ies);
+                scanResultInfo = new ProvisioningConfiguration.ScanResultInfo(scanResult.SSID,
+                        scanResult.BSSID, ies);
             }
 
             if (!isUsingStaticIp) {

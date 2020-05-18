@@ -39,7 +39,6 @@ import java.security.SecureRandom;
 import java.util.Random;
 
 import javax.annotation.Nullable;
-import javax.crypto.Mac;
 
 /**
  * Provides API for reading/writing soft access point configuration.
@@ -68,9 +67,9 @@ public class WifiApConfigStore {
 
     private final Context mContext;
     private final Handler mHandler;
+    private final WifiMetrics mWifiMetrics;
     private final BackupManagerProxy mBackupManagerProxy;
     private final MacAddressUtil mMacAddressUtil;
-    private final Mac mMac;
     private final WifiConfigManager mWifiConfigManager;
     private final ActiveModeWarden mActiveModeWarden;
     private boolean mHasNewDataToSerialize = false;
@@ -99,7 +98,6 @@ public class WifiApConfigStore {
     }
 
     // Dual SAP config
-    private String mBridgeInterfaceName = null;
     private boolean mDualSapStatus = false;
 
     private int mWifiGeneration = WIFI_GENERATION_DEFAULT;
@@ -110,12 +108,14 @@ public class WifiApConfigStore {
             BackupManagerProxy backupManagerProxy,
             WifiConfigStore wifiConfigStore,
             WifiConfigManager wifiConfigManager,
-            ActiveModeWarden activeModeWarden) {
+            ActiveModeWarden activeModeWarden,
+            WifiMetrics wifiMetrics) {
         mContext = context;
         mHandler = handler;
         mBackupManagerProxy = backupManagerProxy;
         mWifiConfigManager = wifiConfigManager;
         mActiveModeWarden = activeModeWarden;
+        mWifiMetrics = wifiMetrics;
 
         // Register store data listener
         wifiConfigStore.registerStoreData(
@@ -124,20 +124,16 @@ public class WifiApConfigStore {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_HOTSPOT_CONFIG_USER_TAPPED_CONTENT);
         mMacAddressUtil = wifiInjector.getMacAddressUtil();
-        mMac = mMacAddressUtil.obtainMacRandHashFunctionForSap(Process.WIFI_UID);
-        if (mMac == null) {
-            Log.wtf(TAG, "Failed to obtain secret for SAP MAC randomization."
-                    + " All randomized MAC addresses are lost!");
-        }
-
-        mBridgeInterfaceName = SystemProperties
-                .get("persist.vendor.wifi.softap.bridge.interface", "wifi_br0");
     }
 
    /* Additional APIs(get/set) to support SAP + SAP Feature */
 
     public synchronized String getBridgeInterface() {
-        return mBridgeInterfaceName;
+        String bridgeInterfaceName = mContext.getResources()
+                   .getString(R.string.config_vendor_wifi_tether_bridge_interface_name);
+        if (bridgeInterfaceName == null || TextUtils.isEmpty(bridgeInterfaceName))
+            return "wifi_br0"; // Return default value
+        return bridgeInterfaceName;
     }
 
     public synchronized boolean getDualSapStatus() {
@@ -213,18 +209,12 @@ public class WifiApConfigStore {
                     SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
             Log.e(TAG, "Device doesn't support WPA3-SAE, reset config to WPA2");
         }
-
+        mWifiMetrics.noteSoftApConfigReset(config, configBuilder.build());
         return configBuilder.build();
     }
 
     private SoftApConfiguration sanitizePersistentApConfig(SoftApConfiguration config) {
         SoftApConfiguration.Builder convertedConfigBuilder = null;
-
-        // Persistent config may not set BSSID.
-        if (config.getBssid() != null) {
-            convertedConfigBuilder = new SoftApConfiguration.Builder(config);
-            convertedConfigBuilder.setBssid(null);
-        }
 
         // some countries are unable to support 5GHz only operation, always allow for 2GHz when
         // config doesn't force channel
@@ -319,7 +309,8 @@ public class WifiApConfigStore {
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder(config);
         if (config.getBssid() == null && context.getResources().getBoolean(
                 R.bool.config_wifi_ap_mac_randomization_supported)) {
-            MacAddress macAddress = mMacAddressUtil.calculatePersistentMac(config.getSsid(), mMac);
+            MacAddress macAddress = mMacAddressUtil.calculatePersistentMac(config.getSsid(),
+                    mMacAddressUtil.obtainMacRandHashFunctionForSap(Process.WIFI_UID));
             if (macAddress == null) {
                 Log.e(TAG, "Failed to calculate MAC from SSID. "
                         + "Generating new random MAC instead.");
@@ -383,13 +374,21 @@ public class WifiApConfigStore {
      * requires a password, was one provided?).
      *
      * @param apConfig {@link SoftApConfiguration} to use for softap mode
+     * @param isPrivileged indicate the caller can pass some fields check or not
      * @return boolean true if the provided config meets the minimum set of details, false
      * otherwise.
      */
-    static boolean validateApWifiConfiguration(@NonNull SoftApConfiguration apConfig) {
+    static boolean validateApWifiConfiguration(@NonNull SoftApConfiguration apConfig,
+            boolean isPrivileged) {
         // first check the SSID
         if (!validateApConfigSsid(apConfig.getSsid())) {
             // failed SSID verificiation checks
+            return false;
+        }
+
+        // BSSID can be set if caller own permission:android.Manifest.permission.NETWORK_SETTINGS.
+        if (apConfig.getBssid() != null && !isPrivileged) {
+            Log.e(TAG, "Config BSSID needs NETWORK_SETTINGS permission");
             return false;
         }
 

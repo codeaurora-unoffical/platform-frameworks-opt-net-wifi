@@ -54,6 +54,7 @@ import android.util.LocalLog;
 import androidx.test.filters.SmallTest;
 
 import com.android.server.wifi.hotspot2.PasspointManager;
+import com.android.server.wifi.util.LruConnectionTracker;
 import com.android.server.wifi.util.ScanResultUtil;
 import com.android.wifi.resources.R;
 
@@ -73,6 +74,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -127,6 +129,10 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         mMinPacketRateActiveTraffic = mResources.getInteger(
                 R.integer.config_wifiFrameworkMinPacketPerSecondActiveTraffic);
         when(mWifiLastResortWatchdog.shouldIgnoreBssidUpdate(anyString())).thenReturn(false);
+        mLruConnectionTracker = new LruConnectionTracker(100, mContext);
+        Comparator<WifiConfiguration> comparator =
+                Comparator.comparingInt(mLruConnectionTracker::getAgeIndexOfNetwork);
+        when(mWifiConfigManager.getScanListComparator()).thenReturn(comparator);
     }
 
     private void setUpResources(MockResources resources) {
@@ -175,6 +181,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     private WifiConfigManager mWifiConfigManager;
     private WifiInfo mWifiInfo;
     private LocalLog mLocalLog;
+    private LruConnectionTracker mLruConnectionTracker;
     @Mock private WifiInjector mWifiInjector;
     @Mock private NetworkScoreManager mNetworkScoreManager;
     @Mock private Clock mClock;
@@ -224,6 +231,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
     private static final int TEST_FREQUENCY_1 = 2412;
     private static final int TEST_FREQUENCY_2 = 5180;
     private static final int TEST_FREQUENCY_3 = 5240;
+    private static final int TEST_CURRENT_CONNECTED_FREQUENCY = 2427;
     private static final int HIGH_MVMT_SCAN_DELAY_MS = 10000;
     private static final int HIGH_MVMT_RSSI_DELTA = 10;
     private static final String TEST_FQDN = "FQDN";
@@ -390,7 +398,7 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
                 mWifiConfigManager, mWifiInfo, mWifiNS, mWifiConnectivityHelper,
                 mWifiLastResortWatchdog, mOpenNetworkNotifier,
                 mWifiMetrics, new Handler(mLooper.getLooper()), mClock,
-                mLocalLog);
+                mLocalLog, mWifiScoreCard);
     }
 
     void setWifiStateConnected() {
@@ -1760,15 +1768,18 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(false);
 
-        final HashSet<Integer> channelList = new HashSet<>();
-        channelList.add(1);
-        channelList.add(2);
-        channelList.add(3);
-
+        final List<Integer> channelList = new ArrayList<>();
+        channelList.add(TEST_FREQUENCY_1);
+        channelList.add(TEST_FREQUENCY_2);
+        channelList.add(TEST_FREQUENCY_3);
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
         when(mClientModeImpl.getCurrentWifiConfiguration())
-                .thenReturn(new WifiConfiguration());
-        when(mWifiConfigManager.fetchChannelSetForNetworkForPartialScan(anyInt(), anyLong(),
-                anyInt())).thenReturn(channelList);
+                .thenReturn(configuration);
+        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
+        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
 
         doAnswer(new AnswerWithArguments() {
             public void answer(ScanSettings settings, ScanListener listener,
@@ -1814,15 +1825,24 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(true);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(false);
 
-        final HashSet<Integer> channelList = new HashSet<>();
-        channelList.add(1);
-        channelList.add(2);
-        channelList.add(3);
+        mResources.setInteger(
+                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels,
+                10);
+
+        final List<Integer> channelList = new ArrayList<>();
+        channelList.add(TEST_FREQUENCY_1);
+        channelList.add(TEST_FREQUENCY_2);
+        channelList.add(TEST_FREQUENCY_3);
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
+        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
 
         when(mClientModeImpl.getCurrentWifiConfiguration())
-                .thenReturn(new WifiConfiguration());
-        when(mWifiConfigManager.fetchChannelSetForNetworkForPartialScan(anyInt(), anyLong(),
-                anyInt())).thenReturn(channelList);
+                .thenReturn(configuration);
+
         when(mWifiConnectivityHelper.isFirmwareRoamingSupported()).thenReturn(false);
 
         doAnswer(new AnswerWithArguments() {
@@ -1859,15 +1879,23 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(false);
         when(mWifiNS.hasSufficientLinkQuality(eq(mWifiInfo))).thenReturn(true);
 
-        final HashSet<Integer> channelList = new HashSet<>();
-        channelList.add(1);
-        channelList.add(2);
-        channelList.add(3);
+        mResources.setInteger(
+                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels,
+                10);
+
+        final List<Integer> channelList = new ArrayList<>();
+        channelList.add(TEST_FREQUENCY_1);
+        channelList.add(TEST_FREQUENCY_2);
+        channelList.add(TEST_FREQUENCY_3);
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
+        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
 
         when(mClientModeImpl.getCurrentWifiConfiguration())
-                .thenReturn(new WifiConfiguration());
-        when(mWifiConfigManager.fetchChannelSetForNetworkForPartialScan(anyInt(), anyLong(),
-                anyInt())).thenReturn(channelList);
+                .thenReturn(configuration);
         when(mWifiConnectivityHelper.isFirmwareRoamingSupported()).thenReturn(false);
 
         doAnswer(new AnswerWithArguments() {
@@ -1904,12 +1932,19 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         when(mWifiNS.isNetworkSufficient(eq(mWifiInfo))).thenReturn(true);
         when(mWifiNS.hasActiveStream(eq(mWifiInfo))).thenReturn(true);
 
-        final HashSet<Integer> channelList = new HashSet<>();
+        final List<Integer> channelList = new ArrayList<>();
+        channelList.add(TEST_FREQUENCY_1);
+        channelList.add(TEST_FREQUENCY_2);
+        channelList.add(TEST_FREQUENCY_3);
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        when(mWifiScoreCard.lookupNetwork(configuration.SSID)).thenReturn(mPerNetwork);
+        when(mPerNetwork.getFrequencies()).thenReturn(channelList);
 
         when(mClientModeImpl.getCurrentWifiConfiguration())
                 .thenReturn(new WifiConfiguration());
-        when(mWifiConfigManager.fetchChannelSetForNetworkForPartialScan(anyInt(), anyLong(),
-                anyInt())).thenReturn(channelList);
 
         doAnswer(new AnswerWithArguments() {
             public void answer(ScanSettings settings, Executor executor, ScanListener listener,
@@ -2910,11 +2945,14 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         networkList.add(network1);
         networkList.add(network2);
         networkList.add(network3);
+        mLruConnectionTracker.addNetwork(network3);
+        mLruConnectionTracker.addNetwork(network2);
+        mLruConnectionTracker.addNetwork(network1);
         when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(networkList);
         // Retrieve the Pno network list & verify.
         List<WifiScanner.PnoSettings.PnoNetwork> pnoNetworks =
                 mWifiConnectivityManager.retrievePnoNetworkList();
-        verify(mWifiNetworkSuggestionsManager).getAllPnoAvailableSuggestionNetworks();
+        verify(mWifiNetworkSuggestionsManager).getAllScanOptimizationSuggestionNetworks();
         assertEquals(3, pnoNetworks.size());
         assertEquals(network1.SSID, pnoNetworks.get(0).ssid);
         assertEquals(network2.SSID, pnoNetworks.get(1).ssid);
@@ -2950,8 +2988,9 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         List<WifiConfiguration> networkList = new ArrayList<>();
         networkList.add(network1);
         networkList.add(network2);
+        mLruConnectionTracker.addNetwork(network2);
+        mLruConnectionTracker.addNetwork(network1);
         when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(networkList);
-
         // Retrieve the Pno network list and verify.
         // Frequencies should be empty since no scan results have been received yet.
         List<WifiScanner.PnoSettings.PnoNetwork> pnoNetworks =
@@ -3006,39 +3045,120 @@ public class WifiConnectivityManagerTest extends WifiBaseTest {
         WifiConfiguration network1 = WifiConfigurationTestUtil.createEapNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskNetwork();
         WifiConfiguration network3 = WifiConfigurationTestUtil.createOpenHiddenNetwork();
+        mLruConnectionTracker.addNetwork(network1);
+        mLruConnectionTracker.addNetwork(network2);
+        mLruConnectionTracker.addNetwork(network3);
         List<WifiConfiguration> networkList = new ArrayList<>();
         networkList.add(network1);
         networkList.add(network2);
         networkList.add(network3);
         when(mWifiConfigManager.getSavedNetworks(anyInt())).thenReturn(networkList);
-        // Set up network as:
-        // Network2 has the highest association number.
-        // Network3 is most recently connected.
-        // Network1 the second for both association number and most recently.
-        long firstConnectionTimeMillis = 45677;
-        long secondConnectionTimeMillis = firstConnectionTimeMillis + 45;
-        network1.numAssociation = 2;
-        network2.numAssociation = 3;
-        network3.numAssociation = 1;
-        network1.lastConnected = firstConnectionTimeMillis;
-        network3.lastConnected = secondConnectionTimeMillis;
-        //When config_wifiPnoRecencySortingEnabled is false, will prefer most connected network.
-        mResources.setBoolean(R.bool.config_wifiPnoRecencySortingEnabled, false);
         List<WifiScanner.PnoSettings.PnoNetwork> pnoNetworks =
-                mWifiConnectivityManager.retrievePnoNetworkList();
-        assertEquals(3, pnoNetworks.size());
-        assertEquals(network2.SSID, pnoNetworks.get(0).ssid);
-        assertEquals(network1.SSID, pnoNetworks.get(1).ssid);
-        assertEquals(network3.SSID, pnoNetworks.get(2).ssid);
-
-        //When config_wifiPnoRecencySortingEnabled is true, after prefer most connected network.
-        //The most recently connected network will move the first.
-        mResources.setBoolean(R.bool.config_wifiPnoRecencySortingEnabled, true);
-        pnoNetworks =
                 mWifiConnectivityManager.retrievePnoNetworkList();
         assertEquals(3, pnoNetworks.size());
         assertEquals(network3.SSID, pnoNetworks.get(0).ssid);
         assertEquals(network2.SSID, pnoNetworks.get(1).ssid);
         assertEquals(network1.SSID, pnoNetworks.get(2).ssid);
+    }
+
+    private List<List<Integer>> linkScoreCardFreqsToNetwork(WifiConfiguration... configs) {
+        List<List<Integer>> results = new ArrayList<>();
+        int i = 0;
+        for (WifiConfiguration config : configs) {
+            List<Integer> channelList = new ArrayList<>();
+            channelList.add(TEST_FREQUENCY_1 + i);
+            channelList.add(TEST_FREQUENCY_2 + i);
+            channelList.add(TEST_FREQUENCY_3 + i);
+            WifiScoreCard.PerNetwork perNetwork = mock(WifiScoreCard.PerNetwork.class);
+            when(mWifiScoreCard.lookupNetwork(config.SSID)).thenReturn(perNetwork);
+            when(perNetwork.getFrequencies()).thenReturn(channelList);
+            results.add(channelList);
+            i++;
+        }
+        return results;
+    }
+
+    /**
+     * Verify that the length of frequency set will not exceed the provided max value
+     */
+    @Test
+    public void testFetchChannelSetForPartialScanMaxCount() {
+        WifiConfiguration configuration1 = WifiConfigurationTestUtil.createOpenNetwork();
+        WifiConfiguration configuration2 = WifiConfigurationTestUtil.createOpenNetwork();
+        when(mWifiConfigManager.getSavedNetworks(anyInt()))
+                .thenReturn(Arrays.asList(configuration1, configuration2));
+
+        List<List<Integer>> freqs = linkScoreCardFreqsToNetwork(configuration1, configuration2);
+
+        mLruConnectionTracker.addNetwork(configuration2);
+        mLruConnectionTracker.addNetwork(configuration1);
+
+        assertEquals(new HashSet<>(freqs.get(0)),
+                mWifiConnectivityManager.fetchChannelSetForPartialScan(3));
+    }
+
+    /**
+     * Verifies the creation of channel list using
+     * {@link WifiConnectivityManager#fetchChannelSetForNetworkForPartialScan(int)}.
+     */
+    @Test
+    public void testFetchChannelSetForNetwork() {
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        List<List<Integer>> freqs = linkScoreCardFreqsToNetwork(configuration);
+
+        assertEquals(new HashSet<>(freqs.get(0)), mWifiConnectivityManager
+                .fetchChannelSetForNetworkForPartialScan(configuration.networkId));
+    }
+
+    /**
+     * Verifies the creation of channel list using
+     * {@link WifiConnectivityManager#fetchChannelSetForNetworkForPartialScan(int)} and
+     * ensures that the frequenecy of the currently connected network is in the returned
+     * channel set.
+     */
+    @Test
+    public void testFetchChannelSetForNetworkIncludeCurrentNetwork() {
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        linkScoreCardFreqsToNetwork(configuration);
+
+        mWifiInfo.setFrequency(TEST_CURRENT_CONNECTED_FREQUENCY);
+
+        // Currently connected network frequency 2427 is not in the TEST_FREQ_LIST
+        Set<Integer> freqs = mWifiConnectivityManager.fetchChannelSetForNetworkForPartialScan(
+                configuration.networkId);
+
+        assertTrue(freqs.contains(2427));
+    }
+
+    /**
+     * Verifies the creation of channel list using
+     * {@link WifiConnectivityManager#fetchChannelSetForNetworkForPartialScan(int)} and
+     * ensures that the list size does not exceed the max configured for the device.
+     */
+    @Test
+    public void testFetchChannelSetForNetworkIsLimitedToConfiguredSize() {
+        // Need to recreate the WifiConfigManager instance for this test to modify the config
+        // value which is read only in the constructor.
+        int maxListSize = 2;
+        mResources.setInteger(
+                R.integer.config_wifi_framework_associated_partial_scan_max_num_active_channels,
+                maxListSize);
+
+        WifiConfiguration configuration = WifiConfigurationTestUtil.createOpenNetwork();
+        configuration.networkId = TEST_CONNECTED_NETWORK_ID;
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_CONNECTED_NETWORK_ID))
+                .thenReturn(configuration);
+        List<List<Integer>> freqs = linkScoreCardFreqsToNetwork(configuration);
+        // Ensure that the fetched list size is limited.
+        Set<Integer> results = mWifiConnectivityManager.fetchChannelSetForNetworkForPartialScan(
+                configuration.networkId);
+        assertEquals(maxListSize, results.size());
+        assertFalse(results.contains(freqs.get(0).get(2)));
     }
 }

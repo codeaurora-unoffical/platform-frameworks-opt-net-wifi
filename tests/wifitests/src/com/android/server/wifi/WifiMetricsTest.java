@@ -44,6 +44,7 @@ import static org.junit.Assert.fail;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
@@ -55,6 +56,8 @@ import android.content.Context;
 import android.net.wifi.EAPConstants;
 import android.net.wifi.IOnWifiUsabilityStatsListener;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApCapability;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -162,6 +165,10 @@ public class WifiMetricsTest extends WifiBaseTest {
     @Mock ExternalCallbackTracker<IOnWifiUsabilityStatsListener> mListenerTracker;
     @Mock WifiP2pMetrics mWifiP2pMetrics;
     @Mock DppMetrics mDppMetrics;
+    @Mock WifiScoreCard mWifiScoreCard;
+    @Mock WifiScoreCard.PerNetwork mPerNetwork;
+    @Mock WifiScoreCard.NetworkConnectionStats mNetworkConnectionStats;
+    @Mock WifiConfiguration mWifiConfig;
 
     @Before
     public void setUp() throws Exception {
@@ -181,6 +188,9 @@ public class WifiMetricsTest extends WifiBaseTest {
         mWifiMetrics.setWifiNetworkSelector(mWns);
         mWifiMetrics.setWifiDataStall(mWifiDataStall);
         mWifiMetrics.setWifiHealthMonitor(mWifiHealthMonitor);
+        mWifiMetrics.setWifiScoreCard(mWifiScoreCard);
+        when(mWifiScoreCard.lookupNetwork(anyString())).thenReturn(mPerNetwork);
+        when(mPerNetwork.getRecentStats()).thenReturn(mNetworkConnectionStats);
     }
 
     /**
@@ -449,6 +459,11 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_SOFT_AP_ASSOCIATED_STATIONS = 3;
     private static final int SOFT_AP_CHANNEL_FREQUENCY = 2437;
     private static final int SOFT_AP_CHANNEL_BANDWIDTH = SoftApConnectedClientsEvent.BANDWIDTH_20;
+    private static final int SOFT_AP_MAX_CLIENT_SETTING = 10;
+    private static final int SOFT_AP_MAX_CLIENT_CAPABILITY = 16;
+    private static final long SOFT_AP_SHUTDOWN_TIMEOUT_SETTING = 10_000;
+    private static final long SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING = 600_000;
+    private static final boolean SOFT_AP_CLIENT_CONTROL_ENABLE = true;
     private static final boolean IS_MAC_RANDOMIZATION_ON = true;
     private static final int NUM_LINK_SPEED_LEVELS_TO_INCREMENT = 30;
     private static final int TEST_RSSI_LEVEL = -80;
@@ -464,6 +479,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final long NUM_CONNECT_TO_OCE_SUPPORTED_NETWORKS = 3;
     private static final long NUM_FORCE_SCAN_DUE_TO_STEERING_REQUEST = 2;
     private static final long NUM_MBO_CELLULAR_SWITCH_REQUEST = 3;
+    private static final long NUM_STEERING_REQUEST_INCLUDING_MBO_ASSOC_RETRY_DELAY = 3;
     private static final long NUM_CONNECT_REQUEST_WITH_FILS_AKM = 4;
     private static final long NUM_L2_CONNECTION_THROUGH_FILS_AUTHENTICATION = 3;
 
@@ -956,6 +972,9 @@ public class WifiMetricsTest extends WifiBaseTest {
         for (int i = 0; i < NUM_MBO_CELLULAR_SWITCH_REQUEST; i++) {
             mWifiMetrics.incrementMboCellularSwitchRequestCount();
         }
+        for (int i = 0; i < NUM_STEERING_REQUEST_INCLUDING_MBO_ASSOC_RETRY_DELAY; i++) {
+            mWifiMetrics.incrementSteeringRequestCountIncludingMboAssocRetryDelay();
+        }
         for (int i = 0; i < NUM_CONNECT_REQUEST_WITH_FILS_AKM; i++) {
             mWifiMetrics.incrementConnectRequestWithFilsAkmCount();
         }
@@ -985,21 +1004,39 @@ public class WifiMetricsTest extends WifiBaseTest {
     private void addSoftApEventsToMetrics() {
         // Total number of events recorded is NUM_SOFT_AP_EVENT_ENTRIES in both modes
 
-        mWifiMetrics.addSoftApUpChangedEvent(true, WifiManager.IFACE_IP_MODE_TETHERED);
+        mWifiMetrics.addSoftApUpChangedEvent(true, WifiManager.IFACE_IP_MODE_TETHERED,
+                SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING);
         mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(NUM_SOFT_AP_ASSOCIATED_STATIONS,
                 WifiManager.IFACE_IP_MODE_TETHERED);
         mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(NUM_SOFT_AP_ASSOCIATED_STATIONS,
                 WifiManager.IFACE_IP_MODE_UNSPECIFIED);  // Should be dropped.
-        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_TETHERED);
+        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_TETHERED,
+                SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING);
         // Channel switch info should be added to the last Soft AP UP event in the list
         mWifiMetrics.addSoftApChannelSwitchedEvent(SOFT_AP_CHANNEL_FREQUENCY,
                 SOFT_AP_CHANNEL_BANDWIDTH, WifiManager.IFACE_IP_MODE_TETHERED);
-        mWifiMetrics.addSoftApUpChangedEvent(true, WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
+        SoftApConfiguration testSoftApConfig = new SoftApConfiguration.Builder()
+                .setSsid("Test_Metric_SSID")
+                .setMaxNumberOfClients(SOFT_AP_MAX_CLIENT_SETTING)
+                .setShutdownTimeoutMillis(SOFT_AP_SHUTDOWN_TIMEOUT_SETTING)
+                .setClientControlByUserEnabled(SOFT_AP_CLIENT_CONTROL_ENABLE)
+                .build();
+        mWifiMetrics.updateSoftApConfiguration(testSoftApConfig,
+                WifiManager.IFACE_IP_MODE_TETHERED);
+        SoftApCapability testSoftApCapability = new SoftApCapability(0);
+        testSoftApCapability.setMaxSupportedClients(SOFT_AP_MAX_CLIENT_CAPABILITY);
+        mWifiMetrics.updateSoftApCapability(testSoftApCapability,
+                WifiManager.IFACE_IP_MODE_TETHERED);
+
+        mWifiMetrics.addSoftApUpChangedEvent(true, WifiManager.IFACE_IP_MODE_LOCAL_ONLY,
+                SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING);
         mWifiMetrics.addSoftApNumAssociatedStationsChangedEvent(NUM_SOFT_AP_ASSOCIATED_STATIONS,
                 WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
         // Should be dropped.
-        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_CONFIGURATION_ERROR);
-        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_LOCAL_ONLY);
+        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_CONFIGURATION_ERROR,
+                SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING);
+        mWifiMetrics.addSoftApUpChangedEvent(false, WifiManager.IFACE_IP_MODE_LOCAL_ONLY,
+                SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING);
     }
 
     private void verifySoftApEventsStoredInProto() {
@@ -1012,6 +1049,21 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.softApConnectedClientsEventsTethered[0].channelFrequency);
         assertEquals(SOFT_AP_CHANNEL_BANDWIDTH,
                 mDecodedProto.softApConnectedClientsEventsTethered[0].channelBandwidth);
+        assertEquals(SOFT_AP_MAX_CLIENT_SETTING,
+                mDecodedProto.softApConnectedClientsEventsTethered[0]
+                .maxNumClientsSettingInSoftapConfiguration);
+        assertEquals(SOFT_AP_MAX_CLIENT_CAPABILITY,
+                mDecodedProto.softApConnectedClientsEventsTethered[0]
+                .maxNumClientsSettingInSoftapCapability);
+        assertEquals(SOFT_AP_SHUTDOWN_TIMEOUT_SETTING,
+                mDecodedProto.softApConnectedClientsEventsTethered[0]
+                .shutdownTimeoutSettingInSoftapConfiguration);
+        assertEquals(SOFT_AP_SHUTDOWN_TIMEOUT_DEFAULT_SETTING,
+                mDecodedProto.softApConnectedClientsEventsTethered[0]
+                .defaultShutdownTimeoutSetting);
+        assertEquals(SOFT_AP_CLIENT_CONTROL_ENABLE,
+                mDecodedProto.softApConnectedClientsEventsTethered[0].clientControlIsEnabled);
+
         assertEquals(SoftApConnectedClientsEvent.NUM_CLIENTS_CHANGED,
                 mDecodedProto.softApConnectedClientsEventsTethered[1].eventType);
         assertEquals(NUM_SOFT_AP_ASSOCIATED_STATIONS,
@@ -1335,6 +1387,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numForceScanDueToSteeringRequest);
         assertEquals(NUM_MBO_CELLULAR_SWITCH_REQUEST,
                 mDecodedProto.numMboCellularSwitchRequest);
+        assertEquals(NUM_STEERING_REQUEST_INCLUDING_MBO_ASSOC_RETRY_DELAY,
+                mDecodedProto.numSteeringRequestIncludingMboAssocRetryDelay);
         assertEquals(NUM_CONNECT_REQUEST_WITH_FILS_AKM,
                 mDecodedProto.numConnectRequestWithFilsAkm);
         assertEquals(NUM_L2_CONNECTION_THROUGH_FILS_AUTHENTICATION,
@@ -2583,10 +2637,13 @@ public class WifiMetricsTest extends WifiBaseTest {
     }
 
     /**
-     * Check max supported link speed
+     * Check max supported link speed and consecutive connection failure count
      */
     @Test
-    public void testConnectionMaxSupportedLinkSpeed() throws Exception {
+    public void testConnectionMaxSupportedLinkSpeedConsecutiveFailureCnt() throws Exception {
+        mWifiMetrics.setScreenState(true);
+        when(mNetworkConnectionStats.getCount(WifiScoreCard.CNT_CONSECUTIVE_CONNECTION_FAILURE))
+                .thenReturn(2);
         mWifiMetrics.startConnectionEvent(mTestWifiConfig, "TestNetwork",
                 WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE);
         mWifiMetrics.setConnectionMaxSupportedLinkSpeedMbps(MAX_SUPPORTED_TX_LINK_SPEED_MBPS,
@@ -2600,6 +2657,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                 .routerFingerprint.maxSupportedTxLinkSpeedMbps);
         assertEquals(MAX_SUPPORTED_RX_LINK_SPEED_MBPS, mDecodedProto.connectionEvent[0]
                 .routerFingerprint.maxSupportedRxLinkSpeedMbps);
+        assertEquals(2, mDecodedProto.connectionEvent[0].numConsecutiveConnectionFailure);
+        assertEquals(true, mDecodedProto.connectionEvent[0].screenOn);
     }
 
     /**
@@ -2719,6 +2778,7 @@ public class WifiMetricsTest extends WifiBaseTest {
 
     private WifiConfiguration createComplexWifiConfig() {
         WifiConfiguration config = new WifiConfiguration();
+        config.SSID = SSID;
         config.allowedKeyManagement = intToBitSet(TEST_ALLOWED_KEY_MANAGEMENT);
         config.allowedProtocols = intToBitSet(TEST_ALLOWED_PROTOCOLS);
         config.allowedAuthAlgorithms = intToBitSet(TEST_ALLOWED_AUTH_ALGORITHMS);
@@ -4486,5 +4546,120 @@ public class WifiMetricsTest extends WifiBaseTest {
         };
         assertKeyCountsEqual(expectedHistogram,
                 mDecodedProto.wifiOffMetrics.wifiOffDeferringTimeHistogram);
+    }
+
+    /*
+     * Test the logging of Wi-Fi off
+     */
+    @Test
+    public void testSoftApConfigLimitationMetrics() throws Exception {
+        SoftApConfiguration originalConfig = new SoftApConfiguration.Builder()
+                .setSsid("TestSSID").build();
+        SoftApConfiguration needToResetCongig = new SoftApConfiguration.Builder(originalConfig)
+                .setPassphrase("TestPassphreas", SoftApConfiguration.SECURITY_TYPE_WPA3_SAE)
+                .setClientControlByUserEnabled(true)
+                .setMaxNumberOfClients(10)
+                .build();
+        mWifiMetrics.noteSoftApConfigReset(originalConfig, needToResetCongig);
+
+        mWifiMetrics.noteSoftApClientBlocked(5);
+        mWifiMetrics.noteSoftApClientBlocked(5);
+        mWifiMetrics.noteSoftApClientBlocked(5);
+        mWifiMetrics.noteSoftApClientBlocked(8);
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(1,
+                mDecodedProto.softApConfigLimitationMetrics.numSecurityTypeResetToDefault);
+        assertEquals(1,
+                mDecodedProto.softApConfigLimitationMetrics.numMaxClientSettingResetToDefault);
+        assertEquals(1,
+                mDecodedProto.softApConfigLimitationMetrics.numClientControlByUserResetToDefault);
+
+        Int32Count[] expectedHistogram = {
+                buildInt32Count(5, 3),
+                buildInt32Count(8, 1),
+        };
+        assertKeyCountsEqual(expectedHistogram,
+                mDecodedProto.softApConfigLimitationMetrics.maxClientSettingWhenReachHistogram);
+    }
+
+    /**
+     * Test the logging of channel utilization
+     */
+    @Test
+    public void testChannelUtilization() throws Exception {
+        mWifiMetrics.incrementChannelUtilizationCount(180, 2412);
+        mWifiMetrics.incrementChannelUtilizationCount(150, 2412);
+        mWifiMetrics.incrementChannelUtilizationCount(230, 2412);
+        mWifiMetrics.incrementChannelUtilizationCount(20, 5510);
+        mWifiMetrics.incrementChannelUtilizationCount(50, 5510);
+
+        dumpProtoAndDeserialize();
+
+        HistogramBucketInt32[] expected2GHistogram = {
+                buildHistogramBucketInt32(150, 175, 1),
+                buildHistogramBucketInt32(175, 200, 1),
+                buildHistogramBucketInt32(225, Integer.MAX_VALUE, 1),
+        };
+
+        HistogramBucketInt32[] expectedAbove2GHistogram = {
+                buildHistogramBucketInt32(Integer.MIN_VALUE, 25, 1),
+                buildHistogramBucketInt32(50, 75, 1),
+        };
+
+        assertHistogramBucketsEqual(expected2GHistogram,
+                mDecodedProto.channelUtilizationHistogram.utilization2G);
+        assertHistogramBucketsEqual(expectedAbove2GHistogram,
+                mDecodedProto.channelUtilizationHistogram.utilizationAbove2G);
+    }
+
+    /**
+     * Test the logging of Tx and Rx throughput
+     */
+    @Test
+    public void testThroughput() throws Exception {
+        mWifiMetrics.incrementThroughputKbpsCount(500, 800, 2412);
+        mWifiMetrics.incrementThroughputKbpsCount(5_000, 4_000, 2412);
+        mWifiMetrics.incrementThroughputKbpsCount(54_000, 48_000, 2412);
+        mWifiMetrics.incrementThroughputKbpsCount(50_000, 49_000, 5510);
+        mWifiMetrics.incrementThroughputKbpsCount(801_000, 790_000, 5510);
+        mWifiMetrics.incrementThroughputKbpsCount(1100_000, 1200_000, 5510);
+        mWifiMetrics.incrementThroughputKbpsCount(1599_000, 1800_000, 6120);
+        dumpProtoAndDeserialize();
+
+        HistogramBucketInt32[] expectedTx2GHistogramMbps = {
+                buildHistogramBucketInt32(Integer.MIN_VALUE, 1, 1),
+                buildHistogramBucketInt32(5, 10, 1),
+                buildHistogramBucketInt32(50, 100, 1),
+        };
+
+        HistogramBucketInt32[] expectedRx2GHistogramMbps = {
+                buildHistogramBucketInt32(Integer.MIN_VALUE, 1, 1),
+                buildHistogramBucketInt32(1, 5, 1),
+                buildHistogramBucketInt32(25, 50, 1),
+        };
+
+        HistogramBucketInt32[] expectedTxAbove2GHistogramMbps = {
+                buildHistogramBucketInt32(50, 100, 1),
+                buildHistogramBucketInt32(800, 1200, 2),
+                buildHistogramBucketInt32(1200, 1600, 1),
+        };
+
+        HistogramBucketInt32[] expectedRxAbove2GHistogramMbps = {
+                buildHistogramBucketInt32(25, 50, 1),
+                buildHistogramBucketInt32(600, 800, 1),
+                buildHistogramBucketInt32(1200, 1600, 1),
+                buildHistogramBucketInt32(1600, Integer.MAX_VALUE, 1),
+        };
+
+        assertHistogramBucketsEqual(expectedTx2GHistogramMbps,
+                mDecodedProto.throughputMbpsHistogram.tx2G);
+        assertHistogramBucketsEqual(expectedTxAbove2GHistogramMbps,
+                mDecodedProto.throughputMbpsHistogram.txAbove2G);
+        assertHistogramBucketsEqual(expectedRx2GHistogramMbps,
+                mDecodedProto.throughputMbpsHistogram.rx2G);
+        assertHistogramBucketsEqual(expectedRxAbove2GHistogramMbps,
+                mDecodedProto.throughputMbpsHistogram.rxAbove2G);
     }
 }
