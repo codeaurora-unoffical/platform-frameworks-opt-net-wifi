@@ -49,6 +49,8 @@ import com.android.server.wifi.util.ApConfigUtil;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Locale;
 
 /**
@@ -309,6 +311,36 @@ public class SoftApManager implements ActiveModeManager {
         Log.d(TAG, "Soft AP is stopped");
     }
 
+    private void softapVendorInit(ArrayList<String> names) {
+        if (names == null || names.size() == 0) return;
+
+        // Below is the sample commands to set vendor/interworking elements.
+        // - wlan.debug.vendor_init can be set for test purpose.
+        // - OEM needs to integrate their implementation as below.
+
+        // SAMPLE COMMANDS START
+        if (SystemProperties.getInt("wlan.sample.vendor_init", 0) != 1) {
+            Log.i(TAG, "wlan.sample.vendor_init not set to 1, not set sample values");
+            return;
+        }
+
+        String ifname = names.get(0); // OEM to pick one AP interface
+        String mac = mWifiNative.hostapdCmd(ifname, "DRIVER Macaddr").replace("Macaddr = ", "");
+        Log.d(TAG, "hostapdCmd(DRIVER Macaddr)=" + mac);
+        // Take this mac and build the vendor element string
+        mWifiNative.hostapdCmd(ifname, "SET vendor_elements dd0411223301");
+        mWifiNative.hostapdCmd(ifname, "SET assocresp_elements dd0411223302");
+        mWifiNative.hostapdCmd(ifname, "SET interworking 1");
+        mWifiNative.hostapdCmd(ifname, "SET access_network_type 4");
+        mWifiNative.hostapdCmd(ifname, "SET esr 1");
+        mWifiNative.hostapdCmd(ifname, "SET internet 1");
+        mWifiNative.hostapdCmd(ifname, "SET venue_type 1");
+        mWifiNative.hostapdCmd(ifname, "SET venue_group 10");
+        mWifiNative.hostapdCmd(ifname, "SET hessid 00:03:7f:89:31:88");
+        mWifiNative.hostapdCmd(ifname, "UPDATE_BEACON");
+        // SAMPLE COMMANDS END
+    }
+
     private class SoftApStateMachine extends StateMachine {
         // Commands for the state machine.
         public static final int CMD_START = 0;
@@ -320,6 +352,7 @@ public class SoftApManager implements ActiveModeManager {
         public static final int CMD_INTERFACE_DESTROYED = 7;
         public static final int CMD_INTERFACE_DOWN = 8;
         public static final int CMD_SOFT_AP_CHANNEL_SWITCHED = 9;
+        public static final int CMD_SOFT_AP_VENDOR_INIT = 20;
 
         private final State mIdleState = new IdleState();
         private final State mStartedState = new StartedState();
@@ -542,6 +575,10 @@ public class SoftApManager implements ActiveModeManager {
                 Log.d(TAG, "Resetting num stations on start");
                 mNumAssociatedStations = 0;
                 scheduleTimeoutMessage();
+
+                // No sync mechnism between hostapd and framework.
+                // Try wait 500ms for vendor init
+                sendMessageDelayed(CMD_SOFT_AP_VENDOR_INIT, 500 /*ms*/);
             }
 
             @Override
@@ -604,6 +641,15 @@ public class SoftApManager implements ActiveModeManager {
                         mWifiMetrics.addSoftApChannelSwitchedEvent(mReportedFrequency,
                                 mReportedBandwidth, mMode);
                         updateUserBandPreferenceViolationMetricsIfNeeded();
+                        break;
+                    case CMD_SOFT_AP_VENDOR_INIT:
+                        ArrayList<String> names = mWifiNative.listApInterfaces();
+                        if(names != null && "PONG\n".equals(mWifiNative.hostapdCmd(names.get(0), "PING"))) {
+                            // Hostapd is ready
+                            softapVendorInit(names);
+                        } else {
+                            sendMessageDelayed(CMD_SOFT_AP_VENDOR_INIT, 100 /*ms*/);
+                        }
                         break;
                     case CMD_TIMEOUT_TOGGLE_CHANGED:
                         boolean isEnabled = (message.arg1 == 1);
