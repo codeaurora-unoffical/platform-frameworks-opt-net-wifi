@@ -1853,6 +1853,7 @@ public class WifiNative {
            }
         }
 
+        Log.i(TAG, ifaceName + ": SoftAp Wifi Generation: " + wifiGeneration);
         WifiInjector.getInstance().getWifiApConfigStore().setWifiGeneration(wifiGeneration);
 
         return true;
@@ -3840,5 +3841,16 @@ public class WifiNative {
     public boolean updateLinkedNetworksIfCurrent(@NonNull String ifaceName, int networkId,
                     HashMap<String, WifiConfiguration> linkedNetworks) {
         return mSupplicantStaIfaceHal.updateLinkedNetworksIfCurrent(ifaceName, networkId, linkedNetworks);
+    }
+    /**
+     * Run driver command
+     *
+     * @param ifaceName String representing iface name
+     * @param command to pass to driver
+     * returns String of command reply.
+     */
+    String doDriverCmd(String ifaceName, String command)
+    {
+        return mSupplicantStaIfaceHal.doDriverCmd(ifaceName, command);
     }
 }

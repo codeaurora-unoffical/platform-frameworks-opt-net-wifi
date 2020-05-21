@@ -3677,10 +3677,10 @@ public class SupplicantStaIfaceHal {
      *  This is a v1.2+ HAL feature.
      *  On error, or if these features are not supported, 0 is returned.
      */
-    public int getAdvancedKeyMgmtCapabilities(@NonNull String ifaceName) {
+    public long getAdvancedKeyMgmtCapabilities(@NonNull String ifaceName) {
         final String methodStr = "getAdvancedKeyMgmtCapabilities";
 
-        int advancedCapabilities = 0;
+        long advancedCapabilities = 0;
         int keyMgmtCapabilities = getKeyMgmtCapabilities(ifaceName);
 
         if ((keyMgmtCapabilities & android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
@@ -4425,5 +4425,52 @@ public class SupplicantStaIfaceHal {
             }
             return true;
         }
+    }
+
+    protected vendor.qti.hardware.wifi.supplicant.V2_2.ISupplicantVendorStaIface
+        getSupplicantVendorStaIfaceV2_2Mockable(ISupplicantVendorStaIface vendorIfaceV2_0) {
+        if (vendorIfaceV2_0 == null) return null;
+        return vendor.qti.hardware.wifi.supplicant.V2_2.ISupplicantVendorStaIface.castFrom(
+                vendorIfaceV2_0);
+    }
+
+    /**
+     * run Driver command
+     *
+     * @param ifaceName Interface Name
+     * @param command Driver Command
+     */
+    public String doDriverCmd(String ifaceName, String command)
+    {
+        synchronized (mLock) {
+            final String methodStr = "doDriverCmd";
+            final Mutable<String> reply = new Mutable<>();
+
+            reply.value = "";
+            ISupplicantVendorStaIface vendorIfaceV2_0 = getVendorStaIface(ifaceName);
+            if (vendorIfaceV2_0 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            vendor.qti.hardware.wifi.supplicant.V2_2.ISupplicantVendorStaIface vendorIfaceV2_2;
+            vendorIfaceV2_2 = getSupplicantVendorStaIfaceV2_2Mockable(vendorIfaceV2_0);
+            if (vendorIfaceV2_2 == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", V2_2.ISupplicantVendorStaIface is null");
+                return null;
+            }
+
+            try {
+                vendorIfaceV2_2.doDriverCmd(command,
+                        (SupplicantStatus status, String rply) -> {
+                        if(checkVendorStatusAndLogFailure(status, methodStr)) {
+                            reply.value = rply;
+                     }
+                });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return reply.value;
+         }
     }
 }
