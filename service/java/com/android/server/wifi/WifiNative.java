@@ -1572,7 +1572,6 @@ public class WifiNative {
      * @return true on success.
      */
     public boolean startPnoScan(@NonNull String ifaceName, PnoSettings pnoSettings) {
-        removeAllNetworks(ifaceName);
         return mWifiCondManager.startPnoScan(ifaceName, pnoSettings.toNativePnoSettings(),
                 Runnable::run,
                 new WifiNl80211Manager.PnoScanRequestCallback() {
@@ -2417,6 +2416,15 @@ public class WifiNative {
         mSupplicantStaIfaceHal.removeNetworkCachedData(networkId);
     }
 
+    /** Clear HAL cached data for |networkId| if MAC address is changed.
+     *
+     * @param networkId network id of the network to be checked.
+     * @param curMacAddress current MAC address
+     */
+    public void removeNetworkCachedDataIfNeeded(int networkId, MacAddress curMacAddress) {
+        mSupplicantStaIfaceHal.removeNetworkCachedDataIfNeeded(networkId, curMacAddress);
+    }
+
     /*
      * DPP
      */
@@ -2908,19 +2916,6 @@ public class WifiNative {
      */
     public ConnectionCapabilities getConnectionCapabilities(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.getConnectionCapabilities(ifaceName);
-    }
-
-    /**
-     * Set the MAC OUI during scanning.
-     * An OUI {Organizationally Unique Identifier} is a 24-bit number that
-     * uniquely identifies a vendor or manufacturer.
-     *
-     * @param ifaceName Name of the interface.
-     * @param oui OUI to set.
-     * @return true for success
-     */
-    public boolean setScanningMacOui(@NonNull String ifaceName, byte[] oui) {
-        return mWifiVendorHal.setScanningMacOui(ifaceName, oui);
     }
 
     /**
