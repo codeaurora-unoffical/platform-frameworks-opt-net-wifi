@@ -405,9 +405,12 @@ public class SoftApManager implements ActiveModeManager {
                         // FIXME: Use a global property to indicate AP+AP, ideally
                         // this expects HIDL/AIDL API change in upcoming Android R.
                         WifiConfiguration config = (WifiConfiguration) message.obj;
-                        SystemProperties.set("persist.vendor.wifi.softap.dualband",
-                            (config.apBand == WifiConfiguration.AP_BAND_DUAL) ? "1" : "0");
-
+                        if (WifiConfigurationUtil.isConfigForOweNetwork(config)
+                              || config.apBand == WifiConfiguration.AP_BAND_DUAL) {
+                            SystemProperties.set("persist.vendor.wifi.softap.dualband", "1");
+                        } else {
+                            SystemProperties.set("persist.vendor.wifi.softap.dualband", "0");
+                        }
                         mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
                                 mWifiNativeInterfaceCallback);
                         if (TextUtils.isEmpty(mApInterfaceName)) {
