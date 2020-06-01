@@ -37,15 +37,14 @@ import static com.android.wifitrackerlib.WifiEntry.Speed;
 import static java.util.Comparator.comparingInt;
 import static java.util.stream.Collectors.groupingBy;
 
-import android.app.AppGlobals;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
 import android.net.NetworkKey;
+import android.net.NetworkScoreManager;
 import android.net.ScoredNetwork;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
@@ -53,8 +52,8 @@ import android.net.wifi.WifiConfiguration.NetworkSelectionStatus;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiNetworkScoreCache;
 import android.os.PersistableBundle;
-import android.os.RemoteException;
 import android.os.UserHandle;
+import android.provider.Settings;
 import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
@@ -83,6 +82,15 @@ import java.util.StringJoiner;
  * Utility methods for WifiTrackerLib.
  */
 class Utils {
+    private static NetworkScoreManager sNetworkScoreManager;
+
+    private static String getActiveScorerPackage(@NonNull Context context) {
+        if (sNetworkScoreManager == null) {
+            sNetworkScoreManager = context.getSystemService(NetworkScoreManager.class);
+        }
+        return sNetworkScoreManager.getActiveScorerPackage();
+    }
+
     // Returns the ScanResult with the best RSSI from a list of ScanResults.
     @Nullable
     static ScanResult getBestScanResultByLevel(@NonNull List<ScanResult> scanResults) {
@@ -347,7 +355,9 @@ class Utils {
 
     @Speed
     private static int roundToClosestSpeedEnum(int speed) {
-        if (speed < (SPEED_SLOW + SPEED_MODERATE) / 2) {
+        if (speed == SPEED_NONE) {
+            return SPEED_NONE;
+        } else if (speed < (SPEED_SLOW + SPEED_MODERATE) / 2) {
             return SPEED_SLOW;
         } else if (speed < (SPEED_MODERATE + SPEED_FAST) / 2) {
             return SPEED_MODERATE;
@@ -358,51 +368,28 @@ class Utils {
         }
     }
 
+    /**
+     * Get the app label for a suggestion/specifier package name.
+     */
     static CharSequence getAppLabel(Context context, String packageName) {
         try {
+            String openWifiPackageName = Settings.Global.getString(context.getContentResolver(),
+                    Settings.Global.USE_OPEN_WIFI_PACKAGE);
+            if (!TextUtils.isEmpty(openWifiPackageName) && TextUtils.equals(packageName,
+                    getActiveScorerPackage(context))) {
+                packageName = openWifiPackageName;
+            }
+
             ApplicationInfo appInfo = context.getPackageManager().getApplicationInfoAsUser(
                     packageName,
                     0 /* flags */,
                     UserHandle.getUserId(UserHandle.USER_CURRENT));
             return appInfo.loadLabel(context.getPackageManager());
         } catch (PackageManager.NameNotFoundException e) {
-            // Do nothing.
-        }
-        return "";
-    }
-
-    static CharSequence getAppLabelForSavedNetwork(@NonNull Context context,
-            @NonNull WifiEntry wifiEntry) {
-        return getAppLabelForWifiConfiguration(context, wifiEntry.getWifiConfiguration());
-    }
-
-    static CharSequence getAppLabelForWifiConfiguration(@NonNull Context context,
-            @NonNull WifiConfiguration config) {
-        if (context == null || config == null) {
-            return "";
-        }
-
-        final PackageManager pm = context.getPackageManager();
-        final String systemName = pm.getNameForUid(android.os.Process.SYSTEM_UID);
-        final int userId = UserHandle.getUserId(config.creatorUid);
-        ApplicationInfo appInfo = null;
-        if (config.creatorName != null && config.creatorName.equals(systemName)) {
-            appInfo = context.getApplicationInfo();
-        } else {
-            try {
-                final IPackageManager ipm = AppGlobals.getPackageManager();
-                appInfo = ipm.getApplicationInfo(config.creatorName, 0 /* flags */, userId);
-            } catch (RemoteException rex) {
-                // Do nothing.
-            }
-        }
-        if (appInfo != null
-                && !appInfo.packageName.equals(context.getString(R.string.settings_package))
-                && !appInfo.packageName.equals(
-                context.getString(R.string.certinstaller_package))) {
-            return appInfo.loadLabel(pm);
-        } else {
-            return "";
+            // The packageName should come from a suggestion/specifier which is guaranteed to
+            // have an associated app label. If there is a concurrency issue between the current
+            // connection and the suggestion being removed, we should fall back to the packageName.
+            return packageName;
         }
     }
 
@@ -616,6 +603,9 @@ class Utils {
      * Get the SIM carrier name for target subscription Id.
      */
     static @Nullable String getCarrierNameForSubId(@NonNull Context context, int subId) {
+        if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+            return null;
+        }
         TelephonyManager telephonyManager =
                 (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
         if (telephonyManager == null) return null;
@@ -639,9 +629,8 @@ class Utils {
      * Get the best match subscription Id for target WifiConfiguration.
      */
     static int getSubIdForConfig(@NonNull Context context, @NonNull WifiConfiguration config) {
-        int dataSubId = SubscriptionManager.getDefaultDataSubscriptionId();
         if (config.carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
-            return dataSubId;
+            return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         }
         SubscriptionManager subscriptionManager =
                 (SubscriptionManager) context.getSystemService(
@@ -655,6 +644,7 @@ class Utils {
         }
 
         int matchSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+        int dataSubId = SubscriptionManager.getDefaultDataSubscriptionId();
         for (SubscriptionInfo subInfo : subInfoList) {
             if (subInfo.getCarrierId() == config.carrierId) {
                 matchSubId = subInfo.getSubscriptionId();
@@ -689,8 +679,13 @@ class Utils {
         if (context == null || wifiConfig == null || !isSimCredential(wifiConfig)) {
             return "";
         }
-
-        int subId = getSubIdForConfig(context, wifiConfig);
+        int subId;
+        if (wifiConfig.carrierId == TelephonyManager.UNKNOWN_CARRIER_ID) {
+            // Config without carrierId use default data subscription.
+            subId = SubscriptionManager.getDefaultSubscriptionId();
+        } else {
+            subId = getSubIdForConfig(context, wifiConfig);
+        }
         if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID
                 || isImsiPrivacyProtectionProvided(context, subId)) {
             return "";

@@ -88,6 +88,7 @@ import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiLockStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkRequestApiLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkSuggestionApiLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkSuggestionApiLog.SuggestionAppCount;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiNetworkSuggestionApiLog.UserReaction;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiToggleStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiUsabilityStatsEntry;
@@ -416,6 +417,9 @@ public class WifiMetrics {
     private final IntHistogram mWifiNetworkSuggestionApiListSizeHistogram =
             new IntHistogram(NETWORK_SUGGESTION_API_LIST_SIZE_HISTOGRAM_BUCKETS);
     private final IntCounter mWifiNetworkSuggestionApiAppTypeCounter = new IntCounter();
+    private final List<UserReaction> mWifiNetworkSuggestionUserApprovalAppUiReaction =
+            new ArrayList<>();
+
     private final WifiLockStats mWifiLockStats = new WifiLockStats();
     private static final int[] WIFI_LOCK_SESSION_DURATION_HISTOGRAM_BUCKETS =
             {1, 10, 60, 600, 3600};
@@ -1691,6 +1695,15 @@ public class WifiMetrics {
     }
 
     /**
+     * Wifi wake feature toggle.
+     */
+    public void setWifiWakeEnabled(boolean enabled) {
+        synchronized (mLock) {
+            mWifiLogProto.isWifiWakeEnabled = enabled;
+        }
+    }
+
+    /**
      * Increment Non Empty Scan Results count
      */
     public void incrementNonEmptyScanResultCount() {
@@ -2101,7 +2114,7 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mTxLinkSpeedCount2g.increment(txLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_LOW_END_FREQ) {
                 mTxLinkSpeedCount5gLow.increment(txLinkSpeed);
@@ -2126,7 +2139,7 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mRxLinkSpeedCount2g.increment(rxLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_LOW_END_FREQ) {
                 mRxLinkSpeedCount5gLow.increment(rxLinkSpeed);
@@ -2150,7 +2163,7 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mChannelUtilizationHistogram2G.increment(channelUtilization);
             } else {
                 mChannelUtilizationHistogramAbove2G.increment(channelUtilization);
@@ -2168,7 +2181,7 @@ public class WifiMetrics {
     public void incrementThroughputKbpsCount(int txThroughputKbps, int rxThroughputKbps,
             int frequency) {
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 if (txThroughputKbps >= 0) {
                     mTxThroughputMbpsHistogram2G.increment(txThroughputKbps / 1000);
                 }
@@ -3058,6 +3071,7 @@ public class WifiMetrics {
                         + mWifiLogProto.isVerboseLoggingEnabled);
                 pw.println("mWifiLogProto.isEnhancedMacRandomizationForceEnabled="
                         + mWifiLogProto.isEnhancedMacRandomizationForceEnabled);
+                pw.println("mWifiLogProto.isWifiWakeEnabled=" + mWifiLogProto.isWifiWakeEnabled);
                 pw.println("mWifiLogProto.numNetworksAddedByUser="
                         + mWifiLogProto.numNetworksAddedByUser);
                 pw.println("mWifiLogProto.numNetworksAddedByApps="
@@ -3581,6 +3595,7 @@ public class WifiMetrics {
                         + mWifiNetworkSuggestionApiListSizeHistogram);
                 pw.println("mWifiNetworkSuggestionApiAppTypeCounter:\n"
                         + mWifiNetworkSuggestionApiAppTypeCounter);
+                printSuggestionUserApprovalAppReaction(pw);
                 pw.println("mNetworkIdToNominatorId:\n" + mNetworkIdToNominatorId);
                 pw.println("mWifiLockStats:\n" + mWifiLockStats);
                 pw.println("mWifiLockHighPerfAcqDurationSecHistogram:\n"
@@ -3685,6 +3700,13 @@ public class WifiMetrics {
         line.append(",total_duration_ms=" + stats.totalDurationMs);
         line.append(",pno_duration_ms=" + stats.pnoDurationMs);
         pw.println(line.toString());
+    }
+
+    private void printSuggestionUserApprovalAppReaction(PrintWriter pw) {
+        pw.println("mWifiNetworkSuggestionApprovalAppUiUserReaction:");
+        for (UserReaction event : mWifiNetworkSuggestionUserApprovalAppUiReaction) {
+            pw.println(event);
+        }
     }
 
     /**
@@ -4205,6 +4227,9 @@ public class WifiMetrics {
                                 entry.count = count;
                                 return entry;
                             });
+            mWifiNetworkSuggestionApiLog.userApprovalAppUiReaction =
+                    mWifiNetworkSuggestionUserApprovalAppUiReaction
+                            .toArray(new UserReaction[0]);
             mWifiLogProto.wifiNetworkSuggestionApiLog = mWifiNetworkSuggestionApiLog;
 
             mWifiLockStats.highPerfLockAcqDurationSecHistogram =
@@ -4468,10 +4493,10 @@ public class WifiMetrics {
             mLinkProbeStaEventCount = 0;
             mNetworkSelectionExperimentPairNumChoicesCounts.clear();
             mWifiNetworkSuggestionApiLog.clear();
-            mWifiNetworkSuggestionApiLog.clear();
             mWifiNetworkRequestApiMatchSizeHistogram.clear();
             mWifiNetworkSuggestionApiListSizeHistogram.clear();
             mWifiNetworkSuggestionApiAppTypeCounter.clear();
+            mWifiNetworkSuggestionUserApprovalAppUiReaction.clear();
             mWifiLockHighPerfAcqDurationSecHistogram.clear();
             mWifiLockLowLatencyAcqDurationSecHistogram.clear();
             mWifiLockHighPerfActiveSessionDurationSecHistogram.clear();
@@ -5921,6 +5946,15 @@ public class WifiMetrics {
         }
     }
 
+    /** Increment number of user revoke suggestion permission. Including from settings or
+     * disallowed from UI.
+     */
+    public void incrementNetworkSuggestionUserRevokePermission() {
+        synchronized (mLock) {
+            mWifiNetworkSuggestionApiLog.userRevokeAppSuggestionPermission++;
+        }
+    }
+
     /** Clear and set the latest network suggestion API max list size histogram */
     public void noteNetworkSuggestionApiListSizeHistogram(List<Integer> listSizes) {
         synchronized (mLock) {
@@ -5948,10 +5982,33 @@ public class WifiMetrics {
                 default:
                     typeCode = WifiNetworkSuggestionApiLog.TYPE_UNKNOWN;
             }
+            mWifiNetworkSuggestionApiAppTypeCounter.increment(typeCode);
         }
-        mWifiNetworkSuggestionApiAppTypeCounter.increment(typeCode);
     }
 
+    /** Add user action to the approval app UI */
+    public void addNetworkSuggestionUserApprovalAppUiReaction(int actionType, boolean isDialog) {
+        int actionCode;
+        UserReaction event = new UserReaction();
+        synchronized (mLock) {
+            switch (actionType) {
+                case WifiNetworkSuggestionsManager.ACTION_USER_ALLOWED_APP:
+                    actionCode = WifiNetworkSuggestionApiLog.ACTION_ALLOWED;
+                    break;
+                case WifiNetworkSuggestionsManager.ACTION_USER_DISALLOWED_APP:
+                    actionCode = WifiNetworkSuggestionApiLog.ACTION_DISALLOWED;
+                    break;
+                case WifiNetworkSuggestionsManager.ACTION_USER_DISMISS:
+                    actionCode = WifiNetworkSuggestionApiLog.ACTION_DISMISS;
+                    break;
+                default:
+                    actionCode = WifiNetworkSuggestionApiLog.ACTION_UNKNOWN;
+            }
+            event.userAction = actionCode;
+            event.isDialog = isDialog;
+            mWifiNetworkSuggestionUserApprovalAppUiReaction.add(event);
+        }
+    }
     /**
      * Sets the nominator for a network (i.e. which entity made the suggestion to connect)
      * @param networkId the ID of the network, from its {@link WifiConfiguration}

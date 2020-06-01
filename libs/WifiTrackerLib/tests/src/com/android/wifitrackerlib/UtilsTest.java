@@ -19,7 +19,6 @@ package com.android.wifitrackerlib;
 import static com.android.wifitrackerlib.StandardWifiEntry.ssidAndSecurityToStandardWifiEntryKey;
 import static com.android.wifitrackerlib.StandardWifiEntry.wifiConfigToStandardWifiEntryKey;
 import static com.android.wifitrackerlib.TestUtils.buildScanResult;
-import static com.android.wifitrackerlib.Utils.getAppLabelForSavedNetwork;
 import static com.android.wifitrackerlib.Utils.getAutoConnectDescription;
 import static com.android.wifitrackerlib.Utils.getBestScanResultByLevel;
 import static com.android.wifitrackerlib.Utils.getCarrierNameForSubId;
@@ -43,8 +42,6 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.net.NetworkInfo;
 import android.net.NetworkScoreManager;
@@ -193,28 +190,6 @@ public class UtilsTest {
     }
 
     @Test
-    public void testGetAppLabelForSavedNetwork_returnAppLabel() {
-        final PackageManager mockPackageManager = mock(PackageManager.class);
-        when(mMockContext.getPackageManager()).thenReturn(mockPackageManager);
-        when(mockPackageManager.getNameForUid(android.os.Process.SYSTEM_UID))
-                .thenReturn(SYSTEM_UID_APP_NAME);
-        final ApplicationInfo mockApplicationInfo = mock(ApplicationInfo.class);
-        when(mMockContext.getApplicationInfo()).thenReturn(mockApplicationInfo);
-        mockApplicationInfo.packageName = SYSTEM_UID_APP_NAME;
-        when(mockApplicationInfo.loadLabel(mockPackageManager)).thenReturn(APP_LABEL);
-        final WifiConfiguration config = new WifiConfiguration();
-        config.SSID = "\"ssid\"";
-        config.creatorName = SYSTEM_UID_APP_NAME;
-        final StandardWifiEntry entry = getStandardWifiEntry(config);
-        when(mMockResources.getString(R.string.settings_package))
-                .thenReturn(SETTINGS_APP_NAME);
-
-        final CharSequence appLabel = getAppLabelForSavedNetwork(mMockContext, entry);
-
-        assertThat(appLabel.toString()).isEqualTo(APP_LABEL);
-    }
-
-    @Test
     public void testGetAutoConnectDescription_autoJoinEnabled_returnEmptyString() {
         final WifiConfiguration config = new WifiConfiguration();
         config.SSID = "\"ssid\"";
@@ -344,6 +319,13 @@ public class UtilsTest {
     }
 
     @Test
+    public void testGetCarrierNameWithInvalidSubId() {
+        when(mSpecifiedTm.getSimCarrierIdName()).thenReturn(TEST_CARRIER_NAME);
+        assertNull(getCarrierNameForSubId(mMockContext,
+                SubscriptionManager.INVALID_SUBSCRIPTION_ID));
+    }
+
+    @Test
     public void testCheckRequireImsiPrivacyProtectionWithNoCarrierConfig() {
         assertFalse(isImsiPrivacyProtectionProvided(mMockContext, TEST_SUB_ID));
     }
@@ -376,6 +358,13 @@ public class UtilsTest {
         subscriptionInfoList.add(subscriptionInfo);
         when(mSubscriptionManager.getActiveSubscriptionInfoList()).thenReturn(subscriptionInfoList);
         assertEquals(TEST_SUB_ID, getSubIdForConfig(mMockContext, config));
+    }
+
+    @Test
+    public void testGetSubIdForWifiConfigurationWithoutCarrierId() {
+        WifiConfiguration config = new WifiConfiguration();
+        assertEquals(SubscriptionManager.INVALID_SUBSCRIPTION_ID,
+                getSubIdForConfig(mMockContext, config));
     }
 
     @Test
