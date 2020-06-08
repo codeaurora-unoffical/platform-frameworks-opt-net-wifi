@@ -2957,6 +2957,16 @@ public class WifiNative {
         return mWifiVendorHal.setCountryCodeHal(ifaceName, countryCode);
     }
 
+    // ---------------------------------------------------------------------------------
+    /* Hostapd Vendor APIs */
+    public ArrayList<String> listApInterfaces() {
+        return mHostapdHal.listInterfaces();
+    }
+
+    public String hostapdCmd(String ifname, String cmd) {
+        return mHostapdHal.hostapdCmd(ifname, cmd);
+    }
+
     //---------------------------------------------------------------------------------
     /* Wifi Logger commands/events */
     public static interface WifiLoggerEventHandler {
