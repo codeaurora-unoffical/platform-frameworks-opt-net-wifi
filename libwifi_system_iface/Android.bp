@@ -44,6 +44,26 @@ cc_library {
     ],
 }
 
+// Device independent wifi bridge logic
+// ===========================================================
+cc_library_static {
+    name: "libwifi-system-bridge",
+    vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
+    cflags: wifi_system_iface_cflags,
+    local_include_dirs: ["include"],
+    export_include_dirs: ["include"],
+    shared_libs: [
+        "libbase",
+    ],
+
+    srcs: [
+        "bridge_tool.cpp",
+    ],
+}
+
 // Test utilities (e.g. mock classes) for libwifi-system-iface
 // ============================================================
 cc_library_static {

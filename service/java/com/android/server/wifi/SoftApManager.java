@@ -350,9 +350,13 @@ public class SoftApManager implements ActiveModeManager {
     }
 
     private int setCountryCode() {
-        int band = mApConfig.getSoftApConfiguration().getBand();
+        List<Integer> bands = new ArrayList<Integer>(mApConfig.getSoftApConfiguration().getBands());
+        if (bands.size() == 0) {
+            // Fall back to legacy single AP band.
+            bands.add(mApConfig.getSoftApConfiguration().getBand());
+        }
         if (TextUtils.isEmpty(mCountryCode)) {
-            if (band == SoftApConfiguration.BAND_5GHZ) {
+            if (bands.contains(SoftApConfiguration.BAND_5GHZ)) {
                 // Country code is mandatory for 5GHz band.
                 Log.e(TAG, "Invalid country code, required for setting up soft ap in 5GHz");
                 return ERROR_GENERIC;
@@ -363,7 +367,7 @@ public class SoftApManager implements ActiveModeManager {
 
         if (!mWifiNative.setCountryCodeHal(
                 mApInterfaceName, mCountryCode.toUpperCase(Locale.ROOT))) {
-            if (band == SoftApConfiguration.BAND_5GHZ) {
+            if (bands.contains(SoftApConfiguration.BAND_5GHZ)) {
                 // Return an error if failed to set country code when AP is configured for
                 // 5GHz band.
                 Log.e(TAG, "Failed to set country code, required for setting up soft ap in 5GHz");
@@ -404,6 +408,11 @@ public class SoftApManager implements ActiveModeManager {
 
         boolean acsEnabled = mCurrentSoftApCapability.areFeaturesSupported(
                 SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD);
+        // Concurrent BSSes requires ACS to be enabled.
+        if (config.getBands().size() > 1 && !acsEnabled) {
+             Log.i(TAG, "Unable to start concurrent soft AP without acs - ovewrite it");
+             acsEnabled = true;
+        }
 
         result = ApConfigUtil.updateApChannelConfig(
                 mWifiNative, mContext.getResources(), mCountryCode, localConfigBuilder, config,
@@ -588,6 +597,22 @@ public class SoftApManager implements ActiveModeManager {
             public boolean processMessage(Message message) {
                 switch (message.what) {
                     case CMD_START:
+                        SoftApConfiguration config = mApConfig.getSoftApConfiguration();
+                        int bandsize = (config != null) ? config.getBands().size() : 0;
+                        if (bandsize > 0) {
+                              try {
+                                  SystemProperties.set("persist.vendor.wifi.softap.bands", Integer.toString(bandsize));
+                              } catch (RuntimeException e) {
+                                  Log.e(TAG, "Failed to start dual AP - reason=" + e);
+                                  return false;
+                              }
+                        } else {
+                              try {
+                                  SystemProperties.set("persist.vendor.wifi.softap.bands", "0");
+                              } catch (RuntimeException e) {
+                                  // fall through
+                              }
+                        }
                         mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
                                 mWifiNativeInterfaceCallback);
                         if (TextUtils.isEmpty(mApInterfaceName)) {

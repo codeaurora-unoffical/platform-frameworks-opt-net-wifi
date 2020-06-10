@@ -1398,6 +1398,7 @@ public class XmlUtil {
          * List of XML tags corresponding to SoftApConfiguration object elements.
          */
         public static final String XML_TAG_CLIENT_MACADDRESS = "ClientMacAddress";
+        public static final String XML_TAG_BAND_LIST_BAND    = "sband";
 
         /**
          * Parses the client list from the provided XML stream to a ArrayList object.
@@ -1443,6 +1444,52 @@ public class XmlUtil {
                 XmlUtil.writeNextValue(out, XML_TAG_CLIENT_MACADDRESS, mac.toString());
             }
         }
+
+        /**
+         * Parses the band list from the provided XML stream to a ArrayList object.
+         *
+         * @param in            XmlPullParser instance pointing to the XML stream.
+         * @param outerTagDepth depth of the outer tag in the XML document.
+         * @return ArrayList object if parsing is successful, null otherwise.
+         */
+        public static List<Integer> parseBandListFromXml(XmlPullParser in,
+                int outerTagDepth) throws XmlPullParserException, IOException,
+                IllegalArgumentException {
+            List<Integer> bandList = new ArrayList<>();
+            // Loop through and parse out all the elements from the stream within this section.
+            while (!XmlUtil.isNextSectionEnd(in, outerTagDepth)) {
+                String[] valueName = new String[1];
+                Object value = XmlUtil.readCurrentValue(in, valueName);
+                if (valueName[0] == null) {
+                    throw new XmlPullParserException("Missing value name");
+                }
+                switch (valueName[0]) {
+                    case XML_TAG_BAND_LIST_BAND:
+                        int sband = (int) value;
+                        bandList.add(sband);
+                        break;
+                    default:
+                        Log.e(TAG, "Unknown value name found: " + valueName[0]);
+                        break;
+                }
+            }
+            return bandList;
+        }
+
+        /**
+         * Write the SoftApConfiguration band list data elements
+         * from the provided list to the XML stream.
+         *
+         * @param out           XmlSerializer instance pointing to the XML stream.
+         * @param clientList Client list object to be serialized.
+         */
+        public static void writeBandListToXml(XmlSerializer out, List<Integer> bandList)
+                throws XmlPullParserException, IOException {
+            for (Integer band: bandList) {
+                XmlUtil.writeNextValue(out, XML_TAG_BAND_LIST_BAND, band);
+            }
+        }
+
     }
 }
 

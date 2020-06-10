@@ -1040,5 +1040,47 @@ public class HostapdHalTest extends WifiBaseTest {
                 configurationBuilder.build(),
                 () -> mSoftApListener.onFailure()));
     }
+
+    /**
+     * Verifies the successful addition of access point with Band 2G 5G.
+     */
+    @Test
+    public void testAddAccessPointSuccess_Psk_Band2G5G() throws Exception {
+        when(mServiceManagerMock.getTransport(anyString(), anyString()))
+                .thenReturn(IServiceManager.Transport.HWBINDER);
+        mIHostapdMockV11 = mock(android.hardware.wifi.hostapd.V1_1.IHostapd.class);
+        mIHostapdMockV12 = mock(android.hardware.wifi.hostapd.V1_2.IHostapd.class);
+        // eanble ACS in the config.
+        mResources.setBoolean(R.bool.config_wifi_softap_acs_supported, true);
+        mHostapdHal = new HostapdHalSpy();
+
+        executeAndValidateInitializationSequenceV1_2(false);
+
+        ArrayList<Integer> bands = new ArrayList<>();
+        bands.add(SoftApConfiguration.BAND_2GHZ);
+        bands.add(SoftApConfiguration.BAND_5GHZ);
+
+        Builder configurationBuilder = new SoftApConfiguration.Builder();
+        configurationBuilder.setSsid(NETWORK_SSID);
+        configurationBuilder.setPassphrase(NETWORK_PSK,
+                SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+        configurationBuilder.setBands(bands);
+
+        when(mIHostapdMockV12.addAccessPoint_1_2(
+                mIfaceParamsCaptorV12.capture(), mNetworkParamsV12Captor.capture()))
+                .thenReturn(mStatusSuccess12);
+        assertTrue(mHostapdHal.addAccessPoint(IFACE_NAME,
+                configurationBuilder.build(),
+                () -> mSoftApListener.onFailure()));
+        verify(mIHostapdMockV12).addAccessPoint_1_2(any(), any());
+
+        assertEquals(IFACE_NAME, mIfaceParamsCaptorV12.getValue().V1_1.V1_0.ifaceName);
+        assertTrue(mIfaceParamsCaptorV12.getValue().V1_1.V1_0.channelParams.enableAcs);
+
+        // hack for bandMask - bit 0-7 band 1 ... bit 24-31 band 4
+        int bsize = bands.size() - 1;
+        int bmask = mIfaceParamsCaptorV12.getValue().channelParams.bandMask;
+        assertTrue(((bmask >> (bsize * 8)) & 0xff) != 0);
+    }
 }
 

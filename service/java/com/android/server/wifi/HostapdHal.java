@@ -353,7 +353,12 @@ public class HostapdHal {
         mForceApChannel = false;
     }
 
-    private boolean isSendFreqRangesNeeded(@BandType int band) {
+    private boolean isSendFreqRangesNeeded(List<Integer> bands, @BandType int band) {
+        // return false for new list of Bands
+        if (bands.size() > 0) {
+            return false;
+        }
+
         // Fist we check if one of the selected bands has restrictions in the overlay file.
         // Note,
         //   - We store the config string here for future use, hence we need to check all bands.
@@ -502,11 +507,11 @@ public class HostapdHal {
                         ifaceParams1_2.hwModeParams.enableHeTargetWakeTime =
                                 mContext.getResources().getBoolean(
                                     R.bool.config_wifiSoftapHeTwtSupported);
-                        ifaceParams1_2.channelParams.bandMask = getHalBandMask(band);
+                        ifaceParams1_2.channelParams.bandMask = getHalBandMasks(config.getBands(), band);
 
                         // Prepare freq ranges/lists if needed
                         if (ifaceParams.channelParams.enableAcs
-                                && isSendFreqRangesNeeded(band)) {
+                                && isSendFreqRangesNeeded(config.getBands(), band)) {
                             if ((band & SoftApConfiguration.BAND_2GHZ) != 0) {
                                 ifaceParams1_2.channelParams.acsChannelFreqRangesMhz.addAll(
                                         toAcsFreqRanges(SoftApConfiguration.BAND_2GHZ));
@@ -854,6 +859,23 @@ public class HostapdHal {
         }
 
         return bandMask;
+    }
+
+    private static int getHalBandMasks(List<Integer> bands, int defBand) {
+        int bandsSize = bands.size();
+
+        if (bands == null || bandsSize == 0) {
+            return getHalBandMask(defBand);
+        }
+
+        // bit  0-7  for band 1 ... bit 24-31 for band 4
+        int halBands = 0;
+        for (int i = 0; i < bandsSize; i ++) {
+             int apBand = bands.get(i);
+             halBands += (getHalBandMask(apBand) & 0xff) << (8 * i);
+        }
+
+        return halBands;
     }
 
     private static int getHalBand(int apBand) {
