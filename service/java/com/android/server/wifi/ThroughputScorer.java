@@ -70,15 +70,21 @@ final class ThroughputScorer implements WifiCandidates.CandidateScorer {
      * Calculates an individual candidate's score.
      */
     private ScoredCandidate scoreCandidate(Candidate candidate) {
-        int rssiSaturationThreshold = mScoringParams.getGoodRssi(candidate.getFrequency());
+        int rssiSaturationThreshold = mScoringParams.getSufficientRssi(candidate.getFrequency());
         int rssi = Math.min(candidate.getScanRssi(), rssiSaturationThreshold);
         int rssiBaseScore = (rssi + RSSI_SCORE_OFFSET) * RSSI_SCORE_SLOPE_IS_4;
 
         int throughputBonusScore = calculateThroughputBonusScore(candidate);
 
-        int currentNetworkBoost = candidate.isCurrentNetwork()
-                ? mScoringParams.getCurrentNetworkBonus()
-                : 0;
+        int rssiAndThroughputScore = rssiBaseScore + throughputBonusScore;
+
+        boolean unExpectedNoInternet = candidate.hasNoInternetAccess()
+                && !candidate.isNoInternetAccessExpected();
+        int currentNetworkBonusMin = mScoringParams.getCurrentNetworkBonusMin();
+        int currentNetworkBonus = Math.max(currentNetworkBonusMin, rssiAndThroughputScore
+                * mScoringParams.getCurrentNetworkBonusPercent() / 100);
+        int currentNetworkBoost = (candidate.isCurrentNetwork() && !unExpectedNoInternet)
+                ? currentNetworkBonus : 0;
 
         int securityAward = candidate.isOpenNetwork()
                 ? 0

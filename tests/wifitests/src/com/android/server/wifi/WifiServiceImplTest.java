@@ -153,6 +153,7 @@ import com.android.internal.util.AsyncChannel;
 import com.android.server.wifi.WifiServiceImpl.LocalOnlyRequestorCallback;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvisioningTestUtil;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.ApConfigUtil;
 import com.android.server.wifi.util.WifiAsyncChannel;
 import com.android.server.wifi.util.WifiPermissionsUtil;
@@ -510,6 +511,9 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testWifiMetricsDump() {
         mWifiServiceImpl.dump(new FileDescriptor(), new PrintWriter(new StringWriter()),
                 new String[]{mWifiMetrics.PROTO_DUMP_ARG});
+        verify(mWifiMetrics).setEnhancedMacRandomizationForceEnabled(anyBoolean());
+        verify(mWifiMetrics).setIsScanningAlwaysEnabled(anyBoolean());
+        verify(mWifiMetrics).setVerboseLoggingEnabled(anyBoolean());
         verify(mWifiMetrics)
                 .dump(any(FileDescriptor.class), any(PrintWriter.class), any(String[].class));
         verify(mClientModeImpl, never())
@@ -559,13 +563,16 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testSetWifiEnabledMetricsPrivilegedApp() throws Exception {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         when(mSettingsStore.handleWifiToggled(anyBoolean())).thenReturn(true);
         when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
 
         InOrder inorder = inOrder(mWifiMetrics);
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, true));
         assertTrue(mWifiServiceImpl.setWifiEnabled(TEST_PACKAGE_NAME, false));
+        inorder.verify(mWifiMetrics).logUserActionEvent(UserActionEvent.EVENT_TOGGLE_WIFI_ON);
         inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(true), eq(true));
+        inorder.verify(mWifiMetrics).logUserActionEvent(UserActionEvent.EVENT_TOGGLE_WIFI_OFF);
         inorder.verify(mWifiMetrics).incrementNumWifiToggles(eq(true), eq(false));
     }
 
@@ -1321,6 +1328,24 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
+     * Verify that startSoftAp() with valid config succeeds after a failed call
+     */
+    @Test
+    public void testStartSoftApWithValidConfigSucceedsAfterFailure() {
+        // First initiate a failed call
+        assertFalse(mWifiServiceImpl.startSoftAp(mApConfig));
+        verify(mActiveModeWarden, never()).startSoftAp(any());
+
+        // Next attempt a valid config
+        WifiConfiguration config = createValidWifiApConfiguration();
+        assertTrue(mWifiServiceImpl.startSoftAp(config));
+        verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
+        WifiConfigurationTestUtil.assertConfigurationEqualForSoftAp(
+                config,
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration());
+    }
+
+    /**
      * Verify caller with proper permission can call startTetheredHotspot.
      */
     @Test
@@ -1491,6 +1516,22 @@ public class WifiServiceImplTest extends WifiBaseTest {
         assertThat(config).isEqualTo(mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
         verify(mContext).enforceCallingOrSelfPermission(
                 eq(NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK), any());
+    }
+
+    /**
+     * Verify a valied call to startTetheredHotspot succeeds after a failed call.
+     */
+    @Test
+    public void testStartTetheredHotspotWithValidConfigSucceedsAfterFailedCall() {
+        // First issue an invalid call
+        assertFalse(mWifiServiceImpl.startTetheredHotspot(
+                new SoftApConfiguration.Builder().build()));
+        verify(mActiveModeWarden, never()).startSoftAp(any());
+
+        // Now attempt a successful call
+        assertTrue(mWifiServiceImpl.startTetheredHotspot(null));
+        verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
+        assertNull(mSoftApModeConfigCaptor.getValue().getSoftApConfiguration());
     }
 
     /**
@@ -2131,18 +2172,26 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testStartLocalOnlyHotspotAt2Ghz() {
         registerLOHSRequestFull();
-        verifyLohsBand(WifiConfiguration.AP_BAND_2GHZ);
+        verifyLohsBand(SoftApConfiguration.BAND_2GHZ);
     }
 
     /**
-     * Verify that startLocalOnlyHotspot will start access point at 5 GHz if properly configured.
+     * Verify that startLocalOnlyHotspot will start access point at 6 GHz if properly configured
+     * and if feasible, even if the 5GHz is enabled.
      */
     @Test
-    public void testStartLocalOnlyHotspotAt5Ghz() {
+    public void testStartLocalOnlyHotspotAt6Ghz() {
         when(mResources.getBoolean(
                 eq(R.bool.config_wifi_local_only_hotspot_5ghz)))
                 .thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiLocalOnlyHotspot6ghz)))
+                .thenReturn(true);
         when(mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_5_GHZ)).thenReturn(true);
+        when(mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_6_GHZ)).thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiSoftap6ghzSupported)))
+                .thenReturn(true);
         when(mPackageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)).thenReturn(true);
 
         verify(mAsyncChannel).connect(any(), mHandlerCaptor.capture(), any(Handler.class));
@@ -2152,15 +2201,44 @@ public class WifiServiceImplTest extends WifiBaseTest {
 
         mLooper.startAutoDispatch();
         registerLOHSRequestFull();
-        verifyLohsBand(WifiConfiguration.AP_BAND_5GHZ);
+        verifyLohsBand(SoftApConfiguration.BAND_6GHZ);
+    }
+
+    /**
+     * Verify that startLocalOnlyHotspot will start access point at 5 GHz if both 5GHz and 6GHz
+     * are enabled, but SoftAp is not supported for 6GHz.
+     */
+    @Test
+    public void testStartLocalOnlyHotspotAt5Ghz() {
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifi_local_only_hotspot_5ghz)))
+                .thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiLocalOnlyHotspot6ghz)))
+                .thenReturn(true);
+        when(mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_5_GHZ)).thenReturn(true);
+        when(mClientModeImpl.isWifiBandSupported(WifiScanner.WIFI_BAND_6_GHZ)).thenReturn(true);
+        when(mResources.getBoolean(
+                eq(R.bool.config_wifiSoftap6ghzSupported)))
+                .thenReturn(false);
+        when(mPackageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)).thenReturn(true);
+
+        verify(mAsyncChannel).connect(any(), mHandlerCaptor.capture(), any(Handler.class));
+        final Handler handler = mHandlerCaptor.getValue();
+        handler.handleMessage(handler.obtainMessage(
+                AsyncChannel.CMD_CHANNEL_HALF_CONNECTED, AsyncChannel.STATUS_SUCCESSFUL, 0));
+
+        mLooper.startAutoDispatch();
+        registerLOHSRequestFull();
+        verifyLohsBand(SoftApConfiguration.BAND_5GHZ);
     }
 
     private void verifyLohsBand(int expectedBand) {
         verify(mActiveModeWarden).startSoftAp(mSoftApModeConfigCaptor.capture());
-        final WifiConfiguration configuration =
-                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration().toWifiConfiguration();
+        final SoftApConfiguration configuration =
+                mSoftApModeConfigCaptor.getValue().getSoftApConfiguration();
         assertNotNull(configuration);
-        assertEquals(expectedBand, configuration.apBand);
+        assertEquals(expectedBand, configuration.getBand());
     }
 
     private static class FakeLohsCallback extends ILocalOnlyHotspotCallback.Stub {
@@ -3541,11 +3619,13 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testConnectNetworkWithPrivilegedPermission() throws Exception {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
             anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         mWifiServiceImpl.connect(mock(WifiConfiguration.class), TEST_NETWORK_ID,
                 mock(Binder.class),
                 mock(IActionListener.class), 0);
         verify(mClientModeImpl).connect(any(WifiConfiguration.class), anyInt(),
                 any(Binder.class), any(IActionListener.class), anyInt(), anyInt());
+        verify(mWifiMetrics).logUserActionEvent(eq(UserActionEvent.EVENT_MANUAL_CONNECT), anyInt());
     }
 
     /**
@@ -3570,9 +3650,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testForgetNetworkWithPrivilegedPermission() throws Exception {
         when(mContext.checkPermission(eq(android.Manifest.permission.NETWORK_SETTINGS),
             anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(true);
         mWifiServiceImpl.forget(TEST_NETWORK_ID, mock(Binder.class), mock(IActionListener.class),
                 0);
-        verify(mClientModeImpl).forget(anyInt(), any(Binder.class),
+
+        InOrder inOrder = inOrder(mClientModeImpl, mWifiMetrics);
+        inOrder.verify(mWifiMetrics).logUserActionEvent(
+                UserActionEvent.EVENT_FORGET_WIFI, TEST_NETWORK_ID);
+        inOrder.verify(mClientModeImpl).forget(anyInt(), any(Binder.class),
                 any(IActionListener.class), anyInt(), anyInt());
     }
 
@@ -4251,6 +4336,30 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
+     * Verify that add or update networks is allowed for apps holding system alert permission.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsAllowedForAppsWithSystemAlertPermission() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiConfigManager.addOrUpdateNetwork(any(),  anyInt(), any())).thenReturn(
+                new NetworkUpdateResult(0));
+
+        when(mWifiPermissionsUtil.checkSystemAlertWindowPermission(
+                Process.myUid(), TEST_PACKAGE_NAME)).thenReturn(true);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        mLooper.startAutoDispatch();
+        assertEquals(0, mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mWifiPermissionsUtil).checkSystemAlertWindowPermission(anyInt(), anyString());
+        verify(mWifiConfigManager).addOrUpdateNetwork(any(),  anyInt(), any());
+        verify(mWifiMetrics).incrementNumAddOrUpdateNetworkCalls();
+    }
+
+    /**
      * Verify that add or update networks is allowed for DeviceOwner app.
      */
     @Test
@@ -4515,7 +4624,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
         mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
         mLooper.dispatchAll();
-        verify(mWifiConfigManager).userTemporarilyDisabledNetwork(anyString());
+        verify(mWifiConfigManager).userTemporarilyDisabledNetwork(anyString(), anyInt());
     }
 
     /**
@@ -4528,7 +4637,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_DENIED);
         mWifiServiceImpl.disableEphemeralNetwork(new String(), TEST_PACKAGE_NAME);
         mLooper.dispatchAll();
-        verify(mWifiConfigManager, never()).userTemporarilyDisabledNetwork(anyString());
+        verify(mWifiConfigManager, never()).userTemporarilyDisabledNetwork(anyString(), anyInt());
     }
 
     /**
@@ -4600,7 +4709,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void setDeviceMobilityStateThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_SET_DEVICE_MOBILITY_STATE),
                         eq("WifiService"));
         try {
@@ -4628,7 +4737,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testAddStatsListenerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -4660,7 +4769,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testRemoveStatsListenerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -4701,7 +4810,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testUpdateWifiUsabilityScoreThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                 eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                 eq("WifiService"));
         try {
@@ -5045,6 +5154,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testAllowAutojoinOnSuggestionNetwork() {
         WifiConfiguration config = new WifiConfiguration();
+        config.allowAutojoin = false;
         config.fromWifiNetworkSuggestion = true;
         when(mWifiConfigManager.getConfiguredNetwork(anyInt())).thenReturn(config);
         when(mWifiNetworkSuggestionsManager.allowNetworkSuggestionAutojoin(any(), anyBoolean()))
@@ -5054,11 +5164,14 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mWifiConfigManager).getConfiguredNetwork(0);
         verify(mWifiNetworkSuggestionsManager).allowNetworkSuggestionAutojoin(any(), anyBoolean());
         verify(mWifiConfigManager).allowAutojoin(anyInt(), anyBoolean());
+        verify(mWifiMetrics).logUserActionEvent(eq(UserActionEvent.EVENT_CONFIGURE_AUTO_CONNECT_ON),
+                anyInt());
     }
 
     @Test
     public void testAllowAutojoinOnSavedNetwork() {
         WifiConfiguration config = new WifiConfiguration();
+        config.allowAutojoin = false;
         config.fromWifiNetworkSuggestion = false;
         config.fromWifiNetworkSpecifier = false;
         when(mWifiConfigManager.getConfiguredNetwork(0)).thenReturn(config);
@@ -5473,7 +5586,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testSetNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                         eq("WifiService"));
         try {
@@ -5503,7 +5616,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testClearNetworkScorerThrowsSecurityExceptionOnMissingPermissions() {
         doThrow(new SecurityException()).when(mContext)
-                .enforceCallingPermission(
+                .enforceCallingOrSelfPermission(
                         eq(android.Manifest.permission.WIFI_UPDATE_USABILITY_STATS_SCORE),
                                 eq("WifiService"));
         try {

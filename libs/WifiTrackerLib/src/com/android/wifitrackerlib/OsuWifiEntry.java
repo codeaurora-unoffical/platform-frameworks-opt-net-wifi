@@ -28,6 +28,7 @@ import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiNetworkScoreCache;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.net.wifi.hotspot2.ProvisioningCallback;
@@ -60,8 +61,7 @@ class OsuWifiEntry extends WifiEntry {
     @NonNull private final Context mContext;
     @NonNull private OsuProvider mOsuProvider;
     private String mOsuStatusString;
-
-    private int mLevel = WIFI_LEVEL_UNREACHABLE;
+    private boolean mIsAlreadyProvisioned = false;
 
     /**
      * Create n OsuWifiEntry with the associated OsuProvider
@@ -69,8 +69,9 @@ class OsuWifiEntry extends WifiEntry {
     OsuWifiEntry(@NonNull Context context, @NonNull Handler callbackHandler,
             @NonNull OsuProvider osuProvider,
             @NonNull WifiManager wifiManager,
+            @NonNull WifiNetworkScoreCache scoreCache,
             boolean forSavedNetworksPage) throws IllegalArgumentException {
-        super(callbackHandler, wifiManager, forSavedNetworksPage);
+        super(callbackHandler, wifiManager, scoreCache, forSavedNetworksPage);
 
         checkNotNull(osuProvider, "Cannot construct with null osuProvider!");
 
@@ -92,13 +93,14 @@ class OsuWifiEntry extends WifiEntry {
     @Override
     public String getSummary(boolean concise) {
         // TODO(b/70983952): Add verbose summary
-        return mOsuStatusString != null
-                ? mOsuStatusString : mContext.getString(R.string.tap_to_sign_up);
-    }
-
-    @Override
-    public int getLevel() {
-        return mLevel;
+        if (mOsuStatusString != null) {
+            return mOsuStatusString;
+        } else if (isAlreadyProvisioned()) {
+            return concise ? mContext.getString(R.string.wifi_passpoint_expired)
+                    : mContext.getString(R.string.tap_to_renew_subscription_and_connect);
+        } else {
+            return mContext.getString(R.string.tap_to_sign_up);
+        }
     }
 
     @Override
@@ -126,6 +128,11 @@ class OsuWifiEntry extends WifiEntry {
 
     @Override
     public boolean isSaved() {
+        return false;
+    }
+
+    @Override
+    public boolean isSuggestion() {
         return false;
     }
 
@@ -275,12 +282,15 @@ class OsuWifiEntry extends WifiEntry {
         }
 
         final ScanResult bestScanResult = getBestScanResultByLevel(scanResults);
-        if (bestScanResult == null) {
-            mLevel = WIFI_LEVEL_UNREACHABLE;
-        } else {
-            mLevel = mWifiManager.calculateSignalLevel(bestScanResult.level);
+        if (bestScanResult != null) {
+            updateTransitionModeCapa(bestScanResult);
         }
-
+        if (getConnectedState() == CONNECTED_STATE_DISCONNECTED) {
+            mLevel = bestScanResult != null
+                    ? mWifiManager.calculateSignalLevel(bestScanResult.level)
+                    : WIFI_LEVEL_UNREACHABLE;
+        }
+        updateWifiGenerationInfo(mCurrentScanResults);
         notifyOnUpdated();
     }
 
@@ -307,6 +317,14 @@ class OsuWifiEntry extends WifiEntry {
 
     OsuProvider getOsuProvider() {
         return mOsuProvider;
+    }
+
+    boolean isAlreadyProvisioned() {
+        return mIsAlreadyProvisioned;
+    }
+
+    void setAlreadyProvisioned(boolean isAlreadyProvisioned) {
+        mIsAlreadyProvisioned = isAlreadyProvisioned;
     }
 
     class OsuWifiEntryProvisioningCallback extends ProvisioningCallback {

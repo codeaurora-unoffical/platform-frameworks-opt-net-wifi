@@ -747,6 +747,9 @@ public class WifiVendorHal {
     /**
      * Makes the Hal flavor of WifiScanner's band indication
      *
+     * Note: This method is only used by background scan which does not
+     *       support 6GHz, hence band combinations including 6GHz are considered invalid
+     *
      * @param frameworkBand one of WifiScanner.WIFI_BAND_*
      * @return A WifiBand value
      * @throws IllegalArgumentException if frameworkBand is not recognized
@@ -1296,33 +1299,6 @@ public class WifiVendorHal {
         }
 
         return featureSet;
-    }
-
-    /**
-     * Set the MAC OUI during scanning.
-     * <p>
-     * An OUI {Organizationally Unique Identifier} is a 24-bit number that
-     * uniquely identifies a vendor or manufacturer.
-     *
-     * @param ifaceName Name of the interface.
-     * @param oui
-     * @return true for success
-     */
-    public boolean setScanningMacOui(@NonNull String ifaceName, byte[] oui) {
-        if (oui == null) return boolResult(false);
-        if (oui.length != 3) return boolResult(false);
-        synchronized (sLock) {
-            try {
-                IWifiStaIface iface = getStaIface(ifaceName);
-                if (iface == null) return boolResult(false);
-                WifiStatus status = iface.setScanningMacOui(oui);
-                if (!ok(status)) return false;
-                return true;
-            } catch (RemoteException e) {
-                handleRemoteException(e);
-                return false;
-            }
-        }
     }
 
     /**

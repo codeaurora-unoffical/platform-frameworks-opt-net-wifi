@@ -20,11 +20,14 @@ import static com.android.server.wifi.util.InformationElementUtil.BssLoad.MAX_CH
 import static com.android.server.wifi.util.InformationElementUtil.BssLoad.MIN_CHANNEL_UTILIZATION;
 
 import android.annotation.NonNull;
+import android.content.Context;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiAnnotations.WifiStandard;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.nl80211.DeviceWiphyCapabilities;
 import android.util.Log;
+
+import com.android.wifi.resources.R;
 
 /**
  * A class that predicts network throughput based on RSSI, channel utilization, channel width,
@@ -39,7 +42,7 @@ public class ThroughputPredictor {
     public static final int CHANNEL_UTILIZATION_DEFAULT_2G = MAX_CHANNEL_UTILIZATION * 6 / 16;
     // Default value of channel utilization at 5G when channel utilization is not available from
     // BssLoad IE or from link layer stats
-    public static final int CHANNEL_UTILIZATION_DEFAULT_5G = MAX_CHANNEL_UTILIZATION / 16;
+    public static final int CHANNEL_UTILIZATION_DEFAULT_ABOVE_2G = MAX_CHANNEL_UTILIZATION / 16;
     // Channel utilization boost when bluetooth is in the connected mode
     public static final int CHANNEL_UTILIZATION_BOOST_BT_CONNECTED_2G = MAX_CHANNEL_UTILIZATION / 4;
     //TODO: b/145133625 Need to consider 6GHz
@@ -96,6 +99,12 @@ public class ThroughputPredictor {
     private static final int MAX_NUM_SPATIAL_STREAM_11AC = 8;
     private static final int MAX_NUM_SPATIAL_STREAM_11N = 4;
     private static final int MAX_NUM_SPATIAL_STREAM_LEGACY = 1;
+
+    private final Context mContext;
+
+    ThroughputPredictor(Context context) {
+        mContext = context;
+    }
 
     /**
      * Enable/Disable verbose logging.
@@ -176,6 +185,12 @@ public class ThroughputPredictor {
 
         int maxNumSpatialStreamDevice = Math.min(deviceCapabilities.getMaxNumberTxSpatialStreams(),
                 deviceCapabilities.getMaxNumberRxSpatialStreams());
+
+        if (mContext.getResources().getBoolean(
+                R.bool.config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideEnable)) {
+            maxNumSpatialStreamDevice = mContext.getResources().getInteger(
+                    R.integer.config_wifiFrameworkMaxNumSpatialStreamDeviceOverrideValue);
+        }
 
         int maxNumSpatialStream = Math.min(maxNumSpatialStreamDevice, maxNumSpatialStreamAp);
 
@@ -366,14 +381,14 @@ public class ThroughputPredictor {
     private int getValidChannelUtilization(int frequency, int channelUtilizationBssLoad,
             int channelUtilizationLinkLayerStats, boolean isBluetoothConnected) {
         int channelUtilization;
-        boolean is2G = (frequency < ScoringParams.MINIMUM_5GHZ_BAND_FREQUENCY_IN_MEGAHERTZ);
+        boolean is2G = ScanResult.is24GHz(frequency);
         if (isValidUtilizationRatio(channelUtilizationBssLoad)) {
             channelUtilization = channelUtilizationBssLoad;
         } else if (isValidUtilizationRatio(channelUtilizationLinkLayerStats)) {
             channelUtilization = channelUtilizationLinkLayerStats;
         } else {
             channelUtilization = is2G ? CHANNEL_UTILIZATION_DEFAULT_2G :
-                    CHANNEL_UTILIZATION_DEFAULT_5G;
+                    CHANNEL_UTILIZATION_DEFAULT_ABOVE_2G;
         }
 
         if (is2G && isBluetoothConnected) {

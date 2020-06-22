@@ -20,6 +20,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.Context;
 import android.content.res.Resources;
+import android.net.wifi.ScanResult;
 import android.net.wifi.SoftApCapability;
 import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApConfiguration.BandType;
@@ -89,6 +90,24 @@ public class ApConfigUtil {
     }
 
     /**
+     * Convert band from SoftApConfiguration.BandType to WifiScanner.WifiBand
+     * @param band in SoftApConfiguration.BandType
+     * @return band in WifiScanner.WifiBand
+     */
+    public static @WifiScanner.WifiBand int apConfig2wifiScannerBand(@BandType int band) {
+        switch(band) {
+            case SoftApConfiguration.BAND_2GHZ:
+                return WifiScanner.WIFI_BAND_24_GHZ;
+            case SoftApConfiguration.BAND_5GHZ:
+                return WifiScanner.WIFI_BAND_5_GHZ;
+            case SoftApConfiguration.BAND_6GHZ:
+                return WifiScanner.WIFI_BAND_6_GHZ;
+            default:
+                return WifiScanner.WIFI_BAND_UNSPECIFIED;
+        }
+    }
+
+    /**
      * Convert channel/band to frequency.
      * Note: the utility does not perform any regulatory domain compliance.
      * @param channel number to convert
@@ -96,52 +115,8 @@ public class ApConfigUtil {
      * @return center frequency in Mhz of the channel, -1 if no match
      */
     public static int convertChannelToFrequency(int channel, @BandType int band) {
-        if (band == SoftApConfiguration.BAND_2GHZ) {
-            if (channel == 14) {
-                return 2484;
-            } else if (channel >= 1 && channel <= 14) {
-                return ((channel - 1) * 5) + 2412;
-            } else {
-                return -1;
-            }
-        }
-        if (band == SoftApConfiguration.BAND_5GHZ) {
-            if (channel >= 34 && channel <= 173) {
-                return ((channel - 34) * 5) + 5170;
-            } else {
-                return -1;
-            }
-        }
-        if (band == SoftApConfiguration.BAND_6GHZ) {
-            if (channel >= 1 && channel <= 254) {
-                return (channel * 5) + 5940;
-            } else {
-                return -1;
-            }
-        }
-
-        return -1;
-    }
-
-    /**
-     * Convert frequency to channel.
-     * Note: the utility does not perform any regulatory domain compliance.
-     * @param frequency frequency to convert
-     * @return channel number associated with given frequency, -1 if no match
-     */
-    public static int convertFrequencyToChannel(int frequency) {
-        if (frequency >= 2412 && frequency <= 2472) {
-            return (frequency - 2412) / 5 + 1;
-        } else if (frequency == 2484) {
-            return 14;
-        } else if (frequency >= 5170  &&  frequency <= 5865) {
-            /* DFS is included. */
-            return (frequency - 5170) / 5 + 34;
-        } else if (frequency > 5940  && frequency < 7210) {
-            return ((frequency - 5940) / 5);
-        }
-
-        return -1;
+        return ScanResult.convertChannelToFrequencyMhz(channel,
+                apConfig2wifiScannerBand(band));
     }
 
     /**
@@ -151,11 +126,11 @@ public class ApConfigUtil {
      * @return band, -1 if no match
      */
     public static int convertFrequencyToBand(int frequency) {
-        if (frequency >= 2412 && frequency <= 2484) {
+        if (ScanResult.is24GHz(frequency)) {
             return SoftApConfiguration.BAND_2GHZ;
-        } else if (frequency >= 5170  &&  frequency <= 5865) {
+        } else if (ScanResult.is5GHz(frequency)) {
             return SoftApConfiguration.BAND_5GHZ;
-        } else if (frequency > 5940  && frequency < 7210) {
+        } else if (ScanResult.is6GHz(frequency)) {
             return SoftApConfiguration.BAND_6GHZ;
         }
 
@@ -176,6 +151,8 @@ public class ApConfigUtil {
                 return SoftApConfiguration.BAND_5GHZ;
             case WifiConfiguration.AP_BAND_ANY:
                 return SoftApConfiguration.BAND_2GHZ | SoftApConfiguration.BAND_5GHZ;
+            case WifiConfiguration.AP_BAND_DUAL:
+                return SoftApConfiguration.BAND_DUAL;
             default:
                 return SoftApConfiguration.BAND_2GHZ;
         }
@@ -185,7 +162,8 @@ public class ApConfigUtil {
      * Checks if band is a valid combination of {link  SoftApConfiguration#BandType} values
      */
     public static boolean isBandValid(@BandType int band) {
-        return ((band != 0) && ((band & ~SoftApConfiguration.BAND_ANY) == 0));
+        return ((band != 0) && (((band & ~SoftApConfiguration.BAND_ANY) == 0)
+                                || (band == SoftApConfiguration.BAND_DUAL)));
     }
 
     /**
@@ -400,7 +378,7 @@ public class ApConfigUtil {
                 return ERROR_NO_CHANNEL;
             }
             configBuilder.setChannel(
-                    convertFrequencyToChannel(freq), convertFrequencyToBand(freq));
+                    ScanResult.convertFrequencyMhzToChannel(freq), convertFrequencyToBand(freq));
         }
 
         return SUCCESS;
@@ -435,6 +413,9 @@ public class ApConfigUtil {
                     break;
                 case WifiConfiguration.AP_BAND_5GHZ:
                     band = SoftApConfiguration.BAND_5GHZ;
+                    break;
+                case WifiConfiguration.AP_BAND_DUAL:
+                    band = SoftApConfiguration.BAND_DUAL;
                     break;
                 default:
                     // WifiConfiguration.AP_BAND_ANY means only 2GHz and 5GHz bands
@@ -479,6 +460,11 @@ public class ApConfigUtil {
             Log.d(TAG, "Update Softap capability, add SAE feature support");
             features |= SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
         }
+
+        if (isWpa3OweSupported(context)) {
+            Log.d(TAG, "Update Softap capability, add OWE feature support");
+            features |= SoftApCapability.SOFTAP_FEATURE_WPA3_OWE;
+        }
         SoftApCapability capability = new SoftApCapability(features);
         int hardwareSupportedMaxClient = context.getResources().getInteger(
                 R.integer.config_wifiHardwareSoftapMaxClientCount);
@@ -510,6 +496,17 @@ public class ApConfigUtil {
     public static boolean isWpa3SaeSupported(@NonNull Context context) {
         return context.getResources().getBoolean(
                 R.bool.config_wifi_softap_sae_supported);
+    }
+
+    /**
+     * Helper function to get OWE support or not.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean isWpa3OweSupported(@NonNull Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_vendor_wifi_softap_owe_supported);
     }
 
     /**

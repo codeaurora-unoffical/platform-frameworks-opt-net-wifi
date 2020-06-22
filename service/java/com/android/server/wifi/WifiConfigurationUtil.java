@@ -153,14 +153,6 @@ public class WifiConfigurationUtil {
                 || isConfigForEapSuiteBNetwork(config)));
     }
 
-    public static boolean isConfigForSha256Network(WifiConfiguration config) {
-        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA256);
-    }
-
-    public static boolean isConfigForSha384Network(WifiConfiguration config) {
-        return config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.FILS_SHA384);
-    }
-
     /**
      * Compare existing and new WifiConfiguration objects after a network update and return if
      * IP parameters have changed or not.
@@ -625,6 +617,12 @@ public class WifiConfigurationUtil {
                 Log.e(TAG, "PMF must be enabled for Suite-B 192-bit networks");
                 return false;
             }
+        }
+        // b/153435438: Added to deal with badly formed WifiConfiguration from apps.
+        if (config.preSharedKey != null && !config.needsPreSharedKey()) {
+            Log.e(TAG, "preSharedKey set with an invalid KeyMgmt, resetting KeyMgmt to WPA_PSK");
+            config.allowedKeyManagement.clear();
+            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
         }
         if (!validateIpConfiguration(config.getIpConfiguration())) {
             return false;

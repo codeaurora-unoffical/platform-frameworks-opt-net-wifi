@@ -53,10 +53,14 @@ public class DeviceConfigFacade {
     public static final int DEFAULT_DATA_STALL_TX_PER_THR = 90;
     // Default threshold of CCA level above which to trigger a data stall
     public static final int DEFAULT_DATA_STALL_CCA_LEVEL_THR = CHANNEL_UTILIZATION_SCALE;
-    // Default low threshold of L2 sufficient throughput in Kbps
-    public static final int DEFAULT_TPUT_SUFFICIENT_THR_LOW_KBPS = 1000;
-    // Default high threshold of L2 sufficient throughput in Kbps
-    public static final int DEFAULT_TPUT_SUFFICIENT_THR_HIGH_KBPS = 4000;
+    // Default low threshold of L2 sufficient Tx throughput in Kbps
+    public static final int DEFAULT_TX_TPUT_SUFFICIENT_THR_LOW_KBPS = 1000;
+    // Default high threshold of L2 sufficient Tx throughput in Kbps
+    public static final int DEFAULT_TX_TPUT_SUFFICIENT_THR_HIGH_KBPS = 4000;
+    // Default low threshold of L2 sufficient Rx throughput in Kbps
+    public static final int DEFAULT_RX_TPUT_SUFFICIENT_THR_LOW_KBPS = 1000;
+    // Default high threshold of L2 sufficient Rx throughput in Kbps
+    public static final int DEFAULT_RX_TPUT_SUFFICIENT_THR_HIGH_KBPS = 4000;
     // Numerator part of default threshold of L2 throughput over L3 throughput ratio
     public static final int DEFAULT_TPUT_SUFFICIENT_RATIO_THR_NUM = 2;
     // Denominator part of default threshold of L2 throughput over L3 throughput ratio
@@ -95,6 +99,14 @@ public class DeviceConfigFacade {
     // Default report-high threshold to take-bug-report threshold ratio.
     // It should be larger than 1 since the bar to take bugreport should be higher.
     static final int DEFAULT_BUG_REPORT_THRESHOLD_EXTRA_RATIO = 2;
+    // Default overlapping connection duration threshold in ms to trigger bug report
+    static final int DEFAULT_OVERLAPPING_CONNECTION_DURATION_THRESHOLD_MS = 75_000;
+    // At low traffic, Tx link speed values below the following threshold
+    // are ignored because it could be due to low rate management frames
+    static final int DEFAULT_TX_LINK_SPEED_LOW_THRESHOLD_MBPS = 9;
+    // At low traffic, Rx link speed values below the following threshold
+    // are ignored because it could be due to low rate management frames
+    static final int DEFAULT_RX_LINK_SPEED_LOW_THRESHOLD_MBPS = 9;
 
     // Cached values of fields updated via updateDeviceConfigFlags()
     private boolean mIsAbnormalConnectionBugreportEnabled;
@@ -104,8 +116,10 @@ public class DeviceConfigFacade {
     private int mDataStallRxTputThrKbps;
     private int mDataStallTxPerThr;
     private int mDataStallCcaLevelThr;
-    private int mTputSufficientLowThrKbps;
-    private int mTputSufficientHighThrKbps;
+    private int mTxTputSufficientLowThrKbps;
+    private int mTxTputSufficientHighThrKbps;
+    private int mRxTputSufficientLowThrKbps;
+    private int mRxTputSufficientHighThrKbps;
     private int mTputSufficientRatioThrNum;
     private int mTputSufficientRatioThrDen;
     private int mTxPktPerSecondThr;
@@ -132,6 +146,10 @@ public class DeviceConfigFacade {
     private int mHealthMonitorMinNumConnectionAttempt;
     private int mBugReportMinWindowMs;
     private int mBugReportThresholdExtraRatio;
+    private boolean mIsOverlappingConnectionBugreportEnabled;
+    private int mOverlappingConnectionDurationThresholdMs;
+    private int mTxLinkSpeedLowThresholdMbps;
+    private int mRxLinkSpeedLowThresholdMbps;
 
     public DeviceConfigFacade(Context context, Handler handler, WifiMetrics wifiMetrics) {
         mContext = context;
@@ -169,10 +187,14 @@ public class DeviceConfigFacade {
         mWifiMetrics.setDataStallTxPerThr(mDataStallTxPerThr);
         mWifiMetrics.setDataStallCcaLevelThr(mDataStallCcaLevelThr);
 
-        mTputSufficientLowThrKbps = DeviceConfig.getInt(NAMESPACE,
-                "tput_sufficient_low_thr_kbps", DEFAULT_TPUT_SUFFICIENT_THR_LOW_KBPS);
-        mTputSufficientHighThrKbps = DeviceConfig.getInt(NAMESPACE,
-                "tput_sufficient_high_thr_kbps", DEFAULT_TPUT_SUFFICIENT_THR_HIGH_KBPS);
+        mTxTputSufficientLowThrKbps = DeviceConfig.getInt(NAMESPACE,
+                "tput_sufficient_low_thr_kbps", DEFAULT_TX_TPUT_SUFFICIENT_THR_LOW_KBPS);
+        mTxTputSufficientHighThrKbps = DeviceConfig.getInt(NAMESPACE,
+                "tput_sufficient_high_thr_kbps", DEFAULT_TX_TPUT_SUFFICIENT_THR_HIGH_KBPS);
+        mRxTputSufficientLowThrKbps = DeviceConfig.getInt(NAMESPACE,
+                "rx_tput_sufficient_low_thr_kbps", DEFAULT_RX_TPUT_SUFFICIENT_THR_LOW_KBPS);
+        mRxTputSufficientHighThrKbps = DeviceConfig.getInt(NAMESPACE,
+                "rx_tput_sufficient_high_thr_kbps", DEFAULT_RX_TPUT_SUFFICIENT_THR_HIGH_KBPS);
         mTputSufficientRatioThrNum = DeviceConfig.getInt(NAMESPACE,
                 "tput_sufficient_ratio_thr_num", DEFAULT_TPUT_SUFFICIENT_RATIO_THR_NUM);
         mTputSufficientRatioThrDen = DeviceConfig.getInt(NAMESPACE,
@@ -245,6 +267,17 @@ public class DeviceConfigFacade {
         mBugReportThresholdExtraRatio = DeviceConfig.getInt(NAMESPACE,
                 "report_bug_report_threshold_extra_ratio",
                 DEFAULT_BUG_REPORT_THRESHOLD_EXTRA_RATIO);
+        mIsOverlappingConnectionBugreportEnabled = DeviceConfig.getBoolean(NAMESPACE,
+                "overlapping_connection_bugreport_enabled", false);
+        mOverlappingConnectionDurationThresholdMs = DeviceConfig.getInt(NAMESPACE,
+                "overlapping_connection_duration_threshold_ms",
+                DEFAULT_OVERLAPPING_CONNECTION_DURATION_THRESHOLD_MS);
+        mTxLinkSpeedLowThresholdMbps = DeviceConfig.getInt(NAMESPACE,
+                "tx_link_speed_low_threshold_mbps",
+                DEFAULT_TX_LINK_SPEED_LOW_THRESHOLD_MBPS);
+        mRxLinkSpeedLowThresholdMbps = DeviceConfig.getInt(NAMESPACE,
+                "rx_link_speed_low_threshold_mbps",
+                DEFAULT_RX_LINK_SPEED_LOW_THRESHOLD_MBPS);
     }
 
     private Set<String> getUnmodifiableSetQuoted(String key) {
@@ -312,15 +345,29 @@ public class DeviceConfigFacade {
     /**
      * Gets the low threshold of L2 throughput below which L2 throughput is always insufficient
      */
-    public int getTputSufficientLowThrKbps() {
-        return mTputSufficientLowThrKbps;
+    public int getTxTputSufficientLowThrKbps() {
+        return mTxTputSufficientLowThrKbps;
     }
 
     /**
      * Gets the high threshold of L2 throughput above which L2 throughput is always sufficient
      */
-    public int getTputSufficientHighThrKbps() {
-        return mTputSufficientHighThrKbps;
+    public int getTxTputSufficientHighThrKbps() {
+        return mTxTputSufficientHighThrKbps;
+    }
+
+    /**
+     * Gets the low threshold of L2 throughput below which L2 Rx throughput is always insufficient
+     */
+    public int getRxTputSufficientLowThrKbps() {
+        return mRxTputSufficientLowThrKbps;
+    }
+
+    /**
+     * Gets the high threshold of L2 throughput above which L2 Rx throughput is always sufficient
+     */
+    public int getRxTputSufficientHighThrKbps() {
+        return mRxTputSufficientHighThrKbps;
     }
 
     /**
@@ -507,5 +554,33 @@ public class DeviceConfigFacade {
      */
     public int getBugReportThresholdExtraRatio() {
         return mBugReportThresholdExtraRatio;
+    }
+
+    /**
+     * Gets the feature flag for reporting overlapping connection.
+     */
+    public boolean isOverlappingConnectionBugreportEnabled() {
+        return mIsOverlappingConnectionBugreportEnabled;
+    }
+
+    /**
+     * Gets overlapping connection duration threshold in ms
+     */
+    public int getOverlappingConnectionDurationThresholdMs() {
+        return mOverlappingConnectionDurationThresholdMs;
+    }
+
+    /**
+     * Gets the threshold of link speed below which Tx link speed is ignored at low traffic
+     */
+    public int getTxLinkSpeedLowThresholdMbps() {
+        return mTxLinkSpeedLowThresholdMbps;
+    }
+
+    /**
+     * Gets the threshold of link speed below which Rx link speed is ignored at low traffic
+     */
+    public int getRxLinkSpeedLowThresholdMbps() {
+        return mRxLinkSpeedLowThresholdMbps;
     }
 }

@@ -20,6 +20,7 @@ import android.net.wifi.ScanResult.InformationElement;
 import android.net.wifi.WifiAnnotations.Cipher;
 import android.net.wifi.WifiAnnotations.KeyMgmt;
 import android.net.wifi.WifiAnnotations.Protocol;
+import android.net.wifi.WifiScanner;
 import android.net.wifi.nl80211.NativeScanResult;
 import android.net.wifi.nl80211.WifiNl80211Manager;
 import android.util.Log;
@@ -279,8 +280,8 @@ public class InformationElementUtil {
             if (mCenterFreqIndex1 == 0 || mChannelMode == 0) {
                 return 0;
             } else {
-                //convert channel index to frequency in MHz, channel 36 is 5180MHz
-                return (mCenterFreqIndex1 - 36) * 5 + 5180;
+                return ScanResult.convertChannelToFrequencyMhz(mCenterFreqIndex1,
+                        WifiScanner.WIFI_BAND_5_GHZ);
             }
         }
 
@@ -294,8 +295,8 @@ public class InformationElementUtil {
             if (mCenterFreqIndex2 == 0 || mChannelMode == 0) {
                 return 0;
             } else {
-                //convert channel index to frequency in MHz, channel 36 is 5180MHz
-                return (mCenterFreqIndex2 - 36) * 5 + 5180;
+                return ScanResult.convertChannelToFrequencyMhz(mCenterFreqIndex2,
+                        WifiScanner.WIFI_BAND_5_GHZ);
             }
         }
 
@@ -392,7 +393,8 @@ public class InformationElementUtil {
          * Only applicable for 6GHz channels
          */
         public int getPrimaryFreq() {
-            return (mPrimaryChannel * 5) + 5940;
+            return ScanResult.convertChannelToFrequencyMhz(mPrimaryChannel,
+                        WifiScanner.WIFI_BAND_6_GHZ);
         }
 
         /**
@@ -404,7 +406,8 @@ public class InformationElementUtil {
                 if (mCenterFreqSeg0 == 0) {
                     return 0;
                 } else {
-                    return (mCenterFreqSeg0 * 5) + 5940;
+                    return ScanResult.convertChannelToFrequencyMhz(mCenterFreqSeg0,
+                            WifiScanner.WIFI_BAND_6_GHZ);
                 }
             } else {
                 return 0;
@@ -420,7 +423,8 @@ public class InformationElementUtil {
                 if (mCenterFreqSeg1 == 0) {
                     return 0;
                 } else {
-                    return (mCenterFreqSeg1 * 5) + 5940;
+                    return ScanResult.convertChannelToFrequencyMhz(mCenterFreqSeg1,
+                            WifiScanner.WIFI_BAND_6_GHZ);
                 }
             } else {
                 return 0;
@@ -894,6 +898,7 @@ public class InformationElementUtil {
      * by wpa_supplicant.
      */
     public static class Capabilities {
+        private static final int CAP_VHT_8SS_OFFSET = 224; //(0xEO)
         private static final int WPA_VENDOR_OUI_TYPE_ONE = 0x01f25000;
         private static final int WPS_VENDOR_OUI_TYPE = 0x04f25000;
         private static final short WPA_VENDOR_OUI_VERSION = 0x0001;
@@ -936,12 +941,8 @@ public class InformationElementUtil {
         public boolean isIBSS;
         public boolean isPrivacy;
         public boolean isWPS;
-        public boolean isHt;
-        public boolean isVht;
         public boolean isHe;
-        public boolean reportHt;
-        public boolean reportVht;
-        public boolean reportHe;
+        public boolean isVht8ss;
 
         public Capabilities() {
         }
@@ -1251,15 +1252,12 @@ public class InformationElementUtil {
                     }
                 }
 
-                if (ie.id == InformationElement.EID_HT_CAPABILITIES) {
-                    isHt = true;
-                } else if (ie.id == InformationElement.EID_VHT_CAPABILITIES) {
-                    isVht = true;
-                } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT &&
-                      ie.bytes != null && ie.bytes.length > 0 &&
-                      ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES)) {
+                if (ie.id == InformationElement.EID_VHT_CAPABILITIES && ie.bytes != null &&
+                    ie.bytes.length > 0 && ((ie.bytes[1] & CAP_VHT_8SS_OFFSET) == CAP_VHT_8SS_OFFSET)) {
+                    isVht8ss = true;
+                } else if (ie.id == InformationElement.EID_EXTENSION_PRESENT && ie.bytes != null &&
+                           ie.bytes.length > 0 &&  ((ie.bytes[0] & 0xFF) == InformationElement.EID_EXT_HE_CAPABILITIES))
                     isHe = true;
-                }
             }
         }
 
@@ -1381,14 +1379,8 @@ public class InformationElementUtil {
             if (isWPS) {
                 capabilities.append("[WPS]");
             }
-            if (reportHt && isHt) {
-                capabilities.append("[WFA-HT]");
-            }
-            if (reportVht && isVht) {
-                capabilities.append("[WFA-VHT]");
-            }
-            if (reportHe && isHe) {
-                capabilities.append("[WFA-HE]");
+            if (isVht8ss && isHe) {
+                capabilities.append("[WFA-HE-READY]");
             }
 
             return capabilities.toString();
@@ -1526,13 +1518,15 @@ public class InformationElementUtil {
                 boolean foundVht, boolean foundHt, boolean foundErp) {
             if (foundHe) {
                 return MODE_11AX;
-            } else if (foundVht) {
+            } else if (!ScanResult.is24GHz(frequency) && foundVht) {
+                // Do not include subset of VHT on 2.4 GHz vendor extension
+                // in consideration for reporting VHT.
                 return MODE_11AC;
             } else if (foundHt) {
                 return MODE_11N;
             } else if (foundErp) {
                 return MODE_11G;
-            } else if (frequency < 3000) {
+            } else if (ScanResult.is24GHz(frequency)) {
                 if (maxRate < 24000000) {
                     return MODE_11B;
                 } else {

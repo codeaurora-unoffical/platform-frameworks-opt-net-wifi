@@ -209,13 +209,6 @@ public class SupplicantStaNetworkHal {
                     config.wepKeys[i] = NativeUtil.bytesToHexOrQuotedString(mWepKey);
                 }
             }
-            /** PSK pass phrase */
-            config.preSharedKey = null;
-            if (getPskPassphrase() && !TextUtils.isEmpty(mPskPassphrase)) {
-                config.preSharedKey = NativeUtil.addEnclosingQuotes(mPskPassphrase);
-            } else if (getPsk() && !ArrayUtils.isEmpty(mPsk)) {
-                config.preSharedKey = NativeUtil.hexStringFromByteArray(mPsk);
-            } /* Do not read SAE password */
 
             /** allowedKeyManagement */
             if (getKeyMgmt()) {
@@ -248,6 +241,18 @@ public class SupplicantStaNetworkHal {
                 config.allowedGroupManagementCiphers =
                         supplicantToWifiConfigurationGroupMgmtCipherMask(mGroupMgmtCipherMask);
             }
+
+            /** PSK pass phrase */
+            config.preSharedKey = null;
+            if (getPskPassphrase() && !TextUtils.isEmpty(mPskPassphrase)) {
+                if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_PSK)) {
+                    config.preSharedKey = mPskPassphrase;
+                } else {
+                    config.preSharedKey = NativeUtil.addEnclosingQuotes(mPskPassphrase);
+                }
+            } else if (getPsk() && !ArrayUtils.isEmpty(mPsk)) {
+                config.preSharedKey = NativeUtil.hexStringFromByteArray(mPsk);
+            } /* Do not read SAE password */
 
             /** metadata: idstr */
             if (getIdStr() && !TextUtils.isEmpty(mIdStr)) {
@@ -301,57 +306,6 @@ public class SupplicantStaNetworkHal {
                     return false;
                 }
             }
-            /** Pre Shared Key */
-            // For PSK, this can either be quoted ASCII passphrase or hex string for raw psk.
-            // For SAE, password must be a quoted ASCII string
-            if (config.preSharedKey != null) {
-                if (config.preSharedKey.startsWith("\"")) {
-                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
-                        /* WPA3 case, field is SAE Password */
-                        if (!setSaePassword(
-                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
-                            Log.e(TAG, "failed to set sae password");
-                            return false;
-                        }
-                    } else {
-                        if (!setPskPassphrase(
-                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
-                            Log.e(TAG, "failed to set psk passphrase");
-                            return false;
-                        }
-                    }
-                } else {
-                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
-                        return false;
-                    }
-                    if (!setPsk(NativeUtil.hexStringToByteArray(config.preSharedKey))) {
-                        Log.e(TAG, "failed to set psk");
-                        return false;
-                    }
-                }
-            }
-
-            /** Wep Keys */
-            boolean hasSetKey = false;
-            if (config.wepKeys != null) {
-                for (int i = 0; i < config.wepKeys.length; i++) {
-                    if (config.wepKeys[i] != null) {
-                        if (!setWepKey(
-                                i, NativeUtil.hexOrQuotedStringToBytes(config.wepKeys[i]))) {
-                            Log.e(TAG, "failed to set wep_key " + i);
-                            return false;
-                        }
-                        hasSetKey = true;
-                    }
-                }
-            }
-            /** Wep Tx Key Idx */
-            if (hasSetKey) {
-                if (!setWepTxKeyIdx(config.wepTxKeyIndex)) {
-                    Log.e(TAG, "failed to set wep_tx_keyidx: " + config.wepTxKeyIndex);
-                    return false;
-                }
-            }
             /** HiddenSSID */
             if (!setScanSsid(config.hiddenSSID)) {
                 Log.e(TAG, config.SSID + ": failed to set hiddenSSID: " + config.hiddenSSID);
@@ -373,15 +327,10 @@ public class SupplicantStaNetworkHal {
                     Log.e(TAG, "failed to set Key Management");
                     return false;
                 }
-                if (!setVendorKeyMgmt(wifiConfigurationToSupplicantVendorKeyMgmtMask(keyMgmtMask))) {
+                if (!setVendorKeyMgmt(wifiConfigurationToSupplicantVendorKeyMgmtMask(keyMgmtMask)))
                     Log.e(TAG, "failed to set Vendor Key Management");
-                } else {
-                    if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA256) ||
-                        keyMgmtMask.get(WifiConfiguration.KeyMgmt.FILS_SHA384)) {
-                        config.enterpriseConfig.setFieldValue(WifiEnterpriseConfig.EAP_ERP, "1");
-                    }
-                }
-                // Check and set DPP configurations.
+
+		// Check and set DPP configurations.
                 if (keyMgmtMask.get(WifiConfiguration.KeyMgmt.DPP) && !saveDppConfig(config)) {
                     Log.e(TAG, "Failed to set DPP configurations.");
                         return false;
@@ -426,6 +375,61 @@ public class SupplicantStaNetworkHal {
                     config.allowedPairwiseCiphers))) {
                 Log.e(TAG, "failed to set PairwiseCipher");
                 return false;
+            }
+            /** Pre Shared Key */
+            // For PSK, this can either be quoted ASCII passphrase or hex string for raw psk.
+            // For SAE, password must be a quoted ASCII string
+            if (config.preSharedKey != null) {
+                if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WAPI_PSK)) {
+                    if (!setPskPassphrase(config.preSharedKey)) {
+                        Log.e(TAG, "failed to set wapi psk passphrase");
+                        return false;
+                    }
+                } else if (config.preSharedKey.startsWith("\"")) {
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+                        /* WPA3 case, field is SAE Password */
+                        if (!setSaePassword(
+                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
+                            Log.e(TAG, "failed to set sae password");
+                            return false;
+                        }
+                    } else {
+                        if (!setPskPassphrase(
+                                NativeUtil.removeEnclosingQuotes(config.preSharedKey))) {
+                            Log.e(TAG, "failed to set psk passphrase");
+                            return false;
+                        }
+                    }
+                } else {
+                    if (config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+                        return false;
+                    }
+                    if (!setPsk(NativeUtil.hexStringToByteArray(config.preSharedKey))) {
+                        Log.e(TAG, "failed to set psk");
+                        return false;
+                    }
+                }
+            }
+            /** Wep Keys */
+            boolean hasSetKey = false;
+            if (config.wepKeys != null) {
+                for (int i = 0; i < config.wepKeys.length; i++) {
+                    if (config.wepKeys[i] != null) {
+                        if (!setWepKey(
+                                i, NativeUtil.hexOrQuotedStringToBytes(config.wepKeys[i]))) {
+                            Log.e(TAG, "failed to set wep_key " + i);
+                            return false;
+                        }
+                        hasSetKey = true;
+                    }
+                }
+            }
+            /** Wep Tx Key Idx */
+            if (hasSetKey) {
+                if (!setWepTxKeyIdx(config.wepTxKeyIndex)) {
+                    Log.e(TAG, "failed to set wep_tx_keyidx: " + config.wepTxKeyIndex);
+                    return false;
+                }
             }
             /** metadata: FQDN + ConfigKey + CreatorUid */
             final Map<String, String> metadata = new HashMap<String, String>();
@@ -754,19 +758,8 @@ public class SupplicantStaNetworkHal {
                 Log.e(TAG, ssid + ": failed to set proactive key caching: " + eapParam);
                 return false;
             }
-           /** EAP ERP */
-           eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.EAP_ERP);
-           if (!TextUtils.isEmpty(eapParam) && eapParam.equals("1")) {
-               if (!setEapErp(true)) {
-                   Log.e(TAG, ssid + ": failed to set eap erp");
-                   return false;
-               } else if (!setAuthAlg(0)) {
-                   /* Reset Auth Alg in order to allow supplicant to use both OPEN and FILS types */
-                   Log.e(TAG, ssid + ": failed to reset AuthAlgorithm");
-                   return false;
-               }
-           }
-            /** SIM Number */
+
+	    /** SIM Number */
             eapParam = eapConfig.getFieldValue(WifiEnterpriseConfig.KEY_SIMNUM);
             if (!TextUtils.isEmpty(eapParam)
                 && !setVendorSimNumber(Integer.parseInt(eapParam))) {
@@ -898,20 +891,14 @@ public class SupplicantStaNetworkHal {
         int mask = 0;
         for (int bit = keyMgmt.nextSetBit(0); bit != -1; bit = keyMgmt.nextSetBit(bit + 1)) {
             switch (bit) {
-                case WifiConfiguration.KeyMgmt.FILS_SHA256:
-                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA256);
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA256;
-                    break;
-                case WifiConfiguration.KeyMgmt.FILS_SHA384:
-                    Log.e(TAG, "wifiConfigurationToSupplicantVendorKeyMgmtMask: " + WifiConfiguration.KeyMgmt.FILS_SHA384);
-                    mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.FILS_SHA384;
-                    break;
                 case WifiConfiguration.KeyMgmt.DPP:
                     mask |= ISupplicantVendorStaNetwork.VendorKeyMgmtMask.DPP;
                     break;
                 case WifiConfiguration.KeyMgmt.OWE: //This is now supported with V1_2.ISupplicantStaNetwork.KeyMgmtMask
                 case WifiConfiguration.KeyMgmt.SAE:
                 case WifiConfiguration.KeyMgmt.SUITE_B_192:
+		case WifiConfiguration.KeyMgmt.FILS_SHA256:
+		case WifiConfiguration.KeyMgmt.FILS_SHA384:
                     break;
                 default:
                     Log.e(TAG, "Invalid VendorKeyMgmtMask bit in keyMgmt: " + bit);
@@ -1006,7 +993,7 @@ public class SupplicantStaNetworkHal {
                     break;
                 case WifiConfiguration.GroupCipher.GCMP_256:
                     mask |= android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
-                                .GroupCipherMask.GCMP_256;
+                            .GroupCipherMask.GCMP_256;
                     break;
                 case WifiConfiguration.GroupCipher.SMS4:
                     mask |= android.hardware.wifi.supplicant.V1_3.ISupplicantStaNetwork
@@ -1248,8 +1235,8 @@ public class SupplicantStaNetworkHal {
                 mask, ISupplicantStaNetwork.GroupCipherMask.CCMP, bitset,
                 WifiConfiguration.GroupCipher.CCMP);
         mask = supplicantMaskValueToWifiConfigurationBitSet(mask,
-                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork.GroupCipherMask
-                        .GCMP_256, bitset, WifiConfiguration.GroupCipher.GCMP_256);
+                android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                        .GroupCipherMask.GCMP_256, bitset, WifiConfiguration.GroupCipher.GCMP_256);
         mask = supplicantMaskValueToWifiConfigurationBitSet(
                 mask, ISupplicantVendorStaNetwork.VendorGroupCipherMask.GCMP_256, bitset,
                 WifiConfiguration.GroupCipher.GCMP_256);
@@ -1602,6 +1589,9 @@ public class SupplicantStaNetworkHal {
                      * Requires HAL v1.2 or higher */
                     status = iSupplicantStaNetworkV12.setGroupCipher_1_2(groupCipherMask);
                 } else {
+                    // Clear GCMP_256 group cipher which is not supported before v1.2
+                    groupCipherMask &= ~android.hardware.wifi.supplicant.V1_2.ISupplicantStaNetwork
+                            .GroupCipherMask.GCMP_256;
                     status = mISupplicantStaNetwork.setGroupCipher(
                             groupCipherMask);
                 }
@@ -1686,6 +1676,9 @@ public class SupplicantStaNetworkHal {
                      * Requires HAL v1.2 or higher */
                     status = iSupplicantStaNetworkV12.setPairwiseCipher_1_2(pairwiseCipherMask);
                 } else {
+                    // Clear GCMP_256 pairwise cipher which is not supported before v1.2
+                    pairwiseCipherMask &= ~android.hardware.wifi.supplicant.V1_2
+                            .ISupplicantStaNetwork.PairwiseCipherMask.GCMP_256;
                     status =
                             mISupplicantStaNetwork.setPairwiseCipher(pairwiseCipherMask);
                 }
@@ -1716,7 +1709,6 @@ public class SupplicantStaNetworkHal {
                 } else {
                     return false;
                 }
-
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
                 return false;

@@ -743,7 +743,6 @@ public class WifiNativeTest extends WifiBaseTest {
         verify(mWificondControl).startPnoScan(eq(WIFI_IFACE_NAME),
                 eq(TEST_PNO_SETTINGS.toNativePnoSettings()), any(), captor.capture());
         captor.getValue().onPnoRequestSucceeded();
-        verify(mStaIfaceHal).removeAllNetworks(WIFI_IFACE_NAME);
         verify(mWifiMetrics).incrementPnoScanStartAttemptCount();
     }
 
@@ -862,6 +861,7 @@ public class WifiNativeTest extends WifiBaseTest {
     @Test
     public void testSetMacAddress() throws Exception {
         mWifiNative.setMacAddress(WIFI_IFACE_NAME, TEST_MAC_ADDRESS);
+        verify(mStaIfaceHal).disconnect(WIFI_IFACE_NAME);
         verify(mWifiVendorHal).setMacAddress(WIFI_IFACE_NAME, TEST_MAC_ADDRESS);
     }
 

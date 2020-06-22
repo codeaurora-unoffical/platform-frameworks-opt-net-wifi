@@ -19,6 +19,7 @@ package com.android.server.wifi;
 import static android.app.AppOpsManager.MODE_IGNORED;
 import static android.app.AppOpsManager.OPSTR_CHANGE_WIFI_STATE;
 
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -59,12 +60,13 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.messages.nano.SystemMessageProto.SystemMessage;
 import com.android.server.wifi.util.ExternalCallbackTracker;
 import com.android.server.wifi.util.LruConnectionTracker;
-import com.android.server.wifi.util.TelephonyUtil;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.wifi.resources.R;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -106,21 +108,21 @@ public class WifiNetworkSuggestionsManager {
     public static final String EXTRA_UID =
             "com.android.server.wifi.extra.NetworkSuggestion.UID";
 
-    @VisibleForTesting
-    public static final String EXTRA_CARRIER_NAME =
-            "com.android.server.wifi.extra.NetworkSuggestion.CARRIER_NAME";
-    @VisibleForTesting
-    public static final String EXTRA_CARRIER_ID =
-            "com.android.server.wifi.extra.NetworkSuggestion.CARRIER_ID";
+    public static final int APP_TYPE_CARRIER_PRIVILEGED = 1;
+    public static final int APP_TYPE_NETWORK_PROVISIONING = 2;
+    public static final int APP_TYPE_NON_PRIVILEGED = 3;
 
-    /** Intent when user tapped action button to allow the app. */
-    @VisibleForTesting
-    public static final String NOTIFICATION_USER_ALLOWED_CARRIER_INTENT_ACTION =
-            "com.android.server.wifi.action.NetworkSuggestion.USER_ALLOWED_CARRIER";
-    /** Intent when user tapped action button to disallow the app. */
-    @VisibleForTesting
-    public static final String NOTIFICATION_USER_DISALLOWED_CARRIER_INTENT_ACTION =
-            "com.android.server.wifi.action.NetworkSuggestion.USER_DISALLOWED_CARRIER";
+    public static final int ACTION_USER_ALLOWED_APP = 1;
+    public static final int ACTION_USER_DISALLOWED_APP = 2;
+    public static final int ACTION_USER_DISMISS = 3;
+
+    @IntDef(prefix = { "ACTION_USER_" }, value = {
+            ACTION_USER_ALLOWED_APP,
+            ACTION_USER_DISALLOWED_APP,
+            ACTION_USER_DISMISS
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface UserActionCode { }
 
     /**
      * Limit number of hidden networks attach to scan
@@ -140,7 +142,7 @@ public class WifiNetworkSuggestionsManager {
     private final WifiMetrics mWifiMetrics;
     private final WifiInjector mWifiInjector;
     private final FrameworkFacade mFrameworkFacade;
-    private final TelephonyUtil mTelephonyUtil;
+    private final WifiCarrierInfoManager mWifiCarrierInfoManager;
     private final WifiKeyStore mWifiKeyStore;
     // Keep order of network connection.
     private final LruConnectionTracker mLruConnectionTracker;
@@ -362,7 +364,10 @@ public class WifiNetworkSuggestionsManager {
     private final HashMap<String, ExternalCallbackTracker<ISuggestionConnectionStatusListener>>
             mSuggestionStatusListenerPerApp = new HashMap<>();
 
-    private final Map<Integer, Boolean> mImsiPrivacyProtectionExemptionMap = new HashMap<>();
+    /**
+     * Store the suggestion update listeners.
+     */
+    private final List<OnSuggestionUpdateListener> mListeners = new ArrayList<>();
 
     /**
      * Intent filter for processing notification actions.
@@ -382,6 +387,9 @@ public class WifiNetworkSuggestionsManager {
      */
     private boolean mUserApprovalUiActive = false;
 
+    private boolean mIsLastUserApprovalUiDialog = false;
+
+    private boolean mUserDataLoaded = false;
     /**
      * Listener for app-ops changes for active suggestor apps.
      */
@@ -414,6 +422,7 @@ public class WifiNetworkSuggestionsManager {
                     // User disabled the app, remove app from database. We want the notification
                     // again if the user enabled the app-op back.
                     removeApp(mPackageName);
+                    mWifiMetrics.incrementNetworkSuggestionUserRevokePermission();
                 }
             });
         }
@@ -444,6 +453,7 @@ public class WifiNetworkSuggestionsManager {
 
         @Override
         public void fromDeserialized(Map<String, PerAppInfo> networkSuggestionsMap) {
+            mActiveNetworkSuggestionsPerApp.clear();
             mActiveNetworkSuggestionsPerApp.putAll(networkSuggestionsMap);
             // Build the scan cache.
             for (Map.Entry<String, PerAppInfo> entry : networkSuggestionsMap.entrySet()) {
@@ -467,43 +477,16 @@ public class WifiNetworkSuggestionsManager {
                     }
                 }
             }
+            mUserDataLoaded = true;
         }
 
         @Override
         public void reset() {
+            mUserDataLoaded = false;
             mActiveNetworkSuggestionsPerApp.clear();
             mActiveScanResultMatchInfoWithBssid.clear();
             mActiveScanResultMatchInfoWithNoBssid.clear();
             mPasspointInfo.clear();
-        }
-
-        @Override
-        public boolean hasNewDataToSerialize() {
-            return mHasNewDataToSerialize;
-        }
-    }
-
-    /**
-     * Module to interact with the wifi config store.
-     */
-    private class ImsiProtectionExemptionDataSource implements
-            ImsiPrivacyProtectionExemptionStoreData.DataSource {
-        @Override
-        public Map<Integer, Boolean> toSerialize() {
-            // Clear the flag after writing to disk.
-            // TODO(b/115504887): Don't reset the flag on write failure.
-            mHasNewDataToSerialize = false;
-            return mImsiPrivacyProtectionExemptionMap;
-        }
-
-        @Override
-        public void fromDeserialized(Map<Integer, Boolean> imsiProtectionExemptionMap) {
-            mImsiPrivacyProtectionExemptionMap.putAll(imsiProtectionExemptionMap);
-        }
-
-        @Override
-        public void reset() {
-            mImsiPrivacyProtectionExemptionMap.clear();
         }
 
         @Override
@@ -517,6 +500,9 @@ public class WifiNetworkSuggestionsManager {
         // Set the user approved flag.
         setHasUserApprovedForApp(true, packageName);
         mUserApprovalUiActive = false;
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(
+                ACTION_USER_ALLOWED_APP,
+                mIsLastUserApprovalUiDialog);
     }
 
     private void handleUserDisallowAction(int uid, String packageName) {
@@ -527,23 +513,17 @@ public class WifiNetworkSuggestionsManager {
         mAppOps.setMode(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, uid, packageName,
                 MODE_IGNORED);
         mUserApprovalUiActive = false;
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(
+                ACTION_USER_DISALLOWED_APP,
+                mIsLastUserApprovalUiDialog);
     }
 
     private void handleUserDismissAction() {
         Log.i(TAG, "User dismissed the notification");
         mUserApprovalUiActive = false;
-    }
-
-    private void handleUserAllowCarrierExemptionAction(String carrierName, int carrierId) {
-        Log.i(TAG, "User clicked to allow carrier:" + carrierName);
-        setHasUserApprovedImsiPrivacyExemptionForCarrier(true, carrierId);
-        mUserApprovalUiActive = false;
-    }
-
-    private void handleUserDisallowCarrierExemptionAction(String carrierName, int carrierId) {
-        Log.i(TAG, "User clicked to disallow carrier:" + carrierName);
-        setHasUserApprovedImsiPrivacyExemptionForCarrier(false, carrierId);
-        mUserApprovalUiActive = false;
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(
+                ACTION_USER_DISMISS,
+                mIsLastUserApprovalUiDialog);
     }
 
     private final BroadcastReceiver mBroadcastReceiver =
@@ -551,41 +531,17 @@ public class WifiNetworkSuggestionsManager {
                 @Override
                 public void onReceive(Context context, Intent intent) {
                     String packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME);
-                    String carrierName = intent.getStringExtra(EXTRA_CARRIER_NAME);
                     int uid = intent.getIntExtra(EXTRA_UID, -1);
-                    int carrierId = intent.getIntExtra(EXTRA_CARRIER_ID, -1);
-
+                    if (packageName == null || uid == -1) {
+                        Log.e(TAG, "No package name or uid found in intent");
+                        return;
+                    }
                     switch (intent.getAction()) {
                         case NOTIFICATION_USER_ALLOWED_APP_INTENT_ACTION:
-                            if (packageName == null || uid == -1) {
-                                Log.e(TAG, "No package name or uid found in intent");
-                                return;
-                            }
                             handleUserAllowAction(uid, packageName);
                             break;
                         case NOTIFICATION_USER_DISALLOWED_APP_INTENT_ACTION:
-                            if (packageName == null || uid == -1) {
-                                Log.e(TAG, "No package name or uid found in intent");
-                                return;
-                            }
                             handleUserDisallowAction(uid, packageName);
-                            break;
-                        case NOTIFICATION_USER_ALLOWED_CARRIER_INTENT_ACTION:
-                            if (carrierName == null || carrierId == -1) {
-                                Log.e(TAG, "No carrier name or carrier id found in intent");
-                                return;
-                            }
-                            Log.i(TAG, "User clicked to allow carrier");
-                            sendImsiPrivacyConfirmationDialog(carrierName, carrierId);
-                            // Collapse the notification bar
-                            mContext.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
-                            break;
-                        case NOTIFICATION_USER_DISALLOWED_CARRIER_INTENT_ACTION:
-                            if (carrierName == null || carrierId == -1) {
-                                Log.e(TAG, "No carrier name or carrier id found in intent");
-                                return;
-                            }
-                            handleUserDisallowCarrierExemptionAction(carrierName, carrierId);
                             break;
                         case NOTIFICATION_USER_DISMISSED_INTENT_ACTION:
                             handleUserDismissAction();
@@ -599,10 +555,33 @@ public class WifiNetworkSuggestionsManager {
                 }
             };
 
+    /**
+     * Interface for other modules to listen to the suggestion updated events.
+     */
+    public interface OnSuggestionUpdateListener {
+        /**
+         * Invoked on suggestion being added or updated.
+         */
+        void onSuggestionsAddedOrUpdated(@NonNull List<WifiNetworkSuggestion> addedSuggestions);
+        /**
+         * Invoked on suggestion being removed.
+         */
+        void onSuggestionsRemoved(@NonNull List<WifiNetworkSuggestion> removedSuggestions);
+    }
+
+    private final class UserApproveCarrierListener implements
+            WifiCarrierInfoManager.OnUserApproveCarrierListener {
+
+        @Override
+        public void onUserAllowed(int carrierId) {
+            restoreInitialAutojoinForCarrierId(carrierId);
+        }
+    }
+
     public WifiNetworkSuggestionsManager(WifiContext context, Handler handler,
             WifiInjector wifiInjector, WifiPermissionsUtil wifiPermissionsUtil,
             WifiConfigManager wifiConfigManager, WifiConfigStore wifiConfigStore,
-            WifiMetrics wifiMetrics, TelephonyUtil telephonyUtil,
+            WifiMetrics wifiMetrics, WifiCarrierInfoManager wifiCarrierInfoManager,
             WifiKeyStore keyStore, LruConnectionTracker lruConnectionTracker) {
         mContext = context;
         mResources = context.getResources();
@@ -618,22 +597,21 @@ public class WifiNetworkSuggestionsManager {
         mWifiPermissionsUtil = wifiPermissionsUtil;
         mWifiConfigManager = wifiConfigManager;
         mWifiMetrics = wifiMetrics;
-        mTelephonyUtil = telephonyUtil;
+        mWifiCarrierInfoManager = wifiCarrierInfoManager;
         mWifiKeyStore = keyStore;
 
         // register the data store for serializing/deserializing data.
         wifiConfigStore.registerStoreData(
                 wifiInjector.makeNetworkSuggestionStoreData(new NetworkSuggestionDataSource()));
-        wifiConfigStore.registerStoreData(wifiInjector.makeImsiProtectionExemptionStoreData(
-                new ImsiProtectionExemptionDataSource()));
+
+        mWifiCarrierInfoManager.addImsiExemptionUserApprovalListener(
+                new UserApproveCarrierListener());
 
         // Register broadcast receiver for UI interactions.
         mIntentFilter = new IntentFilter();
         mIntentFilter.addAction(NOTIFICATION_USER_ALLOWED_APP_INTENT_ACTION);
         mIntentFilter.addAction(NOTIFICATION_USER_DISALLOWED_APP_INTENT_ACTION);
         mIntentFilter.addAction(NOTIFICATION_USER_DISMISSED_INTENT_ACTION);
-        mIntentFilter.addAction(NOTIFICATION_USER_ALLOWED_CARRIER_INTENT_ACTION);
-        mIntentFilter.addAction(NOTIFICATION_USER_DISALLOWED_CARRIER_INTENT_ACTION);
 
         mContext.registerReceiver(mBroadcastReceiver, mIntentFilter, null, handler);
         mLruConnectionTracker = lruConnectionTracker;
@@ -855,6 +833,10 @@ public class WifiNetworkSuggestionsManager {
     public @WifiManager.NetworkSuggestionsStatusCode int add(
             List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName,
             @Nullable String featureId) {
+        if (!mUserDataLoaded) {
+            Log.e(TAG, "Add Network suggestion before boot complete is not allowed.");
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        }
         if (networkSuggestions == null || networkSuggestions.isEmpty()) {
             Log.w(TAG, "Empty list of network suggestions for " + packageName + ". Ignoring");
             return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
@@ -871,7 +853,8 @@ public class WifiNetworkSuggestionsManager {
             return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED;
         }
 
-        int carrierId = mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(packageName);
+        int carrierId = mWifiCarrierInfoManager
+                .getCarrierIdForPackageWithCarrierPrivileges(packageName);
         final String activeScorerPackage = mNetworkScoreManager.getActiveScorerPackage();
         PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
         if (perAppInfo == null) {
@@ -880,19 +863,27 @@ public class WifiNetworkSuggestionsManager {
             if (mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(uid)) {
                 Log.i(TAG, "Setting the carrier provisioning app approved");
                 perAppInfo.hasUserApproved = true;
+                mWifiMetrics.incrementNetworkSuggestionApiUsageNumOfAppInType(
+                        APP_TYPE_NETWORK_PROVISIONING);
             } else if (carrierId != TelephonyManager.UNKNOWN_CARRIER_ID) {
                 Log.i(TAG, "Setting the carrier privileged app approved");
                 perAppInfo.carrierId = carrierId;
+                mWifiMetrics.incrementNetworkSuggestionApiUsageNumOfAppInType(
+                        APP_TYPE_CARRIER_PRIVILEGED);
             } else if (perAppInfo.packageName.equals(activeScorerPackage)) {
                 Log.i(TAG, "Exempting the active scorer app");
                 // nothing more to do, user approval related checks are done at network selection
                 // time (which also takes care of any dynamic changes in active scorer).
+                mWifiMetrics.incrementNetworkSuggestionApiUsageNumOfAppInType(
+                        APP_TYPE_NON_PRIVILEGED);
             } else {
                 if (isSuggestionFromForegroundApp(packageName)) {
                     sendUserApprovalDialog(packageName, uid);
                 } else {
-                    sendUserApprovalNotification(packageName, uid);
+                    sendUserApprovalNotificationIfNotApproved(packageName, uid);
                 }
+                mWifiMetrics.incrementNetworkSuggestionApiUsageNumOfAppInType(
+                        APP_TYPE_NON_PRIVILEGED);
             }
         }
         // If PerAppInfo is upgrade from pre-R, uid may not be set.
@@ -928,9 +919,10 @@ public class WifiNetworkSuggestionsManager {
             // If network has no IMSI protection and user didn't approve exemption, make it initial
             // auto join disabled
             if (isSimBasedSuggestion(ewns)) {
-                int subId = mTelephonyUtil.getMatchingSubId(getCarrierIdFromSuggestion(ewns));
-                if (!(mTelephonyUtil.requiresImsiEncryption(subId)
-                        || hasUserApprovedImsiPrivacyExemptionForCarrier(
+                int subId = mWifiCarrierInfoManager
+                        .getMatchingSubId(getCarrierIdFromSuggestion(ewns));
+                if (!(mWifiCarrierInfoManager.requiresImsiEncryption(subId)
+                        || mWifiCarrierInfoManager.hasUserApprovedImsiPrivacyExemptionForCarrier(
                         getCarrierIdFromSuggestion(ewns)))) {
                     ewns.isAutojoinEnabled = false;
                 }
@@ -963,6 +955,9 @@ public class WifiNetworkSuggestionsManager {
             }
             perAppInfo.extNetworkSuggestions.remove(ewns);
             perAppInfo.extNetworkSuggestions.add(ewns);
+        }
+        for (OnSuggestionUpdateListener listener : mListeners) {
+            listener.onSuggestionsAddedOrUpdated(networkSuggestions);
         }
         // Update the max size for this app.
         perAppInfo.maxSize = Math.max(perAppInfo.extNetworkSuggestions.size(), perAppInfo.maxSize);
@@ -998,6 +993,12 @@ public class WifiNetworkSuggestionsManager {
                         WifiConfigurationUtil.VALIDATE_FOR_ADD)) {
                     return false;
                 }
+                if (wns.wifiConfiguration.isEnterprise()
+                        && wns.wifiConfiguration.enterpriseConfig.isInsecure()) {
+                    Log.e(TAG, "Insecure enterprise suggestion is invalid.");
+                    return false;
+                }
+
             } else {
                 if (!wns.passpointConfiguration.validate()) {
                     return false;
@@ -1010,7 +1011,7 @@ public class WifiNetworkSuggestionsManager {
     private boolean validateCarrierNetworkSuggestions(
             List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName) {
         if (mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(uid)
-                || mTelephonyUtil.getCarrierIdForPackageWithCarrierPrivileges(packageName)
+                || mWifiCarrierInfoManager.getCarrierIdForPackageWithCarrierPrivileges(packageName)
                 != TelephonyManager.UNKNOWN_CARRIER_ID) {
             return true;
         }
@@ -1059,11 +1060,11 @@ public class WifiNetworkSuggestionsManager {
             @NonNull String packageName,
             @NonNull PerAppInfo perAppInfo) {
         // Get internal suggestions
-        Set<ExtendedWifiNetworkSuggestion> removingSuggestions =
+        Set<ExtendedWifiNetworkSuggestion> removingExtSuggestions =
                 new HashSet<>(perAppInfo.extNetworkSuggestions);
         if (!extNetworkSuggestions.isEmpty()) {
             // Keep the internal suggestions need to remove.
-            removingSuggestions.retainAll(extNetworkSuggestions);
+            removingExtSuggestions.retainAll(extNetworkSuggestions);
             perAppInfo.extNetworkSuggestions.removeAll(extNetworkSuggestions);
         } else {
             // empty list is used to clear everything for the app. Store a copy for use below.
@@ -1078,7 +1079,8 @@ public class WifiNetworkSuggestionsManager {
             stopTrackingAppOpsChange(packageName);
         }
         // Clear the cache.
-        for (ExtendedWifiNetworkSuggestion ewns : removingSuggestions) {
+        List<WifiNetworkSuggestion> removingSuggestions = new ArrayList<>();
+        for (ExtendedWifiNetworkSuggestion ewns : removingExtSuggestions) {
             if (ewns.wns.passpointConfiguration != null) {
                 // Clear the Passpoint config.
                 mWifiInjector.getPasspointManager().removeProvider(
@@ -1092,9 +1094,13 @@ public class WifiNetworkSuggestionsManager {
                 }
                 removeFromScanResultMatchInfoMapAndRemoveRelatedScoreCard(ewns);
             }
+            removingSuggestions.add(ewns.wns);
+        }
+        for (OnSuggestionUpdateListener listener : mListeners) {
+            listener.onSuggestionsRemoved(removingSuggestions);
         }
         // Disconnect suggested network if connected
-        removeFromConfigManagerIfServingNetworkSuggestionRemoved(removingSuggestions);
+        removeFromConfigManagerIfServingNetworkSuggestionRemoved(removingExtSuggestions);
     }
 
     /**
@@ -1102,6 +1108,10 @@ public class WifiNetworkSuggestionsManager {
      */
     public @WifiManager.NetworkSuggestionsStatusCode int remove(
             List<WifiNetworkSuggestion> networkSuggestions, int uid, String packageName) {
+        if (!mUserDataLoaded) {
+            Log.e(TAG, "Remove Network suggestion before boot complete is not allowed.");
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL;
+        }
         if (networkSuggestions == null) {
             Log.w(TAG, "Null list of network suggestions for " + packageName + ". Ignoring");
             return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
@@ -1158,6 +1168,10 @@ public class WifiNetworkSuggestionsManager {
      */
     public @NonNull List<WifiNetworkSuggestion> get(@NonNull String packageName) {
         List<WifiNetworkSuggestion> networkSuggestionList = new ArrayList<>();
+        if (!mUserDataLoaded) {
+            Log.e(TAG, "Get Network suggestion before boot complete is not allowed.");
+            return networkSuggestionList;
+        }
         PerAppInfo perAppInfo = mActiveNetworkSuggestionsPerApp.get(packageName);
         // if App never suggested return empty list.
         if (perAppInfo == null) return networkSuggestionList;
@@ -1179,7 +1193,6 @@ public class WifiNetworkSuggestionsManager {
             iter.remove();
         }
         mSuggestionStatusListenerPerApp.clear();
-        mImsiPrivacyProtectionExemptionMap.clear();
         saveToStore();
         Log.i(TAG, "Cleared all internal state");
     }
@@ -1210,46 +1223,25 @@ public class WifiNetworkSuggestionsManager {
     }
 
     /**
-     * Clear the Imsi Privacy Exemption user approval info the target carrier.
-     */
-    public void clearImsiPrivacyExemptionForCarrier(int carrierId) {
-        mImsiPrivacyProtectionExemptionMap.remove(carrierId);
-        saveToStore();
-    }
-
-    /**
-     * Check if carrier have user approved exemption for IMSI protection
-     */
-    public boolean hasUserApprovedImsiPrivacyExemptionForCarrier(int carrierId) {
-        return  mImsiPrivacyProtectionExemptionMap.getOrDefault(carrierId, false);
-    }
-
-    /**
-     * Enable or disable exemption on IMSI protection.
-     */
-    public void setHasUserApprovedImsiPrivacyExemptionForCarrier(boolean approved, int carrierId) {
-        if (mVerboseLoggingEnabled) {
-            Log.v(TAG, "Setting Imsi privacy exemption for carrier " + carrierId
-                    + (approved ? " approved" : " not approved"));
-        }
-        mImsiPrivacyProtectionExemptionMap.put(carrierId, approved);
-        // If user approved the exemption restore to initial auto join configure.
-        if (approved) {
-            restoreInitialAutojoinForCarrierId(carrierId);
-        }
-        saveToStore();
-    }
-
-    /**
      * When user approve the IMSI protection exemption for carrier, restore the initial auto join
      * configure. If user already change it to enabled, keep that choice.
      */
     private void restoreInitialAutojoinForCarrierId(int carrierId) {
         for (PerAppInfo appInfo : mActiveNetworkSuggestionsPerApp.values()) {
             for (ExtendedWifiNetworkSuggestion ewns : appInfo.extNetworkSuggestions) {
-                if (isSimBasedSuggestion(ewns)
-                        && getCarrierIdFromSuggestion(ewns) == carrierId) {
-                    ewns.isAutojoinEnabled |= ewns.wns.isInitialAutoJoinEnabled;
+                if (!(isSimBasedSuggestion(ewns)
+                        && getCarrierIdFromSuggestion(ewns) == carrierId)) {
+                    continue;
+                }
+                if (mVerboseLoggingEnabled) {
+                    Log.v(TAG, "Restore auto-join for suggestion: " + ewns);
+                }
+                ewns.isAutojoinEnabled |= ewns.wns.isInitialAutoJoinEnabled;
+                // Restore passpoint provider auto join.
+                if (ewns.wns.passpointConfiguration != null) {
+                    mWifiInjector.getPasspointManager()
+                            .enableAutojoin(ewns.wns.passpointConfiguration.getUniqueId(),
+                                    null, ewns.isAutojoinEnabled);
                 }
             }
         }
@@ -1262,6 +1254,19 @@ public class WifiNetworkSuggestionsManager {
     public Set<WifiNetworkSuggestion> getAllNetworkSuggestions() {
         return mActiveNetworkSuggestionsPerApp.values()
                 .stream()
+                .flatMap(e -> convertToWnsSet(e.extNetworkSuggestions)
+                        .stream())
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Returns a set of all network suggestions across all apps that have been approved by user.
+     */
+    public Set<WifiNetworkSuggestion> getAllApprovedNetworkSuggestions() {
+        final String activeScorerPackage = mNetworkScoreManager.getActiveScorerPackage();
+        return mActiveNetworkSuggestionsPerApp.values()
+                .stream()
+                .filter(e -> e.isApproved(activeScorerPackage))
                 .flatMap(e -> convertToWnsSet(e.extNetworkSuggestions)
                         .stream())
                 .collect(Collectors.toSet());
@@ -1359,6 +1364,7 @@ public class WifiNetworkSuggestionsManager {
                 WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
         dialog.show();
         mUserApprovalUiActive = true;
+        mIsLastUserApprovalUiDialog = true;
     }
 
     private void sendUserApprovalNotification(@NonNull String packageName, int uid) {
@@ -1400,84 +1406,8 @@ public class WifiNetworkSuggestionsManager {
         mNotificationManager.notify(
                 SystemMessage.NOTE_NETWORK_SUGGESTION_AVAILABLE, notification);
         mUserApprovalUiActive = true;
+        mIsLastUserApprovalUiDialog = false;
     }
-
-    private void sendImsiPrivacyNotification(@NonNull String carrierName, int carrierId) {
-        Notification.Action userAllowAppNotificationAction =
-                new Notification.Action.Builder(null,
-                        mResources.getText(R.string
-                                .wifi_suggestion_action_allow_imsi_privacy_exemption_carrier),
-                        getPrivateBroadcast(NOTIFICATION_USER_ALLOWED_CARRIER_INTENT_ACTION,
-                                Pair.create(EXTRA_CARRIER_NAME, carrierName),
-                                Pair.create(EXTRA_CARRIER_ID, carrierId)))
-                        .build();
-        Notification.Action userDisallowAppNotificationAction =
-                new Notification.Action.Builder(null,
-                        mResources.getText(R.string
-                                .wifi_suggestion_action_disallow_imsi_privacy_exemption_carrier),
-                        getPrivateBroadcast(NOTIFICATION_USER_DISALLOWED_CARRIER_INTENT_ACTION,
-                                Pair.create(EXTRA_CARRIER_NAME, carrierName),
-                                Pair.create(EXTRA_CARRIER_ID, carrierId)))
-                        .build();
-
-        Notification notification = mFrameworkFacade.makeNotificationBuilder(
-                mContext, WifiService.NOTIFICATION_NETWORK_STATUS)
-                .setSmallIcon(Icon.createWithResource(mContext.getWifiOverlayApkPkgName(),
-                        com.android.wifi.resources.R.drawable.stat_notify_wifi_in_range))
-                .setTicker(mResources.getString(
-                        R.string.wifi_suggestion_imsi_privacy_title, carrierName))
-                .setContentTitle(mResources.getString(
-                        R.string.wifi_suggestion_imsi_privacy_title, carrierName))
-                .setStyle(new Notification.BigTextStyle()
-                        .bigText(mResources.getString(
-                                R.string.wifi_suggestion_imsi_privacy_content)))
-                .setDeleteIntent(getPrivateBroadcast(NOTIFICATION_USER_DISMISSED_INTENT_ACTION,
-                        Pair.create(EXTRA_CARRIER_NAME, carrierName),
-                        Pair.create(EXTRA_CARRIER_ID, carrierId)))
-                .setShowWhen(false)
-                .setLocalOnly(true)
-                .setColor(mResources.getColor(android.R.color.system_notification_accent_color,
-                        mContext.getTheme()))
-                .addAction(userDisallowAppNotificationAction)
-                .addAction(userAllowAppNotificationAction)
-                .build();
-
-        // Post the notification.
-        mNotificationManager.notify(
-                SystemMessage.NOTE_NETWORK_SUGGESTION_AVAILABLE, notification);
-        mUserApprovalUiActive = true;
-    }
-
-    private void sendImsiPrivacyConfirmationDialog(@NonNull String carrierName, int carrierId) {
-        AlertDialog dialog = mFrameworkFacade.makeAlertDialogBuilder(mContext)
-                .setTitle(mResources.getString(
-                        R.string.wifi_suggestion_imsi_privacy_exemption_confirmation_title))
-                .setMessage(mResources.getString(
-                        R.string.wifi_suggestion_imsi_privacy_exemption_confirmation_content,
-                        carrierName))
-                .setPositiveButton(mResources.getText(
-                        R.string.wifi_suggestion_action_allow_imsi_privacy_exemption_confirmation),
-                        (d, which) -> mHandler.post(
-                                () -> handleUserAllowCarrierExemptionAction(
-                                        carrierName, carrierId)))
-                .setNegativeButton(mResources.getText(
-                        R.string.wifi_suggestion_action_disallow_imsi_privacy_exemption_confirmation),
-                        (d, which) -> mHandler.post(
-                                () -> handleUserDisallowCarrierExemptionAction(
-                                        carrierName, carrierId)))
-                .setOnDismissListener(
-                        (d) -> mHandler.post(this::handleUserDismissAction))
-                .setOnCancelListener(
-                        (d) -> mHandler.post(this::handleUserDismissAction))
-                .create();
-        dialog.setCanceledOnTouchOutside(false);
-        dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
-        dialog.getWindow().addSystemFlags(
-                WindowManager.LayoutParams.SYSTEM_FLAG_SHOW_FOR_ALL_USERS);
-        dialog.show();
-        mUserApprovalUiActive = true;
-    }
-
 
     /**
      * Send user approval notification if the app is not approved
@@ -1501,24 +1431,6 @@ public class WifiNetworkSuggestionsManager {
         Log.i(TAG, "Sending user approval notification for " + packageName);
         sendUserApprovalNotification(packageName, uid);
         return true;
-    }
-
-    /**
-     * Send notification for exemption of IMSI protection if user never made choice before.
-     */
-    private void sendImsiProtectionExemptionNotificationIfRequired(int carrierId) {
-        int subId = mTelephonyUtil.getMatchingSubId(carrierId);
-        if (mTelephonyUtil.requiresImsiEncryption(subId)) {
-            return;
-        }
-        if (mImsiPrivacyProtectionExemptionMap.containsKey(carrierId)) {
-            return;
-        }
-        if (mUserApprovalUiActive) {
-            return;
-        }
-        Log.i(TAG, "Sending IMSI protection notification for " + carrierId);
-        sendImsiPrivacyNotification(mTelephonyUtil.getCarrierNameforSubId(subId), carrierId);
     }
 
     private @Nullable Set<ExtendedWifiNetworkSuggestion>
@@ -1570,8 +1482,8 @@ public class WifiNetworkSuggestionsManager {
                 continue;
             }
             if (isSimBasedSuggestion(ewns)) {
-                int carrierId = getCarrierIdFromSuggestion(ewns);
-                sendImsiProtectionExemptionNotificationIfRequired(carrierId);
+                mWifiCarrierInfoManager.sendImsiProtectionExemptionNotificationIfRequired(
+                        getCarrierIdFromSuggestion(ewns));
             }
             approvedExtNetworkSuggestions.add(ewns);
         }
@@ -1617,8 +1529,8 @@ public class WifiNetworkSuggestionsManager {
                 continue;
             }
             if (isSimBasedSuggestion(ewns)) {
-                int carrierId = getCarrierIdFromSuggestion(ewns);
-                sendImsiProtectionExemptionNotificationIfRequired(carrierId);
+                mWifiCarrierInfoManager.sendImsiProtectionExemptionNotificationIfRequired(
+                        getCarrierIdFromSuggestion(ewns));
             }
             approvedExtNetworkSuggestions.add(ewns);
         }
@@ -1725,7 +1637,7 @@ public class WifiNetworkSuggestionsManager {
      */
     public boolean isPasspointSuggestionSharedWithUser(WifiConfiguration config) {
         if (WifiConfiguration.isMetered(config, null)
-                && mTelephonyUtil.isCarrierNetworkFromNonDefaultDataSim(config)) {
+                && mWifiCarrierInfoManager.isCarrierNetworkFromNonDefaultDataSim(config)) {
             return false;
         }
         Set<ExtendedWifiNetworkSuggestion> extendedWifiNetworkSuggestions =
@@ -2039,7 +1951,7 @@ public class WifiNetworkSuggestionsManager {
             Log.w(TAG, "unregisterSuggestionConnectionStatusListener: Listener["
                     + listenerIdentifier + "] from " + packageName + " already unregister.");
         }
-        if (listenersTracker.getNumCallbacks() == 0) {
+        if (listenersTracker != null && listenersTracker.getNumCallbacks() == 0) {
             mSuggestionStatusListenerPerApp.remove(packageName);
         }
     }
@@ -2052,7 +1964,7 @@ public class WifiNetworkSuggestionsManager {
     public void resetCarrierPrivilegedApps() {
         Log.w(TAG, "SIM state is changed!");
         for (PerAppInfo appInfo : mActiveNetworkSuggestionsPerApp.values()) {
-            int carrierId = mTelephonyUtil
+            int carrierId = mWifiCarrierInfoManager
                     .getCarrierIdForPackageWithCarrierPrivileges(appInfo.packageName);
             if (carrierId == appInfo.carrierId) {
                 continue;
@@ -2119,17 +2031,21 @@ public class WifiNetworkSuggestionsManager {
             if (suggestion == null || suggestion.wifiConfiguration == null) {
                 continue;
             }
-            if (suggestion.passpointConfiguration != null) {
-                filteredScanResults.put(suggestion,
-                        mWifiInjector.getPasspointManager().getMatchingScanResults(
-                                suggestion.passpointConfiguration, scanResults));
-            } else {
-                filteredScanResults.put(suggestion,
-                        getMatchingScanResults(suggestion.wifiConfiguration, scanResults));
-            }
+            filteredScanResults.put(suggestion,
+                    getMatchingScanResultsForSuggestion(suggestion, scanResults));
         }
 
         return filteredScanResults;
+    }
+
+    private List<ScanResult> getMatchingScanResultsForSuggestion(WifiNetworkSuggestion suggestion,
+            List<ScanResult> scanResults) {
+        if (suggestion.passpointConfiguration != null) {
+            return mWifiInjector.getPasspointManager().getMatchingScanResults(
+                    suggestion.passpointConfiguration, scanResults);
+        } else {
+            return getMatchingScanResults(suggestion.wifiConfiguration, scanResults);
+        }
     }
 
     /**
@@ -2155,6 +2071,108 @@ public class WifiNetworkSuggestionsManager {
         }
 
         return filteredScanResult;
+    }
+
+    /**
+     * Add the suggestion update event listener
+     */
+    public void addOnSuggestionUpdateListener(OnSuggestionUpdateListener listener) {
+        mListeners.add(listener);
+    }
+
+    /**
+     * When a saved open network has a same network suggestion which is from app has
+     * NETWORK_CARRIER_PROVISIONING permission, also that app suggested secure network suggestion
+     * for same carrier with higher or equal priority and Auto-Join enabled, also that secure
+     * network is in the range. The saved open network will be ignored during the network selection.
+     * TODO (b/142035508): revert all these changes once we build infra needed to solve this.
+     * @param configuration Saved open network to check if it should be ignored.
+     * @param scanDetails Available ScanDetail nearby.
+     * @return True if the open network should be ignored, false otherwise.
+     */
+    public boolean shouldBeIgnoredBySecureSuggestionFromSameCarrier(
+            @NonNull WifiConfiguration configuration, List<ScanDetail> scanDetails) {
+        if (!mResources.getBoolean(
+                R.bool.config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable)) {
+            return false;
+        }
+        if (configuration == null || scanDetails == null || !configuration.isOpenNetwork()) {
+            return false;
+        }
+        Set<ExtendedWifiNetworkSuggestion> matchedExtSuggestions =
+                getNetworkSuggestionsForWifiConfiguration(configuration, null);
+        if (matchedExtSuggestions == null || matchedExtSuggestions.isEmpty()) {
+            return false;
+        }
+        matchedExtSuggestions = matchedExtSuggestions.stream().filter(ewns ->
+                mWifiPermissionsUtil.checkNetworkCarrierProvisioningPermission(ewns.perAppInfo.uid))
+                .collect(Collectors.toSet());
+        if (matchedExtSuggestions.isEmpty()) {
+            return false;
+        }
+        for (ExtendedWifiNetworkSuggestion ewns : matchedExtSuggestions) {
+            if (hasSecureSuggestionFromSameCarrierAvailable(ewns, scanDetails)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasSecureSuggestionFromSameCarrierAvailable(
+            ExtendedWifiNetworkSuggestion extendedWifiNetworkSuggestion,
+            List<ScanDetail> scanDetails) {
+        boolean isOpenSuggestionMetered = WifiConfiguration.isMetered(
+                extendedWifiNetworkSuggestion.wns.wifiConfiguration, null);
+        Set<ExtendedWifiNetworkSuggestion> secureExtSuggestions = new HashSet<>();
+        for (ExtendedWifiNetworkSuggestion ewns : extendedWifiNetworkSuggestion.perAppInfo
+                .extNetworkSuggestions) {
+            // Open network and auto-join disable suggestion, ignore.
+            if (isOpenSuggestion(ewns) || !ewns.isAutojoinEnabled) {
+                continue;
+            }
+            // From different carrier as open suggestion, ignore.
+            if (getCarrierIdFromSuggestion(ewns)
+                    != getCarrierIdFromSuggestion(extendedWifiNetworkSuggestion)) {
+                continue;
+            }
+            // Secure and open has different meterness, ignore
+            if (WifiConfiguration.isMetered(ewns.wns.wifiConfiguration, null)
+                    != isOpenSuggestionMetered) {
+                continue;
+            }
+            // Low priority than open suggestion, ignore.
+            if (ewns.wns.wifiConfiguration.priority
+                    < extendedWifiNetworkSuggestion.wns.wifiConfiguration.priority) {
+                continue;
+            }
+            WifiConfiguration wcmConfig = mWifiConfigManager
+                    .getConfiguredNetwork(ewns.wns.wifiConfiguration.getKey());
+            // Network selection is disabled, ignore.
+            if (wcmConfig != null && !wcmConfig.getNetworkSelectionStatus().isNetworkEnabled()) {
+                continue;
+            }
+            secureExtSuggestions.add(ewns);
+        }
+
+        if (secureExtSuggestions.isEmpty()) {
+            return false;
+        }
+        List<ScanResult> scanResults = scanDetails.stream().map(ScanDetail::getScanResult)
+                .collect(Collectors.toList());
+        // Check if the secure suggestion is in the range.
+        for (ExtendedWifiNetworkSuggestion ewns : secureExtSuggestions) {
+            if (!getMatchingScanResultsForSuggestion(ewns.wns, scanResults).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isOpenSuggestion(ExtendedWifiNetworkSuggestion extendedWifiNetworkSuggestion) {
+        if (extendedWifiNetworkSuggestion.wns.passpointConfiguration != null) {
+            return false;
+        }
+        return extendedWifiNetworkSuggestion.wns.wifiConfiguration.isOpenNetwork();
     }
 
     /**

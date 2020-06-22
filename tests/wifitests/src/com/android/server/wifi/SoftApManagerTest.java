@@ -23,6 +23,7 @@ import static android.net.wifi.WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME;
 import static android.net.wifi.WifiManager.EXTRA_WIFI_AP_MODE;
 import static android.net.wifi.WifiManager.EXTRA_WIFI_AP_STATE;
 import static android.net.wifi.WifiManager.IFACE_IP_MODE_LOCAL_ONLY;
+import static android.net.wifi.WifiManager.SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLED;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_DISABLING;
 import static android.net.wifi.WifiManager.WIFI_AP_STATE_ENABLED;
@@ -35,6 +36,8 @@ import static com.android.server.wifi.util.ApConfigUtil.DEFAULT_AP_CHANNEL;
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyLong;
@@ -675,6 +678,7 @@ public class SoftApManagerTest extends WifiBaseTest {
         InOrder order = inOrder(mCallback, mListener, mContext);
 
         mSoftApManager.stop();
+        assertTrue(mSoftApManager.isStopping());
         mLooper.dispatchAll();
 
         ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
@@ -693,6 +697,8 @@ public class SoftApManagerTest extends WifiBaseTest {
         checkApStateChangedBroadcast(intentCaptor.getValue(), WIFI_AP_STATE_DISABLED,
                 WIFI_AP_STATE_DISABLING, HOTSPOT_NO_ERROR, TEST_INTERFACE_NAME,
                 softApModeConfig.getTargetMode());
+        order.verify(mListener).onStopped();
+        assertFalse(mSoftApManager.isStopping());
     }
 
     /**
@@ -728,6 +734,7 @@ public class SoftApManagerTest extends WifiBaseTest {
                 WIFI_AP_STATE_DISABLING, HOTSPOT_NO_ERROR, TEST_INTERFACE_NAME,
                 softApModeConfig.getTargetMode());
         order.verify(mListener).onStopped();
+        assertFalse(mSoftApManager.isStopping());
     }
 
     /**
@@ -1103,6 +1110,34 @@ public class SoftApManagerTest extends WifiBaseTest {
                 .addSoftApNumAssociatedStationsChangedEvent(
                 0, apConfig.getTargetMode());
 
+    }
+
+    @Test
+    public void stopDisconnectsConnectedClients() throws Exception {
+        InOrder order = inOrder(mCallback, mWifiMetrics);
+        SoftApModeConfiguration apConfig =
+                new SoftApModeConfiguration(WifiManager.IFACE_IP_MODE_TETHERED, null,
+                        mTestSoftApCapability);
+        startSoftApAndVerifyEnabled(apConfig);
+
+        order.verify(mCallback).onConnectedClientsChanged(new ArrayList<>());
+
+        mSoftApListenerCaptor.getValue().onConnectedClientsChanged(
+                TEST_NATIVE_CLIENT, true);
+        mLooper.dispatchAll();
+
+        order.verify(mCallback).onConnectedClientsChanged(
+                Mockito.argThat((List<WifiClient> clients) ->
+                        clients.contains(TEST_CONNECTED_CLIENT))
+        );
+        verify(mWifiMetrics).addSoftApNumAssociatedStationsChangedEvent(
+                1, apConfig.getTargetMode());
+
+        mSoftApManager.stop();
+        mLooper.dispatchAll();
+
+        verify(mWifiNative).forceClientDisconnect(TEST_INTERFACE_NAME, TEST_MAC_ADDRESS,
+                SAP_CLIENT_DISCONNECT_REASON_CODE_UNSPECIFIED);
     }
 
     @Test
@@ -1755,6 +1790,7 @@ public class SoftApManagerTest extends WifiBaseTest {
 
 
         mSoftApManager.start();
+        mSoftApManager.setRole(ActiveModeManager.ROLE_SOFTAP_TETHERED);
         mLooper.dispatchAll();
         verify(mFakeSoftApNotifier).dismissSoftApShutDownTimeoutExpiredNotification();
         order.verify(mWifiNative).setupInterfaceForSoftApMode(

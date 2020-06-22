@@ -143,7 +143,6 @@ public class SavedNetworkTracker extends BaseWifiTracker {
     @WorkerThread
     @Override
     protected void handleScanResultsAvailableAction(@Nullable Intent intent) {
-        //TODO(b/70983952): Add PasspointWifiEntry and update their scans here.
         checkNotNull(intent, "Intent cannot be null!");
         conditionallyUpdateScanResults(intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED,
                 true /* defaultValue */));
@@ -158,7 +157,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
 
         final WifiConfiguration config =
                 (WifiConfiguration) intent.getExtra(WifiManager.EXTRA_WIFI_CONFIGURATION);
-        if (config != null) {
+        if (config != null && !config.isPasspoint()) {
             updateStandardWifiEntryConfig(
                     config, (Integer) intent.getExtra(WifiManager.EXTRA_CHANGE_REASON));
         } else {
@@ -167,6 +166,17 @@ public class SavedNetworkTracker extends BaseWifiTracker {
         updatePasspointWifiEntryConfigs(mWifiManager.getPasspointConfigurations());
         updateSavedWifiEntries();
         updateSubscriptionWifiEntries();
+    }
+
+    @WorkerThread
+    @Override
+    protected void handleNetworkScoreCacheUpdated() {
+        for (StandardWifiEntry entry : mStandardWifiEntryCache.values()) {
+            entry.onScoreCacheUpdated();
+        }
+        for (PasspointWifiEntry entry : mPasspointWifiEntryCache.values()) {
+            entry.onScoreCacheUpdated();
+        }
     }
 
     private void updateSavedWifiEntries() {
@@ -300,7 +310,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
             if (changeReason != WifiManager.CHANGE_REASON_REMOVED) {
                 mStandardWifiEntryCache.put(key,
                         new StandardWifiEntry(mContext, mMainHandler, key, config, mWifiManager,
-                                true /* forSavedNetworksPage */));
+                                mWifiNetworkScoreCache, true /* forSavedNetworksPage */));
             }
         }
     }
@@ -328,7 +338,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
         for (String key : wifiConfigsByKey.keySet()) {
             mStandardWifiEntryCache.put(key,
                     new StandardWifiEntry(mContext, mMainHandler, key, wifiConfigsByKey.get(key),
-                            mWifiManager, true /* forSavedNetworksPage */));
+                            mWifiManager, mWifiNetworkScoreCache, true /* forSavedNetworksPage */));
         }
     }
 
@@ -359,7 +369,7 @@ public class SavedNetworkTracker extends BaseWifiTracker {
         for (String key : passpointConfigsByKey.keySet()) {
             mPasspointWifiEntryCache.put(key,
                     new PasspointWifiEntry(mContext, mMainHandler, passpointConfigsByKey.get(key),
-                            mWifiManager, true /* forSavedNetworksPage */));
+                            mWifiManager, mWifiNetworkScoreCache, true /* forSavedNetworksPage */));
         }
     }
 
