@@ -230,7 +230,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
 
         mWifiCarrierInfoManager = new WifiCarrierInfoManager(mTelephonyManager,
                 mSubscriptionManager, mWifiInjector, mock(FrameworkFacade.class),
-                mock(WifiContext.class), mock(WifiConfigStore.class), mock(Handler.class));
+                mock(WifiContext.class), mock(WifiConfigStore.class), mock(Handler.class),
+                mWifiMetrics);
         mLruConnectionTracker = new LruConnectionTracker(100, mContext);
         createWifiConfigManager();
         mWifiConfigManager.addOnNetworkUpdateListener(mWcmListener);
@@ -1681,6 +1682,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         assertAndSetNetworkEnterprisePassword(network, "test");
 
         verifyUpdateNetworkToWifiConfigManagerWithoutIpChange(network);
+        network.enterpriseConfig.setCaPath(WifiConfigurationTestUtil.TEST_CA_CERT_PATH);
         WifiConfigurationTestUtil.assertConfigurationEqualForConfigManagerAddOrUpdate(
                 network, mWifiConfigManager.getConfiguredNetworkWithPassword(network.networkId));
 
