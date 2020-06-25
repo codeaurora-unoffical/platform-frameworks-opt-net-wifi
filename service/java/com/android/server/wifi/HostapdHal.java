@@ -25,6 +25,7 @@ import android.hidl.manager.V1_0.IServiceManager;
 import android.hidl.manager.V1_0.IServiceNotification;
 import android.net.wifi.WifiConfiguration;
 import android.os.Handler;
+import android.os.HidlSupport.Mutable;
 import android.os.HwRemoteBinder;
 import android.os.Looper;
 import android.os.RemoteException;
@@ -45,6 +46,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import javax.annotation.concurrent.ThreadSafe;
+
+import vendor.qti.hardware.wifi.hostapd.V1_2.IHostapdVendor;
 
 /**
  * To maintain thread-safety, the locking protocol is that every non-static method (regardless of
@@ -78,10 +81,12 @@ public class HostapdHal {
     // Hostapd HAL interface objects
     private IServiceManager mIServiceManager = null;
     private IHostapd mIHostapd;
+    private IHostapdVendor mIHostapdVendor;
     private HashMap<String, WifiNative.SoftApListener> mSoftApListeners = new HashMap<>();
     private HostapdDeathEventHandler mDeathEventHandler;
     private ServiceManagerDeathRecipient mServiceManagerDeathRecipient;
     private HostapdDeathRecipient mHostapdDeathRecipient;
+    private HostapdVendorDeathRecipient mHostapdVendorDeathRecipient;
     // Death recipient cookie registered for current supplicant instance.
     private long mDeathRecipientCookie = 0;
 
@@ -136,6 +141,7 @@ public class HostapdHal {
 
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
         mHostapdDeathRecipient = new HostapdDeathRecipient();
+        mHostapdVendorDeathRecipient = new HostapdVendorDeathRecipient();
     }
 
     /**
@@ -207,6 +213,7 @@ public class HostapdHal {
                 Log.i(TAG, "Registering IHostapd service ready callback.");
             }
             mIHostapd = null;
+            mIHostapdVendor = null;
             if (mIServiceManager != null) {
                 // Already have an IServiceManager and serviceNotification registered, don't
                 // don't register another.
@@ -306,6 +313,9 @@ public class HostapdHal {
                 mIHostapd = null;
                 return false;
             }
+
+            if (!initHostapdVendorService())
+                Log.e(TAG, "Failed to init HostapdVendor service");
         }
         return true;
     }
@@ -464,6 +474,7 @@ public class HostapdHal {
     private void clearState() {
         synchronized (mLock) {
             mIHostapd = null;
+            mIHostapdVendor = null;
         }
     }
 
@@ -724,6 +735,157 @@ public class HostapdHal {
             if (listener != null) {
                 listener.onFailure();
             }
+        }
+    }
+
+
+    /**========== Hostpad Vendor HIDL definitions ====================*/
+
+    /**
+     * Death recipient for IHostapdVendor object
+     */
+    private class HostapdVendorDeathRecipient implements HwRemoteBinder.DeathRecipient {
+        @Override
+        public void serviceDied(long cookie) {
+            mEventHandler.post(() -> {
+                synchronized (mLock) {
+                    Log.w(TAG, "IHostapdVendor died: cookie=" + cookie);
+                    hostapdServiceDiedHandler(cookie);
+                }
+            });
+        }
+    }
+
+    /**
+     * Link to death for IHostapdVendor object.
+     * @return true on success, false otherwise.
+     */
+    private boolean linkToHostapdVendorDeath() {
+        synchronized (mLock) {
+            if (mIHostapdVendor == null) return false;
+            try {
+                if (!mIHostapdVendor.linkToDeath(mHostapdVendorDeathRecipient, 0)) {
+                    Log.wtf(TAG, "Error on linkToDeath on IHostapdVendor");
+                    hostapdServiceDiedHandler(0);
+                    return false;
+                }
+            } catch (RemoteException e) {
+                Log.e(TAG, "IHostapdVendor.linkToDeath exception", e);
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Initialize the IHostapdVendor object.
+     * @return true on success, false otherwise.
+     */
+    public boolean initHostapdVendorService() {
+        synchronized (mLock) {
+            try {
+                mIHostapdVendor = getHostapdVendorMockable();
+            } catch (RemoteException e) {
+                Log.e(TAG, "IHostapdVendor.getService exception: " + e);
+                return false;
+            }
+            if (mIHostapdVendor == null) {
+                Log.e(TAG, "Got null IHostapdVendor service. Stopping hostapdVendor HIDL startup");
+                return false;
+            }
+            if (!linkToHostapdVendorDeath()) {
+                return false;
+            }
+        }
+        return true;
+     }
+
+    @VisibleForTesting
+    protected IHostapdVendor getHostapdVendorMockable() throws RemoteException {
+        synchronized (mLock) {
+            return IHostapdVendor.getService();
+        }
+    }
+
+    /**
+     * Returns false if HostapdVendor is null, and logs failure to call methodStr
+     */
+    private boolean checkHostapdVendorAndLogFailure(String methodStr) {
+        synchronized (mLock) {
+            if (mIHostapdVendor == null) {
+                Log.e(TAG, "Can't call " + methodStr + ", IHostapdVendor is null");
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Returns true if provided status code is SUCCESS, logs debug message and returns false
+     * otherwise
+     */
+    private boolean checkVendorStatusAndLogFailure(HostapdStatus status,
+            String methodStr) {
+        synchronized (mLock) {
+            if (status.code != HostapdStatusCode.SUCCESS) {
+                Log.e(TAG, "IHostapdVendor." + methodStr + " failed: " + status.code
+                        + ", " + status.debugMessage);
+                return false;
+            } else {
+                if (mVerboseLoggingEnabled) {
+                    Log.d(TAG, "IHostapdVendor." + methodStr + " succeeded");
+                }
+                return true;
+            }
+        }
+    }
+
+    /**
+     * List active hostapd interfaces via HIDL.
+     *
+     * @return true on success, false otherwise.
+     */
+    public ArrayList<String> listInterfaces() {
+        synchronized (mLock) {
+            final String methodStr = "listInterfaces";
+            if (!checkHostapdVendorAndLogFailure(methodStr)) return null;
+            Mutable<ArrayList<String>> ifaceNamesResp = new Mutable<>();
+            try {
+                mIHostapdVendor.listInterfaces(
+                        (HostapdStatus status, ArrayList<String> ifnames) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                ifaceNamesResp.value = ifnames;
+                            }
+                        });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return ifaceNamesResp.value;
+        }
+    }
+
+    /**
+     * Set hostapd commands via HIDL.
+     *
+     * @param cmd to hostapd.
+     * @return true on success, false otherwise.
+     */
+    public String hostapdCmd(@NonNull String ifname, @NonNull String cmd) {
+        synchronized (mLock) {
+            final String methodStr = "hostapdCommand";
+            if (!checkHostapdVendorAndLogFailure(methodStr)) return "";
+            Mutable<String> gotReply = new Mutable<>("");
+            try {
+                mIHostapdVendor.hostapdCmd(ifname, cmd,
+                        (HostapdStatus status, String reply) -> {
+                            if (checkVendorStatusAndLogFailure(status, methodStr)) {
+                                gotReply.value = reply;
+                            }
+                });
+            } catch (RemoteException e) {
+                handleRemoteException(e, methodStr);
+            }
+            return gotReply.value;
         }
     }
 }
