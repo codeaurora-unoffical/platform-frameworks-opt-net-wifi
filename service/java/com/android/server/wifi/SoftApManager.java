@@ -95,6 +95,8 @@ public class SoftApManager implements ActiveModeManager {
     private boolean mTimeoutEnabled = false;
 
     private final SarManager mSarManager;
+    private String[] mdualApInterfaces;
+    private boolean expectedStop = false;
 
     /**
      * Listener for soft AP events.
@@ -154,6 +156,7 @@ public class SoftApManager implements ActiveModeManager {
         }
         mWifiMetrics = wifiMetrics;
         mSarManager = sarManager;
+        mdualApInterfaces = new String[2];
         mStateMachine = new SoftApStateMachine(looper);
     }
 
@@ -169,6 +172,7 @@ public class SoftApManager implements ActiveModeManager {
      */
     public void stop() {
         Log.d(TAG, " currentstate: " + getCurrentStateName());
+        expectedStop = true;
         if (mApInterfaceName != null) {
             if (mIfaceIsUp) {
                 updateApState(WifiManager.WIFI_AP_STATE_DISABLING,
@@ -236,8 +240,10 @@ public class SoftApManager implements ActiveModeManager {
 
         if (mApBrInterfaceName != null) {
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mApBrInterfaceName);
+            Log.e(TAG, "updateApState interface name: mApBr" + mApBrInterfaceName);
         } else {
             intent.putExtra(WifiManager.EXTRA_WIFI_AP_INTERFACE_NAME, mApInterfaceName);
+            Log.e(TAG, "updateApState interface name: mAp" + mApInterfaceName);
         }
         intent.putExtra(WifiManager.EXTRA_WIFI_AP_MODE, mMode);
         mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
@@ -302,10 +308,13 @@ public class SoftApManager implements ActiveModeManager {
      * Teardown soft AP and teardown the interface.
      */
     private void stopSoftAp() {
-        mWifiNative.teardownInterface(mApInterfaceName);
-        Log.d(TAG, "Soft AP is stopped");
+        if (mWifiApConfigStore.getDualSapStatus()) {
+            mWifiNative.teardownInterface(mdualApInterfaces[0]);
+            mWifiNative.teardownInterface(mdualApInterfaces[1]);
+        }
+            mWifiNative.teardownInterface(mApInterfaceName);
+            Log.d(TAG, "Soft AP is stopped");
     }
-
     private class SoftApStateMachine extends StateMachine {
         // Commands for the state machine.
         public static final int CMD_START = 0;
@@ -325,25 +334,87 @@ public class SoftApManager implements ActiveModeManager {
         private final InterfaceCallback mWifiNativeInterfaceCallback = new InterfaceCallback() {
             @Override
             public void onDestroyed(String ifaceName) {
-                if (mApInterfaceName != null && mApInterfaceName.equals(ifaceName)) {
+                if ((mApInterfaceName != null && mApInterfaceName.equals(ifaceName)) ||
+                   (mApBrInterfaceName != null && mApBrInterfaceName.equals(ifaceName))) {
                     sendMessage(CMD_INTERFACE_DESTROYED);
                 }
             }
 
             @Override
             public void onUp(String ifaceName) {
-                if (mApInterfaceName != null && mApInterfaceName.equals(ifaceName)) {
+                if ((mApInterfaceName != null && mApInterfaceName.equals(ifaceName)) ||
+                       (mApBrInterfaceName != null && mApBrInterfaceName.equals(ifaceName))) {
                     sendMessage(CMD_INTERFACE_STATUS_CHANGED, 1);
                 }
             }
 
             @Override
             public void onDown(String ifaceName) {
-                if (mApInterfaceName != null && mApInterfaceName.equals(ifaceName)) {
+                if ((mApInterfaceName != null && mApInterfaceName.equals(ifaceName))||
+                       (mApBrInterfaceName != null && mApBrInterfaceName.equals(ifaceName))) {
                     sendMessage(CMD_INTERFACE_STATUS_CHANGED, 0);
                 }
             }
         };
+
+        private final InterfaceCallback mWifiNativeDualIfaceCallback = new InterfaceCallback() {
+            @Override
+            public void onDestroyed(String ifaceName) {
+                //one of the dual interface is destroyed by native layers. trigger full cleanup.
+                if (!expectedStop) {
+                    Log.e(TAG, "One of Dual interface ("+ifaceName+") destroyed. trigger cleanup");
+                    // Avoid cleaning the interface which is already destroyed. 
+                    if (ifaceName.equals(mdualApInterfaces[0]))
+                        mdualApInterfaces[0] = "";
+                    else if (ifaceName.equals(mdualApInterfaces[1]))
+                        mdualApInterfaces[1] = "";
+
+                    stop();
+                }
+            }
+
+            @Override
+            public void onUp(String ifaceName) {}
+
+            @Override
+            public void onDown(String ifaceName) {}
+        };
+
+        /**
+         *Start Dual soft AP.
+         */
+        private int setupForDualSoftApMode(WifiConfiguration config) {
+            mdualApInterfaces[0] = mWifiNative.setupInterfaceForSoftApMode(
+                    mWifiNativeDualIfaceCallback);
+            mdualApInterfaces[1] = mWifiNative.setupInterfaceForSoftApMode(
+                    mWifiNativeDualIfaceCallback);
+
+           if (TextUtils.isEmpty(mdualApInterfaces[0]) ||
+                  TextUtils.isEmpty(mdualApInterfaces[1])) {
+                Log.e(TAG, "setup failure when creating dual ap interface(s).");
+                updateApState(WifiManager.WIFI_AP_STATE_FAILED,
+                        WifiManager.WIFI_AP_STATE_DISABLED,
+                        WifiManager.SAP_START_FAILURE_GENERAL);
+                mWifiMetrics.incrementSoftApStartResult(false,
+                        WifiManager.SAP_START_FAILURE_GENERAL);
+                return ERROR_GENERIC;
+            }
+
+            updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
+                    WifiManager.WIFI_AP_STATE_DISABLED, 0);
+
+            WifiConfiguration localConfig = new WifiConfiguration(config);
+            mApInterfaceName = mdualApInterfaces[0];
+            localConfig.apBand =  WifiConfiguration.AP_BAND_2GHZ;
+            int result = startSoftAp(localConfig);
+            if (result == SUCCESS) {
+                localConfig.apBand =  WifiConfiguration.AP_BAND_5GHZ;
+                mApInterfaceName = mdualApInterfaces[1];
+                result = startSoftAp(localConfig);
+            }
+
+            return result;
+        }
 
         SoftApStateMachine(Looper looper) {
             super(TAG, looper);
@@ -359,6 +430,7 @@ public class SoftApManager implements ActiveModeManager {
             @Override
             public void enter() {
                 mApInterfaceName = null;
+                mApBrInterfaceName = null;
                 mIfaceIsUp = false;
             }
 
@@ -366,23 +438,34 @@ public class SoftApManager implements ActiveModeManager {
             public boolean processMessage(Message message) {
                 switch (message.what) {
                     case CMD_START:
-                        mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
-                                mWifiNativeInterfaceCallback);
-                        if (TextUtils.isEmpty(mApInterfaceName)) {
-                            Log.e(TAG, "setup failure when creating ap interface.");
-                            updateApState(WifiManager.WIFI_AP_STATE_FAILED,
-                                    WifiManager.WIFI_AP_STATE_DISABLED,
-                                    WifiManager.SAP_START_FAILURE_GENERAL);
-                            mWifiMetrics.incrementSoftApStartResult(
-                                    false, WifiManager.SAP_START_FAILURE_GENERAL);
-                            break;
-                        }
-                        updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
-                                WifiManager.WIFI_AP_STATE_DISABLED, 0);
-                        int result = startSoftAp((WifiConfiguration) message.obj);
-                        // OWE transition mode - setup bridge
+                        int result = SUCCESS;
                         WifiConfiguration localConfig = (WifiConfiguration) message.obj;
-                        if (localConfig.getAuthType() == WifiConfiguration.KeyMgmt.OWE) {
+                        if (localConfig.apBand == WifiConfiguration.AP_BAND_DUAL) {
+                            if (localConfig.getAuthType() == WifiConfiguration.KeyMgmt.OWE) {
+                                 Log.e(TAG, "Current dual AP doesn't support OWE security mode");
+                                 break;
+                            } else {
+                                 result = setupForDualSoftApMode(localConfig);
+                            }
+                        } else {
+                            mApInterfaceName = mWifiNative.setupInterfaceForSoftApMode(
+                                    mWifiNativeInterfaceCallback);
+                            if (TextUtils.isEmpty(mApInterfaceName)) {
+                                Log.e(TAG, "setup failure when creating ap interface.");
+                                updateApState(WifiManager.WIFI_AP_STATE_FAILED,
+                                        WifiManager.WIFI_AP_STATE_DISABLED,
+                                        WifiManager.SAP_START_FAILURE_GENERAL);
+                                mWifiMetrics.incrementSoftApStartResult(
+                                        false, WifiManager.SAP_START_FAILURE_GENERAL);
+                                break;
+                            }
+                            updateApState(WifiManager.WIFI_AP_STATE_ENABLING,
+                                    WifiManager.WIFI_AP_STATE_DISABLED, 0);
+                            result = startSoftAp((WifiConfiguration) message.obj);
+                        }
+                        // OWE transition mode - setup bridge
+                        if (localConfig.getAuthType() == WifiConfiguration.KeyMgmt.OWE ||
+                            localConfig.apBand == WifiConfiguration.AP_BAND_DUAL)  {
                             String bridgeName = mWifiNative.setupInterfaceForBridgeMode(
                                                               mWifiNativeInterfaceCallback);
                             if (TextUtils.isEmpty(bridgeName)) {

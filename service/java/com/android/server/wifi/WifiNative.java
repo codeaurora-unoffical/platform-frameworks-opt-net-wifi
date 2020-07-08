@@ -116,6 +116,7 @@ public class WifiNative {
         /** Type of ifaces possible */
         public static final int IFACE_TYPE_AP = 0;
         public static final int IFACE_TYPE_STA = 1;
+        public static final int IFACE_TYPE_BRIDGE = 2;
 
         @IntDef({IFACE_TYPE_AP, IFACE_TYPE_STA})
         @Retention(RetentionPolicy.SOURCE)
@@ -142,13 +143,28 @@ public class WifiNative {
         @Override
         public String toString() {
             StringBuffer sb = new StringBuffer();
+            String typeString;
+            switch(type) {
+                case IFACE_TYPE_STA:
+                    typeString = "STA";
+                    break;
+                case IFACE_TYPE_AP:
+                    typeString = "AP";
+                    break;
+                case IFACE_TYPE_BRIDGE:
+                    typeString = "BRIDGE";
+                    break;
+                default:
+                    typeString = "<UNKNOW>";
+                    break;
+            }
             sb.append("Iface:")
                 .append("{")
                 .append("Name=").append(name)
                 .append(",")
                 .append("Id=").append(id)
                 .append(",")
-                .append("Type=").append(type == IFACE_TYPE_STA ? "STA" : "AP")
+                .append("Type=").append(typeString)
                 .append("}");
             return sb.toString();
         }
@@ -160,6 +176,7 @@ public class WifiNative {
     private static class IfaceManager {
         /** Integer to allocate for the next iface being created */
         private int mNextId;
+        private int apIfaceNum;
         /** Map of the id to the iface structure */
         private HashMap<Integer, Iface> mIfaces = new HashMap<>();
 
@@ -421,17 +438,32 @@ public class WifiNative {
             } else if (!mHostapdHal.removeAccessPoint(iface.name)) {
                 Log.e(TAG, "Failed to remove access point on " + iface);
             }
-            if (!mHostapdHal.deregisterDeathHandler()) {
-                Log.e(TAG, "Failed to deregister supplicant death handler");
-            }
-            // TODO(b/71513606): Move this to a global operation.
-            if (!mWificondControl.stopHostapd(iface.name)) {
-                Log.e(TAG, "Failed to stop hostapd on " + iface);
-            }
             if (!mWificondControl.tearDownSoftApInterface(iface.name)) {
                 Log.e(TAG, "Failed to teardown iface in wificond on " + iface);
             }
+            // For dual AP case,  only stop hostapd when remove all AP interface
+            if (!mIfaceMgr.hasAnyApIface()) {
+                if (!mHostapdHal.deregisterDeathHandler()) {
+                    Log.e(TAG, "Failed to deregister supplicant death handler");
+                }
+                mHostapdHal.terminate();
+                mIfaceMgr.apIfaceNum = 0;
+            } else {
+                mIfaceMgr.apIfaceNum--;
+            }
+
             stopHalAndWificondIfNecessary();
+            Log.d(TAG, "onSoftApInterfaceDestroyed:  Ap Interface Number " + mIfaceMgr.apIfaceNum);
+        }
+    }
+
+    /** Helper method invoked to teardown Bridge iface and perform necessary cleanup */
+    private void onBridgeInterfaceDestroyed(@NonNull Iface iface) {
+        synchronized (mLock) {
+            if (!unregisterNetworkObserver(iface.networkObserver)) {
+                Log.e(TAG, "Failed to unregister network observer on " + iface);
+			}
+	        stopHalAndWificondIfNecessary();
         }
     }
 
@@ -442,6 +474,8 @@ public class WifiNative {
                 onClientInterfaceDestroyed(iface);
             } else if (iface.type == Iface.IFACE_TYPE_AP) {
                 onSoftApInterfaceDestroyed(iface);
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                onBridgeInterfaceDestroyed(iface);
             }
             // Invoke the external callback.
             iface.externalListener.onDestroyed(iface.name);
@@ -566,7 +600,8 @@ public class WifiNative {
                 iface.externalListener.onDown(iface.name);
                 if (iface.type == Iface.IFACE_TYPE_STA) {
                     mWifiMetrics.incrementNumClientInterfaceDown();
-                } else if (iface.type == Iface.IFACE_TYPE_AP) {
+                } else if (iface.type == Iface.IFACE_TYPE_AP
+                       || iface.type == Iface.IFACE_TYPE_BRIDGE) {
                     mWifiMetrics.incrementNumSoftApInterfaceDown();
                 }
             }
@@ -919,6 +954,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
                 return null;
             }
+
             Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_AP);
             if (iface == null) {
                 Log.e(TAG, "Failed to allocate new AP iface");
@@ -968,7 +1004,7 @@ public class WifiNative {
                 mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHal();
                 return null;
             }
-            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_AP);
+            Iface iface = mIfaceMgr.allocateIface(Iface.IFACE_TYPE_BRIDGE);
             if (iface == null) {
                 Log.e(TAG, "Failed to allocate new bridge iface");
                 return null;
@@ -1049,6 +1085,9 @@ public class WifiNative {
                     Log.e(TAG, "Failed to remove iface in vendor HAL=" + ifaceName);
                     return;
                 }
+            } else if (iface.type == Iface.IFACE_TYPE_BRIDGE) {
+                mIfaceMgr.removeIface(iface.id);
+                onInterfaceDestroyed(iface);
             }
             Log.i(TAG, "Successfully initiated teardown for iface=" + ifaceName);
         }
@@ -1331,10 +1370,15 @@ public class WifiNative {
      */
     public boolean startSoftAp(
             @NonNull String ifaceName, WifiConfiguration config, SoftApListener listener) {
+
+        //avoid to start hostapd application twice in dual Ap case
+     if (mIfaceMgr.apIfaceNum == 0) {
+
         if (!waitForPreviousHostapdDie()) {
             Log.e(TAG, "Failed to wait for previous hostapd dying");
             return false;
         }
+
         if (!mWificondControl.startHostapd(ifaceName, listener)) {
             Log.e(TAG, "Failed to start hostapd");
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
@@ -1350,6 +1394,7 @@ public class WifiNative {
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
         }
+     }
 
         if (mHostapdHal.isVendorHostapdHal()) {
             if (!mHostapdHal.addVendorAccessPoint(ifaceName, config, listener)) {
@@ -1362,6 +1407,8 @@ public class WifiNative {
             mWifiMetrics.incrementNumSetupSoftApInterfaceFailureDueToHostapd();
             return false;
         }
+        mIfaceMgr.apIfaceNum++;
+        Log.d(TAG, "startSoftAp: Ap Interface Number " + mIfaceMgr.apIfaceNum);
         return true;
     }
 

@@ -409,7 +409,8 @@ public class HostapdHal {
 
             if (!checkHostapdVendorAndLogFailure(methodStr)) return false;
             try {
-                if (config.getAuthType() == WifiConfiguration.KeyMgmt.OWE) {
+                if (config.getAuthType() == WifiConfiguration.KeyMgmt.OWE
+                    || apConfigStore.getDualSapStatus()) {
                     String bridgeIfaceName = apConfigStore.getBridgeInterface();
                     vendorIfaceParams.bridgeIfaceName = (bridgeIfaceName != null) ? bridgeIfaceName : "";
                 }

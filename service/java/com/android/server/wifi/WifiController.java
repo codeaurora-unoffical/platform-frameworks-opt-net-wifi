@@ -64,6 +64,7 @@ public class WifiController extends StateMachine {
     private final Looper mWifiStateMachineLooper;
     private final WifiStateMachinePrime mWifiStateMachinePrime;
     private final WifiSettingsStore mSettingsStore;
+	private final WifiApConfigStore mWifiApConfigStore;
 
     /**
      * Temporary for computing UIDS that are responsible for starting WIFI.
@@ -117,6 +118,7 @@ public class WifiController extends StateMachine {
         mWifiStateMachineLooper = wifiStateMachineLooper;
         mWifiStateMachinePrime = wsmp;
         mSettingsStore = wss;
+        mWifiApConfigStore = WifiInjector.getInstance().getWifiApConfigStore();
 
         // CHECKSTYLE:OFF IndentationCheck
         addState(mDefaultState);
@@ -254,7 +256,6 @@ public class WifiController extends StateMachine {
             switch (msg.what) {
                 case CMD_SCAN_ALWAYS_MODE_CHANGED:
                 case CMD_WIFI_TOGGLED:
-                case CMD_AP_START_FAILURE:
                 case CMD_SCANNING_STOPPED:
                 case CMD_STA_STOPPED:
                 case CMD_STA_START_FAILURE:
@@ -312,6 +313,8 @@ public class WifiController extends StateMachine {
                         transitionTo(mEcmState);
                     }
                     break;
+                case CMD_AP_START_FAILURE:
+                    mWifiStateMachinePrime.stopSoftAPMode();
                 case CMD_AP_STOPPED:
                     log("SoftAp mode disabled, determine next state");
                     if (mSettingsStore.isWifiToggleEnabled()) {
