@@ -16,7 +16,11 @@
 
 package com.android.server.wifi;
 
+import android.annotation.Nullable;
+
+import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtil;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -40,7 +44,8 @@ public class RandomizedMacStoreData implements WifiConfigStore.StoreData {
     RandomizedMacStoreData() {}
 
     @Override
-    public void serializeData(XmlSerializer out)
+    public void serializeData(XmlSerializer out,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         if (mMacMapping != null) {
             XmlUtil.writeNextValue(out, XML_TAG_MAC_MAP, mMacMapping);
@@ -48,7 +53,9 @@ public class RandomizedMacStoreData implements WifiConfigStore.StoreData {
     }
 
     @Override
-    public void deserializeData(XmlPullParser in, int outerTagDepth)
+    public void deserializeData(XmlPullParser in, int outerTagDepth,
+            @WifiConfigStore.Version int version,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         // Ignore empty reads.
         if (in == null) {
@@ -91,6 +98,13 @@ public class RandomizedMacStoreData implements WifiConfigStore.StoreData {
     @Override
     public @WifiConfigStore.StoreFileId int getStoreFileId() {
         // Shared general store.
+        return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
+    }
+    @Override
+    public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+        // Shared general store.
+        if (staId == STA_SECONDARY)
+            return WifiConfigStore.QTI_STORE_FILE_SHARED_SECONDARY;
         return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
     }
 

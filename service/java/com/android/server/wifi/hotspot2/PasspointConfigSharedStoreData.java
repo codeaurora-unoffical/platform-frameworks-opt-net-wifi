@@ -16,8 +16,12 @@
 
 package com.android.server.wifi.hotspot2;
 
+import android.annotation.Nullable;
+
 import com.android.server.wifi.WifiConfigStore;
+import com.android.server.wifi.util.WifiConfigStoreEncryptionUtil;
 import com.android.server.wifi.util.XmlUtil;
+import static android.net.wifi.WifiManager.STA_SECONDARY;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -72,13 +76,16 @@ public class PasspointConfigSharedStoreData implements WifiConfigStore.StoreData
     }
 
     @Override
-    public void serializeData(XmlSerializer out)
+    public void serializeData(XmlSerializer out,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         serializeShareData(out);
     }
 
     @Override
-    public void deserializeData(XmlPullParser in, int outerTagDepth)
+    public void deserializeData(XmlPullParser in, int outerTagDepth,
+            @WifiConfigStore.Version int version,
+            @Nullable WifiConfigStoreEncryptionUtil encryptionUtil)
             throws XmlPullParserException, IOException {
         // Ignore empty reads.
         if (in == null) {
@@ -109,6 +116,13 @@ public class PasspointConfigSharedStoreData implements WifiConfigStore.StoreData
     @Override
     public @WifiConfigStore.StoreFileId int getStoreFileId() {
         // Shared general store.
+        return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
+    }
+    @Override
+    public @WifiConfigStore.StoreFileId int getStoreFileId(int staId) {
+        // Shared general store.
+        if (staId == STA_SECONDARY)
+                return WifiConfigStore.QTI_STORE_FILE_SHARED_SECONDARY;
         return WifiConfigStore.STORE_FILE_SHARED_GENERAL;
     }
 

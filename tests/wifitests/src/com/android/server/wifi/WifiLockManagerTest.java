@@ -42,6 +42,7 @@ import org.mockito.MockitoAnnotations;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.NoSuchElementException;
 
 /** Unit tests for {@link WifiLockManager}. */
 @SmallTest
@@ -158,17 +159,6 @@ public class WifiLockManagerTest {
     @Test
     public void newWifiLockManagerShouldNotHaveAnyLocks() {
         assertEquals(WifiManager.WIFI_MODE_NO_LOCKS_HELD, mWifiLockManager.getStrongestLockMode());
-    }
-
-    /**
-     * Test to verify that the lock mode is verified before adding a lock.
-     *
-     * Steps: call acquireWifiLock with an invalid lock mode.
-     * Expected: the call should throw an IllegalArgumentException.
-     */
-    @Test(expected = IllegalArgumentException.class)
-    public void acquireWifiLockShouldThrowExceptionOnInivalidLockMode() throws Exception {
-        mWifiLockManager.acquireWifiLock(WIFI_LOCK_MODE_INVALID, "", mBinder, mWorkSource);
     }
 
     /**
@@ -1391,5 +1381,20 @@ public class WifiLockManagerTest {
                 "WifiLock{" + TEST_WIFI_LOCK_TAG + " type=" + WifiManager.WIFI_MODE_FULL_HIGH_PERF
                 + " uid=" + Binder.getCallingUid() + " workSource=WorkSource{"
                         + DEFAULT_TEST_UID_1 + "}"));
+    }
+
+    /**
+     * Verify that an Exception in unlinkDeathRecipient is caught.
+     */
+    @Test
+    public void testUnlinkDeathRecipiientCatchesException() throws Exception {
+        acquireWifiLockSuccessful(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "",
+                mBinder, mWorkSource);
+        assertEquals(WifiManager.WIFI_MODE_FULL_HIGH_PERF, mWifiLockManager.getStrongestLockMode());
+
+        doThrow(new NoSuchElementException()).when(mBinder).unlinkToDeath(any(), anyInt());
+        releaseLowLatencyWifiLockSuccessful(mBinder);
+        assertEquals(WifiManager.WIFI_MODE_NO_LOCKS_HELD,
+                mWifiLockManager.getStrongestLockMode());
     }
 }

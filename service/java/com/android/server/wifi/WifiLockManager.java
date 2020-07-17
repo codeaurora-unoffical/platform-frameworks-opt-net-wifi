@@ -26,6 +26,7 @@ import android.os.RemoteException;
 import android.os.WorkSource;
 import android.os.WorkSource.WorkChain;
 import android.util.Slog;
+import android.util.Log;
 import android.util.SparseArray;
 import android.util.StatsLog;
 
@@ -34,6 +35,7 @@ import com.android.internal.app.IBatteryStats;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 /**
  * WifiLockManager maintains the list of wake locks held by different applications.
@@ -183,15 +185,10 @@ public class WifiLockManager {
      * @return true if the lock was successfully acquired, false if the lockMode was invalid.
      */
     public boolean acquireWifiLock(int lockMode, String tag, IBinder binder, WorkSource ws) {
-        if (!isValidLockMode(lockMode)) {
-            throw new IllegalArgumentException("lockMode =" + lockMode);
-        }
-
         // Make a copy of the WorkSource before adding it to the WakeLock
         // This is to make sure worksource value can not be changed by caller
         // after function returns.
         WorkSource newWorkSource = new WorkSource(ws);
-
         return addLock(new WifiLock(lockMode, tag, binder, newWorkSource));
     }
 
@@ -384,7 +381,13 @@ public class WifiLockManager {
         }
     }
 
-    private static boolean isValidLockMode(int lockMode) {
+    /**
+     * Validate that the lock mode is valid - i.e. one of the supported enumerations.
+     *
+     * @param lockMode The lock mode to verify.
+     * @return true for valid lock modes, false otherwise.
+     */
+    public static boolean isValidLockMode(int lockMode) {
         if (lockMode != WifiManager.WIFI_MODE_FULL
                 && lockMode != WifiManager.WIFI_MODE_SCAN_ONLY
                 && lockMode != WifiManager.WIFI_MODE_FULL_HIGH_PERF
@@ -801,6 +804,7 @@ public class WifiLockManager {
             try {
                 mBinder.linkToDeath(this, 0);
             } catch (RemoteException e) {
+                Log.e(TAG, "mBinder.linkToDeath failed: " + e.getMessage());
                 binderDied();
             }
         }
@@ -826,7 +830,11 @@ public class WifiLockManager {
         }
 
         public void unlinkDeathRecipient() {
-            mBinder.unlinkToDeath(this, 0);
+            try {
+                mBinder.unlinkToDeath(this, 0);
+            } catch (NoSuchElementException e) {
+                Log.e(TAG, "mBinder.unlinkToDeath failed: " + e.getMessage());
+            }
         }
 
         public String toString() {
