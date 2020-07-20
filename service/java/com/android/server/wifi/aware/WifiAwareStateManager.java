@@ -40,6 +40,7 @@ import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.ShellCommand;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.text.TextUtils;
 import android.util.ArrayMap;
@@ -704,6 +705,12 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
             if (mDbg) Log.d(TAG, "enableUsage(): while Wi-Fi is disabled - ignoring");
             return;
         }
+        // disable NAN if vendor aware is set to false
+        if (!SystemProperties.getBoolean("ro.vendor.wlan.aware", true)) {
+            Log.d(TAG, "enableUsage(): while vendor aware is set to false - ignoring");
+            return;
+        }
+
         Message msg = mSm.obtainMessage(MESSAGE_TYPE_COMMAND);
         msg.arg1 = COMMAND_TYPE_ENABLE_USAGE;
         mSm.sendMessage(msg);
