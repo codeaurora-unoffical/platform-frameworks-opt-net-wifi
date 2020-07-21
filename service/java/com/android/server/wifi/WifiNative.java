@@ -2958,13 +2958,17 @@ public class WifiNative {
     }
 
     // ---------------------------------------------------------------------------------
-    /* Hostapd Vendor APIs */
+    /* Hostapd / Wpa_supplicant vendor APIs */
     public ArrayList<String> listApInterfaces() {
         return mHostapdHal.listInterfaces();
     }
 
     public String hostapdCmd(String ifname, String cmd) {
         return mHostapdHal.hostapdCmd(ifname, cmd);
+    }
+
+    public String wpaDriverCmd(String ifname, String cmd) {
+        return mSupplicantStaIfaceHal.doDriverCmd(ifname, cmd);
     }
 
     //---------------------------------------------------------------------------------
