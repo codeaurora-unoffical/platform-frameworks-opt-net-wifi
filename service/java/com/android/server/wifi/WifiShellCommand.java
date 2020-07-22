@@ -151,6 +151,34 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         final PrintWriter pw = getOutPrintWriter();
         try {
             switch (cmd) {
+                case "qca-list-ifaces" : {
+                    pw.println("Active STA ifaces: " + mWifiNative.getClientInterfaceNames());
+                    pw.println("Active AP  ifaces: " + mWifiNative.getSoftApInterfaceNames());
+                    return 0;
+                }
+                case "qca-set-txpower": {
+                    String ifname = getNextArgRequired();
+                    String value = getNextArgRequired();
+                    if (ifname == null || value == null) {
+                        pw.println("Invalid argument to 'qca-set-txpower <ifname> <max tx power in dBm>' required");
+                        return -1;
+                    }
+                    int dbm = 0;
+                    try {
+                        dbm = Integer.parseInt(value);
+                    } catch(Exception e) {
+                        pw.println("<max tx power in dBm> MUST be integer");
+                        return -1;
+                    }
+                    if (dbm < 0) {
+                        pw.println("<max tx power in dBm> MUST >= 0");
+                        return -1;
+                    }
+
+                    boolean result = mWifiNative.setTxPower(ifname, dbm);
+                    pw.println("set-txpower result -> " + result);
+                    return 0;
+                }
                 case "set-ipreach-disconnect": {
                     boolean enabled = getNextArgRequiredTrueOrFalse("enabled", "disabled");
                     mClientModeImpl.setIpReachabilityDisconnectEnabled(enabled);
@@ -1011,6 +1039,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Queries whether network requests from the app is approved or not.");
         pw.println("    Note: This only returns whether the app was set via the " +
                 "'network-requests-set-user-approved' shell command");
+        pw.println("  qca-list-ifaces");
+        pw.println("    Lists active STA/AP interfaces (could be bridge interfaces)");
+        pw.println("  qca-set-txpower <iface> <power in dBm>");
+        pw.println("    Sets max txpower in dBm, and <iface> is from 'qca-list-ifaces'");
     }
 
     @Override

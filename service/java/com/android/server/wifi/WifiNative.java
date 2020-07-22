@@ -308,6 +308,16 @@ public class WifiNative {
             return ifaceNames;
         }
 
+        private @NonNull Set<String> findAllApIfaceNames() {
+            Set<String> ifaceNames = new ArraySet<>();
+            for (Iface iface : mIfaces.values()) {
+                if (iface.type == Iface.IFACE_TYPE_AP) {
+                    ifaceNames.add(iface.name);
+                }
+            }
+            return ifaceNames;
+        }
+
         /** Removes the existing iface that does not match the provided id. */
         public Iface removeExistingIface(int newIfaceId) {
             Iface removedIface = null;
@@ -1392,6 +1402,20 @@ public class WifiNative {
             return mIfaceMgr.findAnyApIfaceName();
         }
     }
+
+    /**
+     * Get names of all the softap interfaces.
+     *
+     * Note: For bridge interface, it also returns bridge not inner managed interfaces.
+     *
+     * @return HashMap of interface name of all active softap interfaces.
+     */
+    public Set<String> getSoftApInterfaceNames() {
+        synchronized (mLock) {
+            return mIfaceMgr.findAllApIfaceNames();
+        }
+    }
+
 
     /********************************************************
      * Wificond operations
@@ -2967,8 +2991,53 @@ public class WifiNative {
         return mHostapdHal.hostapdCmd(ifname, cmd);
     }
 
+    public String hapdDriverCmd(String ifname, String cmd) {
+        return mHostapdHal.hostapdCmd(ifname, "DRIVER " + cmd);
+    }
+
     public String wpaDriverCmd(String ifname, String cmd) {
         return mSupplicantStaIfaceHal.doDriverCmd(ifname, cmd);
+    }
+
+    private boolean setSuccess(String reply) {
+        if (reply != null && reply.contains("OK")) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Set Max TX power in dBm
+     * @param ifname Name of the interface
+     * @param dbm tx power in dBm.
+     * @return results of setTxPower
+     */
+    public boolean setTxPower(String ifname, int dbm) {
+        int iface_type = -1;
+        final String kSetTxPowerCmd = "SET_TXPOWER " + dbm;
+
+        synchronized (mLock) {
+            Iface iface = mIfaceMgr.getIface(ifname);
+            if (iface != null) {
+                iface_type = iface.type;
+            }
+        }
+        if (iface_type == Iface.IFACE_TYPE_AP) {
+            if (ifname.contains("br")) {
+                // bridge interface
+                ArrayList<String> ifaces = listApInterfaces();
+                if (ifaces != null && ifaces.size() > 0) {
+                    return setSuccess(hapdDriverCmd(ifaces.get(0), kSetTxPowerCmd));
+                }
+            } else {
+                return setSuccess(hapdDriverCmd(ifname, kSetTxPowerCmd));
+            }
+        } else if (iface_type == Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY
+                   || iface_type == Iface.IFACE_TYPE_STA_FOR_SCAN) {
+            return setSuccess(wpaDriverCmd(ifname, kSetTxPowerCmd));
+        }
+
+        return false;
     }
 
     //---------------------------------------------------------------------------------
