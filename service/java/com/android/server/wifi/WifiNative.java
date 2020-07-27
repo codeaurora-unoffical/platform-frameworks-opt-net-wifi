@@ -92,13 +92,12 @@ public class WifiNative {
     private final Handler mHandler;
     private final Random mRandom;
     private boolean mVerboseLoggingEnabled = false;
-    private boolean mIs5GhzBandSupportedInitialized = false;
-    private boolean mIs5GhzBandSupported = true;
     private final FstManagerGroupHal mFstManagerGroupHal;
     private boolean mIsFstAvailable;
     private String mFstSlaveIface;
     private String mFstGroupName;
     private String mFstMuxInterface;
+
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
                       WificondControl condControl, WifiMonitor wifiMonitor,
@@ -2063,28 +2062,6 @@ public class WifiNative {
     }
 
     /**
-     * Get 5Ghz band supported info from driver
-     *
-     * @return true if 5Ghz band supported, otherwise false.
-     */
-     public boolean is5GhzBandSupported() {
-         if (mIs5GhzBandSupportedInitialized)
-             return mIs5GhzBandSupported;
-
-         int[] ChannelsFor5GhzBand = mWificondControl.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
-
-         // Channels list is null means failed to fetch channel info.
-         // Continue with default assumtion i.e. 5Ghz supported.
-         if (ChannelsFor5GhzBand == null)
-             return true;
-
-         // set initialized flag to true as channel info is fetched successfully.
-         mIs5GhzBandSupportedInitialized = true;
-         mIs5GhzBandSupported = (ChannelsFor5GhzBand.length != 0);
-         return mIs5GhzBandSupported;
-    }
-
-    /**
      * Get wifi generation status from supplicant
      *
      * @param ifaceName Name of the interface.
@@ -3783,35 +3760,6 @@ public class WifiNative {
             if (mVerboseLoggingEnabled)
                 Log.d(TAG, "ConnectedBand bitset="+qtiConnectedbands);
         }
-    }
-
-    /**
-     * Check if a mac address is already in use by one of the interfaces.
-     * This only checks for Station interfaces.
-     *
-     * @param ifaceName String representing iface name to ignore.
-     * @param macAddr MacAddress to check
-     * returns true if given mac is in use, false otherwise.
-     */
-    public boolean isMacAddressAlreadyInUse(String ifaceName, MacAddress macAddr) {
-        if (!WifiConfiguration.isValidMacAddressForRandomization(macAddr)) {
-            Log.e(TAG, "Not a valid address to compare.");
-            return false;
-        }
-        List<Iface> staIfaces = new ArrayList<>();
-        // Consider only STA ifaces.
-        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY));
-        staIfaces.addAll(mIfaceMgr.getAllfaceOfType(Iface.IFACE_TYPE_STA_FOR_SCAN));
-        if (staIfaces.isEmpty())
-            return false;
-        for (Iface iface : staIfaces) {
-            // Skip own mac check.
-            if (ifaceName != null && iface.name.equals(ifaceName))
-                continue;
-            if (macAddr.equals(MacAddress.fromString(getMacAddress(iface.name))))
-                return true;
-        }
-        return false;
     }
 
     /** updates linked networks of the |networkId| in supplicant if it's the current network,
