@@ -118,10 +118,10 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     public static final long MIN_DUMP_TIME_WINDOW_MILLIS = 10 * 60 * 1000; // 10 mins
 
     // Timeout for logcat process termination
-    private static final long LOGCAT_PROC_TIMEOUT_MILLIS = 500;
+    private static final long LOGCAT_PROC_TIMEOUT_MILLIS = 50;
     // Timeout for logcat read from input/error stream each.
     @VisibleForTesting
-    public static final long LOGCAT_READ_TIMEOUT_MILLIS = 500;
+    public static final long LOGCAT_READ_TIMEOUT_MILLIS = 50;
 
     private long mLastBugReportTime;
 
@@ -479,19 +479,13 @@ class WifiDiagnostics extends BaseWifiDiagnostics {
     }
 
     synchronized void onWifiAlert(int errorCode, @NonNull byte[] buffer) {
-        if (errorCode < DATA_STALL_OFFSET_REASON_CODE) {
-            captureAlertData(errorCode, buffer);
-            mWifiMetrics.logFirmwareAlert(errorCode);
-            mWifiInjector.getWifiScoreCard().noteFirmwareAlert(errorCode);
-        } else {
-            errorCode = errorCode - DATA_STALL_OFFSET_REASON_CODE;
-            captureAlertData(errorCode, buffer);
-            mWifiMetrics.logFirmwareAlert(errorCode);
-            mWifiInjector.getWifiScoreCard().noteFirmwareAlert(errorCode);
-            Intent intent = new Intent(WifiManager.WIFI_DATA_STALL);
-            intent.putExtra(WifiManager.EXTRA_WIFI_DATA_STALL_REASON, errorCode);
-            mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-        }
+	captureAlertData(errorCode, buffer);
+	mWifiMetrics.logFirmwareAlert(errorCode);
+	mWifiInjector.getWifiScoreCard().noteFirmwareAlert(errorCode);
+
+	Intent intent = new Intent(WifiManager.WIFI_ALERT);
+	intent.putExtra(WifiManager.EXTRA_WIFI_ALERT_REASON, errorCode);
+	mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
     }
 
     /**
