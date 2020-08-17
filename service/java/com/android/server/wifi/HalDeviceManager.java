@@ -37,6 +37,7 @@ import android.hidl.manager.V1_2.IServiceManager;
 import android.os.Handler;
 import android.os.IHwBinder.DeathRecipient;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.util.Log;
 import android.util.LongSparseArray;
 import android.util.MutableBoolean;
@@ -1402,6 +1403,70 @@ public class HalDeviceManager {
         return results;
     }
 
+    /*
+     * Chipinfo can't figure out IfaceType.AP to be AP or AP+AP.
+     * So add addtional check to AP+AP+P2P concurrency.
+     */
+    private boolean checkVendorConcurrency(int requestedIfaceType,
+            WifiChipInfo[] chipInfos) {
+        int counter_ap = 0;
+        int counter_sta = 0;
+        int counter_p2p = 0;
+        int counter_nan = 0;
+        boolean dual = (SystemProperties.getInt(
+                "persist.vendor.wifi.softap.bands", 0) == 2);
+
+        // update counters.
+        for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+             if (entry.type == IfaceType.AP) {
+                 counter_ap ++;
+             } else if (entry.type == IfaceType.STA) {
+                 counter_sta ++;
+             } else if (entry.type == IfaceType.P2P) {
+                 counter_p2p ++;
+             } else if (entry.type == IfaceType.NAN) {
+                 counter_nan ++;
+             }
+        }
+
+        Log.i(TAG, "CONC: Requested new iface=" + requestedIfaceType
+              + ", existing=[STA " + counter_sta + ", AP " + counter_ap
+              + ", P2P " + counter_p2p + ", NAN " + counter_nan + "]");
+
+        if (requestedIfaceType == IfaceType.AP && dual) {
+            // disable P2P then enable AP+AP
+            for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+                if (entry.type == IfaceType.P2P) {
+                    // find chip
+                    for (WifiChipInfo ci: chipInfos) {
+                        if (ci.chipId == entry.chipId) {
+                            // find WifiIfaceInfo
+                            WifiIfaceInfo[] ifaceInfos = ci.ifaces[entry.type];
+                            for (WifiIfaceInfo ifo: ifaceInfos) {
+                                if (ifo.name.equals(entry.name)) {
+                                    Log.i(TAG, "CONC: Remove " + entry.name + " before enable AP+AP");
+                                    removeIfaceInternal(ifo.iface);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (requestedIfaceType == IfaceType.P2P) {
+             // block P2P when AP+AP enabled
+             for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+                if (entry.type == IfaceType.AP
+                    && entry.name.contains("wifi_br")) {
+                    Log.i(TAG, "CONC: Reject P2P iface due to AP+AP enabled");
+                    return false;
+                }
+             }
+        }
+
+        return true;
+    }
+
     private IWifiIface createIface(int ifaceType, InterfaceDestroyedListener destroyedListener,
             Handler handler) {
         if (mDbg) {
@@ -1419,6 +1484,10 @@ public class HalDeviceManager {
             if (!validateInterfaceCache(chipInfos)) {
                 Log.e(TAG, "createIface: local cache is invalid!");
                 stopWifi(); // major error: shutting down
+                return null;
+            }
+
+            if (!checkVendorConcurrency(ifaceType, chipInfos)) {
                 return null;
             }
 
