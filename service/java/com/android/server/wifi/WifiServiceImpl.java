@@ -3001,8 +3001,7 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("is5GHzBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        return (is5GhzBandSupportedInternal()
-                   && mClientModeImpl.is5GhzBandSupported());
+        return is5GhzBandSupportedInternal();
     }
 
     private boolean is5GhzBandSupportedInternal() {
@@ -4647,5 +4646,11 @@ public class WifiServiceImpl extends BaseWifiService {
     public boolean isVht8ssCapableDevice() {
         enforceAccessPermission();
         return mContext.getResources().getBoolean(R.bool.config_vendorWifi11axReadySupport);
+    }
+
+    @Override
+    public String doDriverCmd(String command)
+    {
+        return mClientModeImpl.doDriverCmd(mClientModeImplChannel, command);
     }
 }
