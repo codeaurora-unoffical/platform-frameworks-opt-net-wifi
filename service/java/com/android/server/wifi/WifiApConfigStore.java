@@ -431,7 +431,7 @@ public class WifiApConfigStore {
             return false;
         }
 
-        if (authType == SoftApConfiguration.SECURITY_TYPE_OPEN) {
+        if (ApConfigUtil.isOpenOweHotspot(authType)) {
             // open networks should not have a password
             if (hasPreSharedKey) {
                 Log.d(TAG, "open softap network should not have a password");

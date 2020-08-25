@@ -454,6 +454,11 @@ public class ApConfigUtil {
             Log.d(TAG, "Update Softap capability, add SAE feature support");
             features |= SoftApCapability.SOFTAP_FEATURE_WPA3_SAE;
         }
+
+        if (isWpa3OweSupported(context)) {
+            Log.d(TAG, "Update Softap capability, add OWE feature support");
+            features |= SoftApCapability.SOFTAP_FEATURE_WPA3_OWE;
+        }
         SoftApCapability capability = new SoftApCapability(features);
         int hardwareSupportedMaxClient = context.getResources().getInteger(
                 R.integer.config_wifiHardwareSoftapMaxClientCount);
@@ -485,6 +490,17 @@ public class ApConfigUtil {
     public static boolean isWpa3SaeSupported(@NonNull Context context) {
         return context.getResources().getBoolean(
                 R.bool.config_wifi_softap_sae_supported);
+    }
+
+    /**
+     * Helper function to get OWE support or not.
+     *
+     * @param context the caller context used to get value from resource file.
+     * @return true if supported, false otherwise.
+     */
+    public static boolean isWpa3OweSupported(@NonNull Context context) {
+        return context.getResources().getBoolean(
+                R.bool.config_vendor_wifi_softap_owe_supported);
     }
 
     /**
@@ -542,6 +558,20 @@ public class ApConfigUtil {
             Log.d(TAG, "Error, SAE requires HAL support");
             return false;
         }
+
+        if (!capability.areFeaturesSupported(SoftApCapability.SOFTAP_FEATURE_WPA3_OWE)
+                && (config.getSecurityType()
+                == SoftApConfiguration.SECURITY_TYPE_OWE_TRANSITION
+                || config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE)) {
+            Log.d(TAG, "Error, OWE requires HAL support");
+            return false;
+        }
         return true;
+    }
+
+    public static boolean isOpenOweHotspot(int security) {
+        return security == SoftApConfiguration.SECURITY_TYPE_OPEN
+              || security == SoftApConfiguration.SECURITY_TYPE_OWE_TRANSITION
+              || security == SoftApConfiguration.SECURITY_TYPE_OWE;
     }
 }

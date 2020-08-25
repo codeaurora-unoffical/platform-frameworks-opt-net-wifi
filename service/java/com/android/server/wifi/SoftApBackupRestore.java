@@ -139,7 +139,7 @@ public class SoftApBackupRestore {
             int securityType = in.readInt();
             if (version < 4 && securityType == WifiConfiguration.KeyMgmt.WPA2_PSK) {
                 configBuilder.setPassphrase(passphrase, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
-            } else if (version >= 4 && securityType != SoftApConfiguration.SECURITY_TYPE_OPEN) {
+            } else if (version >= 4 && !ApConfigUtil.isOpenOweHotspot(securityType)) {
                 configBuilder.setPassphrase(passphrase, securityType);
             }
             if (version >= 3) {

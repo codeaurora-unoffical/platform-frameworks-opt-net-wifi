@@ -65,6 +65,10 @@ public class HostapdHal {
     @VisibleForTesting
     public static final long WAIT_FOR_DEATH_TIMEOUT_MS = 50L;
 
+    // Vendor Encryption Type extends hostapd.V1_2.IHostapd.EncryptionType
+    private static final int VENDOR_ENCRYPTION_TYPE_OWE = 7;
+    private static final int VENDOR_ENCRYPTION_TYPE_OWE_TRANSITION = 8;
+
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
     private final Context mContext;
@@ -832,6 +836,12 @@ public class HostapdHal {
             case SoftApConfiguration.SECURITY_TYPE_WPA3_SAE:
                 encryptionType = android.hardware.wifi.hostapd.V1_2
                         .IHostapd.EncryptionType.WPA3_SAE;
+                break;
+            case SoftApConfiguration.SECURITY_TYPE_OWE_TRANSITION:
+                encryptionType = VENDOR_ENCRYPTION_TYPE_OWE_TRANSITION;
+                break;
+            case SoftApConfiguration.SECURITY_TYPE_OWE:
+                encryptionType = VENDOR_ENCRYPTION_TYPE_OWE;
                 break;
             default:
                 // We really shouldn't default to None, but this was how NetworkManagementService

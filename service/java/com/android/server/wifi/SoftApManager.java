@@ -612,6 +612,10 @@ public class SoftApManager implements ActiveModeManager {
                     case CMD_START:
                         SoftApConfiguration config = mApConfig.getSoftApConfiguration();
                         int bandsize = (config != null) ? config.getBands().size() : 0;
+                        if (config.getSecurityType() ==
+                                SoftApConfiguration.SECURITY_TYPE_OWE_TRANSITION) {
+                            bandsize = 2;
+                        }
                         if (bandsize > 0) {
                               try {
                                   SystemProperties.set("persist.vendor.wifi.softap.bands", Integer.toString(bandsize));

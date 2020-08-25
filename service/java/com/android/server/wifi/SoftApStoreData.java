@@ -119,7 +119,7 @@ public class SoftApStoreData implements WifiConfigStore.StoreData {
             XmlUtil.writeNextValue(out, XML_TAG_CHANNEL, softApConfig.getChannel());
             XmlUtil.writeNextValue(out, XML_TAG_HIDDEN_SSID, softApConfig.isHiddenSsid());
             XmlUtil.writeNextValue(out, XML_TAG_SECURITY_TYPE, softApConfig.getSecurityType());
-            if (softApConfig.getSecurityType() != SoftApConfiguration.SECURITY_TYPE_OPEN) {
+            if (!ApConfigUtil.isOpenOweHotspot(softApConfig.getSecurityType())) {
                 XmlUtil.writeNextValue(out, XML_TAG_PASSPHRASE,
                         softApConfig.getPassphrase());
             }
@@ -277,7 +277,7 @@ public class SoftApStoreData implements WifiConfigStore.StoreData {
                 Log.e(TAG, "Failed to parse SSID");
                 return;
             }
-            if (securityType != SoftApConfiguration.SECURITY_TYPE_OPEN) {
+            if (ApConfigUtil.isOpenOweHotspot(securityType)) {
                 softApConfigBuilder.setPassphrase(passphrase, securityType);
             }
             if (!autoShutdownEnabledTagPresent) {
