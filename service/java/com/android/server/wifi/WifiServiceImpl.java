@@ -2733,9 +2733,17 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("isDualBandSupported uid=%").c(Binder.getCallingUid()).flush();
         }
 
-        return (mContext.getResources().getBoolean(
-                com.android.internal.R.bool.config_wifi_dual_band_support)
-                   && mClientModeImpl.is5GhzBandSupported());
+        return mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_wifi_dual_band_support);
+    }
+
+    @Override
+    public boolean is6GHzBandSupported() {
+        if (mVerboseLoggingEnabled) {
+            mLog.info("is6GHzBandSupported() uid=%").c(Binder.getCallingUid()).flush();
+        }
+
+        return mClientModeImpl.is6GhzBandSupported();
     }
 
     private int getMaxApInterfacesCount() {

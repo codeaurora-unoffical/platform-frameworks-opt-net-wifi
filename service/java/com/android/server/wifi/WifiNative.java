@@ -92,13 +92,14 @@ public class WifiNative {
     private final Handler mHandler;
     private final Random mRandom;
     private boolean mVerboseLoggingEnabled = false;
-    private boolean mIs5GhzBandSupportedInitialized = false;
-    private boolean mIs5GhzBandSupported = true;
     private final FstManagerGroupHal mFstManagerGroupHal;
     private boolean mIsFstAvailable;
     private String mFstSlaveIface;
     private String mFstGroupName;
     private String mFstMuxInterface;
+    private boolean mIs6GhzBandSupportedInitialized = false;
+    private boolean mIs6GhzBandSupported = true;
+
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
                       WificondControl condControl, WifiMonitor wifiMonitor,
@@ -1494,6 +1495,7 @@ public class WifiNative {
      * WifiScanner.WIFI_BAND_24_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ
      * WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY
+     * WifiScanner.WIFI_BAND_6_GHZ
      * @return frequencies vector of valid frequencies (MHz), or null for error.
      * @throws IllegalArgumentException if band is not recognized.
      */
@@ -2063,25 +2065,21 @@ public class WifiNative {
     }
 
     /**
-     * Get 5Ghz band supported info from driver
+     * Get 6Ghz band supported info from driver
      *
-     * @return true if 5Ghz band supported, otherwise false.
+     * @return true if 6Ghz band supported, otherwise false.
      */
-     public boolean is5GhzBandSupported() {
-         if (mIs5GhzBandSupportedInitialized)
-             return mIs5GhzBandSupported;
-
-         int[] ChannelsFor5GhzBand = mWificondControl.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ);
-
-         // Channels list is null means failed to fetch channel info.
-         // Continue with default assumtion i.e. 5Ghz supported.
-         if (ChannelsFor5GhzBand == null)
-             return true;
-
+     public boolean is6GhzBandSupported() {
+         if (mIs6GhzBandSupportedInitialized)
+             return mIs6GhzBandSupported;
+         int[] ChannelsFor6GhzBand = mWificondControl.getChannelsForBand(
+                                      WifiScanner.WIFI_BAND_6_GHZ);
+         if (ChannelsFor6GhzBand == null)
+             return false;
          // set initialized flag to true as channel info is fetched successfully.
-         mIs5GhzBandSupportedInitialized = true;
-         mIs5GhzBandSupported = (ChannelsFor5GhzBand.length != 0);
-         return mIs5GhzBandSupported;
+         mIs6GhzBandSupportedInitialized = true;
+         mIs6GhzBandSupported = (ChannelsFor6GhzBand.length != 0);
+         return mIs6GhzBandSupported;
     }
 
     /**
