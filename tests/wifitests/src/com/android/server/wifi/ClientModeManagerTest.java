@@ -28,6 +28,7 @@ import static android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -40,17 +41,23 @@ import static org.mockito.Mockito.lenient;
 import android.app.test.MockAnswerUtil.AnswerWithArguments;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.ConnectivityManager.NetworkCallback;
+import android.net.NetworkRequest;
+import android.os.Handler;
 import android.os.PersistableBundle;
 import android.os.UserHandle;
 import android.os.test.TestLooper;
 import android.telephony.AccessNetworkConstants;
 import android.telephony.CarrierConfigManager;
+import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
-import android.telephony.TelephonyManager;
 import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.RegistrationManager;
 import android.test.suitebuilder.annotation.SmallTest;
 import android.util.Log;
+
+import com.android.wifi.resources.R;
 
 import org.junit.After;
 import org.junit.Before;
@@ -61,6 +68,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.MockitoSession;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 
@@ -73,6 +81,7 @@ public class ClientModeManagerTest extends WifiBaseTest {
     private static final String TEST_INTERFACE_NAME = "testif0";
     private static final String OTHER_INTERFACE_NAME = "notTestIf";
     private static final int TEST_WIFI_OFF_DEFERRING_TIME_MS = 4000;
+    private static final int TEST_ACTIVE_SUBSCRIPTION_ID = 1;
 
     TestLooper mLooper;
 
@@ -86,16 +95,23 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Mock SarManager mSarManager;
     @Mock WakeupController mWakeupController;
     @Mock ClientModeImpl mClientModeImpl;
-    @Mock TelephonyManager mTelephonyManager;
     @Mock CarrierConfigManager mCarrierConfigManager;
     @Mock PersistableBundle mCarrierConfigBundle;
     @Mock ImsMmTelManager mImsMmTelManager;
+    @Mock ConnectivityManager mConnectivityManager;
+    @Mock SubscriptionManager mSubscriptionManager;
+    @Mock SubscriptionInfo mActiveSubscriptionInfo;
     private RegistrationManager.RegistrationCallback mImsMmTelManagerRegistrationCallback = null;
     private @RegistrationManager.ImsRegistrationState int mCurrentImsRegistrationState =
             RegistrationManager.REGISTRATION_STATE_NOT_REGISTERED;
     private @AccessNetworkConstants.TransportType int mCurrentImsConnectionType =
             AccessNetworkConstants.TRANSPORT_TYPE_INVALID;
+    private NetworkRequest mImsRequest = null;
+    private NetworkCallback mImsNetworkCallback = null;
+    private Handler mImsNetworkCallbackHandler = null;
     private long mElapsedSinceBootMillis = 0L;
+    private List<SubscriptionInfo> mSubscriptionInfoList = new ArrayList<>();
+    private MockResources mResources;
 
     private MockitoSession mStaticMockSession = null;
 
@@ -107,9 +123,13 @@ public class ClientModeManagerTest extends WifiBaseTest {
      * from the context.
      */
     private void setUpSystemServiceForContext() {
-        when(mContext.getSystemService(TelephonyManager.class)).thenReturn(mTelephonyManager);
         when(mContext.getSystemService(Context.CARRIER_CONFIG_SERVICE))
                 .thenReturn(mCarrierConfigManager);
+        when(mContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE))
+                .thenReturn(mSubscriptionManager);
+        when(mContext.getSystemService(Context.CONNECTIVITY_SERVICE))
+                .thenReturn(mConnectivityManager);
+        when(mContext.getResources()).thenReturn(mResources);
     }
 
     /*
@@ -124,6 +144,12 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.initMocks(this);
+
+        // Prepare data
+        mResources = new MockResources();
+        mResources.setInteger(R.integer.config_wifiDelayDisconnectOnImsLostMs, 0);
+        mSubscriptionInfoList.add(mActiveSubscriptionInfo);
+
         setUpSystemServiceForContext();
 
         /**
@@ -136,11 +162,9 @@ public class ClientModeManagerTest extends WifiBaseTest {
             .mockStatic(ImsMmTelManager.class)
             .mockStatic(SubscriptionManager.class)
             .startMocking();
-        lenient().when(ImsMmTelManager.createForSubscriptionId(anyInt()))
+        lenient().when(ImsMmTelManager.createForSubscriptionId(eq(TEST_ACTIVE_SUBSCRIPTION_ID)))
                 .thenReturn(mImsMmTelManager);
-        lenient().when(SubscriptionManager.getDefaultVoiceSubscriptionId())
-                .thenReturn(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
-        lenient().when(SubscriptionManager.isValidSubscriptionId(anyInt()))
+        lenient().when(SubscriptionManager.isValidSubscriptionId(eq(TEST_ACTIVE_SUBSCRIPTION_ID)))
                 .thenReturn(true);
         doAnswer(new AnswerWithArguments() {
             public void answer(Executor executor, RegistrationManager.RegistrationCallback c) {
@@ -169,13 +193,25 @@ public class ClientModeManagerTest extends WifiBaseTest {
                 any(RegistrationManager.RegistrationCallback.class));
         when(mImsMmTelManager.isAvailable(anyInt(), anyInt())).thenReturn(false);
 
-        when(mTelephonyManager.createForSubscriptionId(anyInt())).thenReturn(mTelephonyManager);
-        when(mTelephonyManager.getVoiceNetworkType())
-                .thenReturn(TelephonyManager.NETWORK_TYPE_UNKNOWN);
+        when(mActiveSubscriptionInfo.getSubscriptionId()).thenReturn(TEST_ACTIVE_SUBSCRIPTION_ID);
+        when(mSubscriptionManager.getActiveSubscriptionInfoList())
+                .thenReturn(mSubscriptionInfoList);
         when(mCarrierConfigManager.getConfigForSubId(anyInt())).thenReturn(mCarrierConfigBundle);
         when(mCarrierConfigBundle
                 .getInt(eq(CarrierConfigManager.Ims.KEY_WIFI_OFF_DEFERRING_TIME_MILLIS_INT)))
                 .thenReturn(0);
+        doAnswer(new AnswerWithArguments() {
+            public void answer(NetworkRequest req, NetworkCallback callback, Handler handler) {
+                mImsRequest = req;
+                mImsNetworkCallback = callback;
+                mImsNetworkCallbackHandler = handler;
+            }
+        }).when(mConnectivityManager).registerNetworkCallback(any(), any(), any());
+        doAnswer(new AnswerWithArguments() {
+            public void answer(NetworkCallback callback) {
+                if (mImsNetworkCallback == callback) mImsNetworkCallback = null;
+            }
+        }).when(mConnectivityManager).unregisterNetworkCallback(any(NetworkCallback.class));
         doAnswer(new AnswerWithArguments() {
             public long answer() {
                 return mElapsedSinceBootMillis;
@@ -369,6 +405,7 @@ public class ClientModeManagerTest extends WifiBaseTest {
                 ClientModeImpl.SCAN_ONLY_MODE, TEST_INTERFACE_NAME);
         verify(mSarManager, times(2)).setScanOnlyWifiState(WIFI_STATE_ENABLED);
 
+        verify(mContext).getSystemService(anyString());
         verify(mImsMmTelManager, never()).registerImsRegistrationCallback(any(), any());
         verify(mImsMmTelManager, never()).unregisterImsRegistrationCallback(any());
 
@@ -426,8 +463,10 @@ public class ClientModeManagerTest extends WifiBaseTest {
         reset(mContext, mListener);
         setUpSystemServiceForContext();
         mClientModeManager.stop();
+        assertTrue(mClientModeManager.isStopping());
         mLooper.dispatchAll();
         verify(mListener).onStopped();
+        assertFalse(mClientModeManager.isStopping());
 
         verify(mImsMmTelManager, never()).registerImsRegistrationCallback(any(), any());
         verify(mImsMmTelManager, never()).unregisterImsRegistrationCallback(any());
@@ -558,7 +597,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
 
     private void setUpVoWifiTest(
             boolean isWifiCallingAvailable,
-            int voiceNetworkType,
             int wifiOffDeferringTimeMs) {
         mCurrentImsRegistrationState = (isWifiCallingAvailable)
             ? RegistrationManager.REGISTRATION_STATE_REGISTERED
@@ -567,8 +605,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
             ? AccessNetworkConstants.TRANSPORT_TYPE_WLAN
             : AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
         when(mImsMmTelManager.isAvailable(anyInt(), anyInt())).thenReturn(isWifiCallingAvailable);
-        when(mTelephonyManager.getVoiceNetworkType())
-                .thenReturn(voiceNetworkType);
         when(mCarrierConfigBundle
                 .getInt(eq(CarrierConfigManager.Ims.KEY_WIFI_OFF_DEFERRING_TIME_MILLIS_INT)))
                 .thenReturn(wifiOffDeferringTimeMs);
@@ -580,7 +616,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Test
     public void clientModeStopWithWifiOffDeferringTimeNoWifiCalling() throws Exception {
         setUpVoWifiTest(false,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -606,7 +641,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Test
     public void clientModeStopWithWifiOffDeferringTimeAndImsOnWwan() throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
         mCurrentImsConnectionType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
 
@@ -632,41 +666,11 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode stop properly with IMS deferring time, Wifi calling, and LTE.
+     * ClientMode stop properly with IMS deferring time, Wifi calling.
      */
     @Test
-    public void clientModeStopWithWifiOffDeferringTimeWithWifiCallingAndLte() throws Exception {
+    public void clientModeStopWithWifiOffDeferringTimeWithWifiCalling() throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_LTE,
-                TEST_WIFI_OFF_DEFERRING_TIME_MS);
-
-        startClientInConnectModeAndVerifyEnabled();
-        reset(mContext, mListener);
-        setUpSystemServiceForContext();
-        mClientModeManager.stop();
-        mLooper.dispatchAll();
-        verify(mListener).onStopped();
-
-        verify(mImsMmTelManager, never()).registerImsRegistrationCallback(any(), any());
-        verify(mImsMmTelManager, never()).unregisterImsRegistrationCallback(any());
-        verify(mWifiMetrics).noteWifiOff(eq(false), eq(false), anyInt());
-
-        verifyConnectModeNotificationsForCleanShutdown(WIFI_STATE_ENABLED);
-
-        // on an explicit stop, we should not trigger the callback
-        verifyNoMoreInteractions(mListener);
-    }
-
-    /**
-     * ClientMode stop properly with IMS deferring time and Wifi calling, but no LTE.
-     *
-     * IMS deregistration is done before reaching the timeout.
-     */
-    @Test
-    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingNoLteOnImsUnregistered()
-            throws Exception {
-        setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -686,12 +690,15 @@ public class ClientModeManagerTest extends WifiBaseTest {
         // Notify wifi service IMS service is de-registered.
         assertNotNull(mImsMmTelManagerRegistrationCallback);
         mImsMmTelManagerRegistrationCallback.onUnregistered(null);
+        assertNotNull(mImsNetworkCallback);
+        mImsNetworkCallback.onLost(null);
         mLooper.dispatchAll();
 
         // Now Wifi could be turned off actually.
         verify(mImsMmTelManager).unregisterImsRegistrationCallback(
                 any(RegistrationManager.RegistrationCallback.class));
         assertNull(mImsMmTelManagerRegistrationCallback);
+        assertNull(mImsNetworkCallback);
         verify(mListener).onStopped();
         verify(mWifiMetrics).noteWifiOff(eq(true), eq(false), anyInt());
 
@@ -702,15 +709,14 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode stop properly with IMS deferring time and Wifi calling, but no LTE.
+     * ClientMode stop properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is done before reaching the timeout.
      */
     @Test
-    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingNoLteOnImsRegistered()
+    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingOnImsRegistered()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -746,15 +752,14 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode stop properly with IMS deferring time and Wifi calling, but no LTE.
+     * ClientMode stop properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is NOT done before reaching the timeout.
      */
     @Test
-    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOut()
+    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingTimedOut()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -791,15 +796,14 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode stop properly with IMS deferring time and Wifi calling, but no LTE.
+     * ClientMode stop properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is NOT done before reaching the timeout with multiple stop calls.
      */
     @Test
-    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOutMultipleStop()
+    public void clientModeStopWithWifiOffDeferringTimeAndWifiCallingTimedOutMultipleStop()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -839,17 +843,16 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * ClientMode does not stop with IMS deferring time and Wifi calling, but no LTE
+     * ClientMode does not stop with IMS deferring time and Wifi calling
      * when the target role is not ROLE_UNSPECIFIED.
      *
      * Simulate a user toggle wifi multiple times before doing wifi stop and stay at
      * ON position.
      */
     @Test
-    public void clientModeNotStopWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOut()
+    public void clientModeNotStopWithWifiOffDeferringTimeAndWifiCallingTimedOut()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -898,7 +901,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Test
     public void switchToScanOnlyModeWithWifiOffDeferringTimeNoWifiCalling() throws Exception {
         setUpVoWifiTest(false,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -922,7 +924,6 @@ public class ClientModeManagerTest extends WifiBaseTest {
     @Test
     public void switchToScanOnlyModeWithWifiOffDeferringTimeAndImsOnWwan() throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
         mCurrentImsConnectionType = AccessNetworkConstants.TRANSPORT_TYPE_WWAN;
 
@@ -947,40 +948,14 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Switch to scan mode properly with IMS deferring time, Wifi calling, and LTE.
-     */
-    @Test
-    public void
-            switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingAndLte() throws Exception {
-        setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_LTE,
-                TEST_WIFI_OFF_DEFERRING_TIME_MS);
-
-        startClientInConnectModeAndVerifyEnabled();
-        reset(mContext, mListener);
-        setUpSystemServiceForContext();
-        when(mWifiNative.switchClientInterfaceToScanMode(any()))
-                .thenReturn(true);
-
-        mClientModeManager.setRole(ActiveModeManager.ROLE_CLIENT_SCAN_ONLY);
-        mLooper.dispatchAll();
-
-        verify(mWifiNative).switchClientInterfaceToScanMode(TEST_INTERFACE_NAME);
-        verify(mImsMmTelManager, never()).registerImsRegistrationCallback(any(), any());
-        verify(mImsMmTelManager, never()).unregisterImsRegistrationCallback(any());
-        verify(mWifiMetrics).noteWifiOff(eq(false), eq(false), anyInt());
-    }
-
-    /**
-     * Switch to scan mode properly with IMS deferring time and Wifi calling, but no LTE.
+     * Switch to scan mode properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is done before reaching the timeout.
      */
     @Test
-    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingNoLteOnImsUnregistered()
+    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingOnImsUnregistered()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -1003,6 +978,8 @@ public class ClientModeManagerTest extends WifiBaseTest {
         // Notify wifi service IMS service is de-registered.
         assertNotNull(mImsMmTelManagerRegistrationCallback);
         mImsMmTelManagerRegistrationCallback.onUnregistered(null);
+        assertNotNull(mImsNetworkCallback);
+        mImsNetworkCallback.onLost(null);
         mLooper.dispatchAll();
 
         // Now Wifi could be switched to scan mode actually.
@@ -1010,19 +987,19 @@ public class ClientModeManagerTest extends WifiBaseTest {
         verify(mImsMmTelManager).unregisterImsRegistrationCallback(
                 any(RegistrationManager.RegistrationCallback.class));
         assertNull(mImsMmTelManagerRegistrationCallback);
+        assertNull(mImsNetworkCallback);
         verify(mWifiMetrics).noteWifiOff(eq(true), eq(false), anyInt());
     }
 
     /**
-     * Switch to scan mode properly with IMS deferring time and Wifi calling, but no LTE.
+     * Switch to scan mode properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is done before reaching the timeout.
      */
     @Test
-    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingNoLteOnImsRegistered()
+    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingOnImsRegistered()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -1056,15 +1033,14 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Switch to scan mode properly with IMS deferring time and Wifi calling, but no LTE.
+     * Switch to scan mode properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is NOT done before reaching the timeout.
      */
     @Test
-    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOut()
+    public void switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingTimedOut()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -1100,16 +1076,15 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Switch to scan mode properly with IMS deferring time and Wifi calling, but no LTE.
+     * Switch to scan mode properly with IMS deferring time and Wifi calling.
      *
      * IMS deregistration is NOT done before reaching the timeout with multiple stop calls.
      */
     @Test
     public void
-            switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOutMultipleSwitch()
+            switchToScanOnlyModeWithWifiOffDeferringTimeAndWifiCallingTimedOutMultipleSwitch()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();
@@ -1147,7 +1122,7 @@ public class ClientModeManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Stay at connected mode with IMS deferring time and Wifi calling, but no LTE
+     * Stay at connected mode with IMS deferring time and Wifi calling
      * when the target state is not ROLE_CLIENT_SCAN_ONLY.
      *
      * Simulate a user toggle wifi multiple times before doing wifi stop and stay at
@@ -1155,10 +1130,9 @@ public class ClientModeManagerTest extends WifiBaseTest {
      */
     @Test
     public void
-            stayAtConnectedModeWithWifiOffDeferringTimeAndWifiCallingNoLteTimedOutMultipleSwitch()
+            stayAtConnectedModeWithWifiOffDeferringTimeAndWifiCallingTimedOutMultipleSwitch()
             throws Exception {
         setUpVoWifiTest(true,
-                TelephonyManager.NETWORK_TYPE_UNKNOWN,
                 TEST_WIFI_OFF_DEFERRING_TIME_MS);
 
         startClientInConnectModeAndVerifyEnabled();

@@ -282,6 +282,16 @@ public class ActiveModeWarden {
     }
 
     /**
+     * @return true if any mode manager is stopping
+     */
+    private boolean hasAnyModeManagerStopping() {
+        for (ActiveModeManager manager : mActiveModeManagers) {
+            if (manager.isStopping()) return true;
+        }
+        return false;
+    }
+
+    /**
      * @return true if all the client mode managers are in scan only role,
      * false if there are no client mode managers present or if any of them are not in scan only
      * role.
@@ -840,6 +850,9 @@ public class ActiveModeWarden {
         }
 
         class EnabledState extends BaseState {
+
+            private boolean mIsDisablingDueToAirplaneMode;
+
             @Override
             public void enter() {
                 log("EnabledState.enter()");
@@ -847,6 +860,7 @@ public class ActiveModeWarden {
                 if (!hasAnyModeManager()) {
                     Log.e(TAG, "Entered EnabledState, but no active mode managers");
                 }
+                mIsDisablingDueToAirplaneMode = false;
             }
 
             @Override
@@ -884,10 +898,22 @@ public class ActiveModeWarden {
                     case CMD_AIRPLANE_TOGGLED:
                         // airplane mode toggled on is handled in the default state
                         if (mSettingsStore.isAirplaneModeOn()) {
+                            mIsDisablingDueToAirplaneMode = true;
                             return NOT_HANDLED;
                         } else {
-                            // when airplane mode is toggled off, but wifi is on, we can keep it on
-                            log("airplane mode toggled - and airplane mode is off. return handled");
+                            if (mIsDisablingDueToAirplaneMode) {
+                                // Previous airplane mode toggle on is being processed, defer the
+                                // message toggle off until previous processing is completed.
+                                // Once previous airplane mode toggle is complete, we should
+                                // transition to DisabledState. There, we will process the deferred
+                                // airplane mode toggle message to disable airplane mode.
+                                deferMessage(msg);
+                            } else {
+                                // when airplane mode is toggled off, but wifi is on, we can keep it
+                                // on
+                                log("airplane mode toggled - and airplane mode is off. return "
+                                        + "handled");
+                            }
                             return HANDLED;
                         }
                     case CMD_AP_STOPPED:

@@ -25,7 +25,6 @@ import android.os.Process;
 
 import androidx.test.filters.SmallTest;
 
-import com.android.server.net.IpConfigStore;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 
 import org.junit.After;
@@ -832,11 +831,13 @@ public class WifiBackupRestoreTest extends WifiBaseTest {
         List<WifiConfiguration> configurations = new ArrayList<>();
 
         WifiConfiguration wepNetwork = WifiConfigurationTestUtil.createWepNetwork();
+        wepNetwork.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.SHARED);
         wepNetwork.setIpConfiguration(
                 WifiConfigurationTestUtil.createDHCPIpConfigurationWithPacProxy());
         configurations.add(wepNetwork);
 
         WifiConfiguration pskNetwork = WifiConfigurationTestUtil.createPskNetwork();
+        pskNetwork.allowedAuthAlgorithms.set(WifiConfiguration.AuthAlgorithm.OPEN);
         pskNetwork.setIpConfiguration(
                 WifiConfigurationTestUtil.createStaticIpConfigurationWithPacProxy());
         configurations.add(pskNetwork);
@@ -1113,10 +1114,10 @@ public class WifiBackupRestoreTest extends WifiBaseTest {
             throws IOException {
         out.write("network={\n");
         out.write("        " + "ssid=" + configuration.SSID + "\n");
-        String allowedKeyManagement = "";
         if (configuration.hiddenSSID) {
             out.write("        " + "scan_ssid=1" + "\n");
         }
+        String allowedKeyManagement = "";
         if (configuration.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.NONE)) {
             allowedKeyManagement += "NONE";
         }
@@ -1130,6 +1131,14 @@ public class WifiBackupRestoreTest extends WifiBaseTest {
             allowedKeyManagement += "IEEE8021X ";
         }
         out.write("        " + "key_mgmt=" + allowedKeyManagement + "\n");
+        String allowedAuthAlgorithm = "";
+        if (configuration.allowedAuthAlgorithms.get(WifiConfiguration.AuthAlgorithm.OPEN)) {
+            allowedAuthAlgorithm += "OPEN ";
+        }
+        if (configuration.allowedAuthAlgorithms.get(WifiConfiguration.AuthAlgorithm.SHARED)) {
+            allowedAuthAlgorithm += "SHARED ";
+        }
+        out.write("        " + "auth_alg=" + allowedAuthAlgorithm + "\n");
         if (configuration.preSharedKey != null) {
             out.write("        " + "psk=" + configuration.preSharedKey + "\n");
         }
@@ -1173,8 +1182,11 @@ public class WifiBackupRestoreTest extends WifiBaseTest {
             out.writeInt(configStoreVersion);
             for (WifiConfiguration configuration : configurations) {
                 // TODO: store configKey as a string instead of calculating its hash
-                IpConfigStore.writeConfig(out, String.valueOf(configuration.getKey().hashCode()),
-                        configuration.getIpConfiguration(), configStoreVersion);
+                IpConfigStoreTestWriter.writeConfig(
+                        out,
+                        String.valueOf(configuration.getKey().hashCode()),
+                        configuration.getIpConfiguration(),
+                        configStoreVersion);
             }
             out.flush();
             return bos.toByteArray();

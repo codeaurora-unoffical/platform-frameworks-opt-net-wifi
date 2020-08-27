@@ -15,7 +15,7 @@
 //
 java_defaults {
     name: "wifi-service-common",
-    min_sdk_version: "29",
+    defaults: ["wifi-module-sdk-version-defaults"],
     errorprone: {
         javacflags: ["-Xep:CheckReturnValue:ERROR"],
     },
@@ -62,7 +62,8 @@ java_library {
         // need pre-jarjar symbols so that wifi-service can reference the original class names at
         // compile time
         "framework-wifi-pre-jarjar",
-        "framework-statsd-stubs-module_libs_api",
+        "framework-statsd.stubs.module_lib",
+        "framework-tethering.stubs.module_lib",
         "unsupportedappusage",
         "framework",
         "android_system_server_stubs_current",
@@ -113,7 +114,7 @@ java_library {
 
     // need to include `libs` so that Soong doesn't complain about missing classes after jarjaring
     libs: [
-        "framework-wifi",
+        "framework-wifi.impl",
         "framework",
         "android_system_server_stubs_current",
     ],

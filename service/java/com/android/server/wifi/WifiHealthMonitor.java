@@ -94,14 +94,11 @@ public class WifiHealthMonitor {
     private static final int MIN_NUM_BSSID_SCAN_2G = 2;
     // Minimum number of BSSIDs found above 2G with a normal scan
     private static final int MIN_NUM_BSSID_SCAN_ABOVE_2G = 2;
-    static final int DEFAULT_SCAN_RSSI_VALID_TIME_MS = 5_000;
-    static final int STATIONARY_SCAN_RSSI_VALID_TIME_MS = 20_000;
-
     // Minimum Tx speed in Mbps for disconnection stats collection
-    // Disconnection events with Tx speed below this threshold are not
-    // included in connection stats collection.
     static final int HEALTH_MONITOR_COUNT_TX_SPEED_MIN_MBPS = 54;
-    static final int HEALTH_MONITOR_MIN_TX_PACKET_PER_SEC = 2;
+    // Minimum Tx packet per seconds for disconnection stats collection
+    static final int HEALTH_MONITOR_MIN_TX_PACKET_PER_SEC = 4;
+
     private final Context mContext;
     private final WifiConfigManager mWifiConfigManager;
     private final WifiScoreCard mWifiScoreCard;
@@ -222,7 +219,8 @@ public class WifiHealthMonitor {
      */
     public int getScanRssiValidTimeMs() {
         return (mDeviceMobilityState == WifiManager.DEVICE_MOBILITY_STATE_STATIONARY)
-                ? STATIONARY_SCAN_RSSI_VALID_TIME_MS : DEFAULT_SCAN_RSSI_VALID_TIME_MS;
+                ? mDeviceConfigFacade.getStationaryScanRssiValidTimeMs() :
+                mDeviceConfigFacade.getNonstationaryScanRssiValidTimeMs();
     }
 
     /**
@@ -326,6 +324,15 @@ public class WifiHealthMonitor {
         pw.println("WifiHealthMonitor - Log End ----");
     }
 
+    /**
+     * Get current wifi mainline module long version code
+     * @Return a non-zero value if version code is available, 0 otherwise.
+     */
+    public long getWifiStackVersion() {
+        WifiSoftwareBuildInfo currentBuild = getWifiSystemInfoStats().getCurrSoftwareBuildInfo();
+        return (currentBuild == null) ? 0 : currentBuild.getWifiStackVersion();
+    }
+
     private synchronized void dailyDetectionHandler() {
         logd("Run daily detection");
         // Clear daily detection result
@@ -366,7 +373,7 @@ public class WifiHealthMonitor {
         logd("#networks w/ sufficient recent stats: " + mNumNetworkSufficientRecentStatsOnly);
         logd("#networks w/ sufficient recent and prev stats: "
                 + mNumNetworkSufficientRecentPrevStats);
-        // Write metrics to WestWorld
+        // Write metrics to statsd
         writeToWifiStatsLog();
         doWrites();
         mWifiScoreCard.doWrites();
@@ -533,12 +540,12 @@ public class WifiHealthMonitor {
             return null;
         }
         PackageManager packageManager = mContext.getPackageManager();
-        int wifiStackVersion = 0;
+        long wifiStackVersion = 0;
         try {
             wifiStackVersion = packageManager.getPackageInfo(
-                    WIFI_APK_PACKAGE_NAME, PackageManager.MATCH_APEX).versionCode;
+                    WIFI_APK_PACKAGE_NAME, PackageManager.MATCH_APEX).getLongVersionCode();
         } catch (PackageManager.NameNotFoundException e) {
-            Log.e(TAG, " hit PackageManager nameNotFoundException");
+            Log.e(TAG, " Hit PackageManager exception", e);
         }
         String osBuildVersion = replaceNullByEmptyString(Build.DISPLAY);
         if (mWifiNative == null) {
@@ -629,10 +636,10 @@ public class WifiHealthMonitor {
      */
     final class WifiSoftwareBuildInfo {
         private String mOsBuildVersion;
-        private int mWifiStackVersion;
+        private long mWifiStackVersion;
         private String mWifiDriverVersion;
         private String mWifiFirmwareVersion;
-        WifiSoftwareBuildInfo(@NonNull String osBuildVersion, int wifiStackVersion,
+        WifiSoftwareBuildInfo(@NonNull String osBuildVersion, long wifiStackVersion,
                 @NonNull String wifiDriverVersion, @NonNull String wifiFirmwareVersion) {
             mOsBuildVersion = osBuildVersion;
             mWifiStackVersion = wifiStackVersion;
@@ -648,7 +655,7 @@ public class WifiHealthMonitor {
         String getOsBuildVersion() {
             return mOsBuildVersion;
         }
-        int getWifiStackVersion() {
+        long getWifiStackVersion() {
             return mWifiStackVersion;
         }
         String getWifiDriverVersion() {
@@ -842,7 +849,7 @@ public class WifiHealthMonitor {
                 @NonNull SoftwareBuildInfo softwareBuildInfo) {
             String osBuildVersion = softwareBuildInfo.hasOsBuildVersion()
                     ? softwareBuildInfo.getOsBuildVersion() : "NA";
-            int stackVersion = softwareBuildInfo.hasWifiStackVersion()
+            long stackVersion = softwareBuildInfo.hasWifiStackVersion()
                     ? softwareBuildInfo.getWifiStackVersion() : 0;
             String driverVersion = softwareBuildInfo.hasWifiDriverVersion()
                     ? softwareBuildInfo.getWifiDriverVersion() : "NA";
@@ -1046,15 +1053,12 @@ public class WifiHealthMonitor {
 
         @Override
         public void onResults(WifiScanner.ScanData[] results) {
-            if (!mWifiEnabled) {
+            if (!mWifiEnabled || results == null || results.length == 0) {
                 clearScanDetails();
                 return;
             }
 
-            boolean isFullBandScanResults =
-                    results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH_WITH_DFS
-                            || results[0].getBandScanned() == WifiScanner.WIFI_BAND_BOTH;
-            if (isFullBandScanResults) {
+            if (WifiScanner.isFullBandScan(results[0].getBandScanned(), true)) {
                 handleScanResults(mScanDetails);
             }
             clearScanDetails();

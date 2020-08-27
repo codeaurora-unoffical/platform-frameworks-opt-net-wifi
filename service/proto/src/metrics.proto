@@ -700,6 +700,39 @@ message WifiLog {
 
   // Metered stats for suggestion networks.
   optional MeteredNetworkStats metered_network_stats_suggestion = 196;
+
+  // Does the user have wifi wake enabled.
+  optional bool is_wifi_wake_enabled = 197;
+
+  // User reaction to the carrier or suggestion app approval UI.
+  optional UserReactionToApprovalUiEvent user_reaction_to_approval_ui_event = 198;
+
+  // Number of connection with different BSSID between framework and firmware selection.
+  optional int32 num_bssid_different_selection_between_framework_and_firmware = 199;
+
+  // Metrics about carrier wifi network.
+  optional CarrierWifiMetrics carrier_wifi_metrics = 200;
+
+  // Long version code of wifi mainline module, 0 means not available.
+  optional int64 mainline_module_version = 201;
+
+  // Histogram of Tx link speed at 6G low band
+  repeated Int32Count tx_link_speed_count_6g_low = 202;
+
+  // Histogram of Tx link speed at 6G middle band
+  repeated Int32Count tx_link_speed_count_6g_mid = 203;
+
+  // Histogram of Tx link speed at 6G high band
+  repeated Int32Count tx_link_speed_count_6g_high = 204;
+
+  // Histogram of Rx link speed at 6G low band
+  repeated Int32Count rx_link_speed_count_6g_low = 205;
+
+  // Histogram of Rx link speed at 6G middle band
+  repeated Int32Count rx_link_speed_count_6g_mid = 206;
+
+  // Histogram of Rx link speed at 6G high band
+  repeated Int32Count rx_link_speed_count_6g_high = 207;
 }
 
 // Information that gets logged for every WiFi connection.
@@ -1016,7 +1049,7 @@ message ConnectionEvent {
     CREATOR_CARRIER = 2;
   }
 
-  // Start time of the connection.
+  // Start time of the connection, in milliseconds since Unix epoch (1970-01-01).
   optional int64 start_time_millis = 1;// [(datapol.semantic_type) = ST_TIMESTAMP];
 
   // Duration to connect.
@@ -1076,6 +1109,9 @@ message ConnectionEvent {
   // middle won't break the streak count. The count is cleared after
   // a network disconnection event.
   optional int32 num_consecutive_connection_failure = 19 [default = -1];
+
+  // Indicates if the profile used for the connection was provisioned by Passpoint OSU server
+  optional bool is_osu_provisioned = 20;
 }
 
 // Number of occurrences of a specific RSSI poll rssi value
@@ -1432,6 +1468,9 @@ message StaEvent {
 
   // Whether screen is on when the event happens
   optional bool screen_on = 24;
+
+  // Whether cellular data network is available
+  optional bool is_cellular_data_available = 25;
 }
 
 // Wi-Fi Aware metrics
@@ -1912,6 +1951,12 @@ message WifiRttLog {
   // RTT to Wi-Fi Aware peers metrics
   optional RttToPeerLog rtt_to_aware = 4;
 
+  // Histogram of how long a measurement with only AP take.
+  repeated HistogramBucket histogram_measurement_duration_ap_only = 5;
+
+  // Histogram of how long a measurement with aware peer included take.
+  repeated HistogramBucket histogram_measurement_duration_with_aware = 6;
+
   // Metrics for a RTT to Peer (peer = AP or Wi-Fi Aware)
   message RttToPeerLog {
     // Total number of API calls
@@ -2098,6 +2143,9 @@ message ExperimentValues {
 
   // Threshold of CCA level above which to trigger a data stall in percentage
   optional int32 data_stall_cca_level_thr = 9;
+
+  // Health monitor RSSI poll valid time in ms
+  optional int32 health_monitor_rssi_poll_valid_time_ms = 10;
 }
 
 message BssidBlocklistStats {
@@ -2914,6 +2962,9 @@ message WifiNetworkSuggestionApiLog {
 
   // Count of app using suggestion API with different privilege.
   repeated SuggestionAppCount app_count_per_type = 5;
+
+  // Number of user revoke app's permission from settings or disallowed from UI.
+  optional int32 user_revoke_app_suggestion_permission = 6;
 }
 
 // WifiLock metrics
@@ -3247,4 +3298,38 @@ message InitPartialScanStats {
 
   // Histogram of number of channels used in a failed partial scan
   repeated HistogramBucketInt32 failed_scan_channel_count_histogram = 5;
+}
+
+// User reaction to the carrier IMSI protection exemption UI
+message UserReactionToApprovalUiEvent {
+  enum UserActionCode {
+    // UNKNOWN user action.
+    ACTION_UNKNOWN = 0;
+    // Action user allowed.
+    ACTION_ALLOWED = 1;
+    // Action user disallowed.
+    ACTION_DISALLOWED = 2;
+    // Action user dismiss.
+    ACTION_DISMISS = 3;
+  }
+  message UserReaction {
+    // User action to the UI.
+    optional UserActionCode user_action = 1;
+    // Is UI a dialog or notification.
+    optional bool is_dialog = 2;
+  }
+
+  // Event of user reaction to the app approval UI.
+  repeated UserReaction user_approval_app_ui_reaction = 1;
+
+  // Event of user reaction to the carrier approval UI.
+  repeated UserReaction user_approval_carrier_ui_reaction = 2;
+}
+
+message CarrierWifiMetrics {
+  // Number of successful network connection using Carrier ID
+  optional int32 num_connection_success = 1;
+  // Number of failed authentication from network connection using Carrier ID
+  optional int32 num_connection_auth_failure = 2;
+  optional int32 num_connection_non_auth_failure = 3;
 }

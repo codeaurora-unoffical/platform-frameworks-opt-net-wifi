@@ -44,6 +44,7 @@ import android.os.Message;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Base64;
 import android.util.Log;
@@ -62,6 +63,7 @@ import com.android.server.wifi.hotspot2.Utils;
 import com.android.server.wifi.p2p.WifiP2pMetrics;
 import com.android.server.wifi.proto.WifiStatsLog;
 import com.android.server.wifi.proto.nano.WifiMetricsProto;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.CarrierWifiMetrics;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.ConnectToNetworkNotificationAndActionCount;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.DeviceMobilityStatePnoScanStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.ExperimentValues;
@@ -82,6 +84,8 @@ import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.StaEvent.ConfigInfo;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.TargetNetworkInfo;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserReactionToApprovalUiEvent;
+import com.android.server.wifi.proto.nano.WifiMetricsProto.UserReactionToApprovalUiEvent.UserReaction;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiIsUnusableEvent;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiLinkLayerUsageStats;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.WifiLockStats;
@@ -269,10 +273,17 @@ public class WifiMetrics {
     private final IntCounter mTxLinkSpeedCount5gLow = new IntCounter();
     private final IntCounter mTxLinkSpeedCount5gMid = new IntCounter();
     private final IntCounter mTxLinkSpeedCount5gHigh = new IntCounter();
+    private final IntCounter mTxLinkSpeedCount6gLow = new IntCounter();
+    private final IntCounter mTxLinkSpeedCount6gMid = new IntCounter();
+    private final IntCounter mTxLinkSpeedCount6gHigh = new IntCounter();
+
     private final IntCounter mRxLinkSpeedCount2g = new IntCounter();
     private final IntCounter mRxLinkSpeedCount5gLow = new IntCounter();
     private final IntCounter mRxLinkSpeedCount5gMid = new IntCounter();
     private final IntCounter mRxLinkSpeedCount5gHigh = new IntCounter();
+    private final IntCounter mRxLinkSpeedCount6gLow = new IntCounter();
+    private final IntCounter mRxLinkSpeedCount6gMid = new IntCounter();
+    private final IntCounter mRxLinkSpeedCount6gHigh = new IntCounter();
 
     /** RSSI of the scan result for the last connection event*/
     private int mScanResultRssi = 0;
@@ -416,6 +427,11 @@ public class WifiMetrics {
     private final IntHistogram mWifiNetworkSuggestionApiListSizeHistogram =
             new IntHistogram(NETWORK_SUGGESTION_API_LIST_SIZE_HISTOGRAM_BUCKETS);
     private final IntCounter mWifiNetworkSuggestionApiAppTypeCounter = new IntCounter();
+    private final List<UserReaction> mUserApprovalSuggestionAppUiReactionList =
+            new ArrayList<>();
+    private final List<UserReaction> mUserApprovalCarrierUiReactionList =
+            new ArrayList<>();
+
     private final WifiLockStats mWifiLockStats = new WifiLockStats();
     private static final int[] WIFI_LOCK_SESSION_DURATION_HISTOGRAM_BUCKETS =
             {1, 10, 60, 600, 3600};
@@ -492,6 +508,9 @@ public class WifiMetrics {
 
     private final SoftApConfigLimitationMetrics mSoftApConfigLimitationMetrics =
             new SoftApConfigLimitationMetrics();
+
+    private final CarrierWifiMetrics mCarrierWifiMetrics =
+            new CarrierWifiMetrics();
 
     @VisibleForTesting
     static class NetworkSelectionExperimentResults {
@@ -1093,6 +1112,7 @@ public class WifiMetrics {
                 }
                 sb.append(", numConsecutiveConnectionFailure="
                         + mConnectionEvent.numConsecutiveConnectionFailure);
+                sb.append(", isOsuProvisioned=" + mConnectionEvent.isOsuProvisioned);
             }
             return sb.toString();
         }
@@ -1178,6 +1198,38 @@ public class WifiMetrics {
         }
     }
 
+    class CarrierWifiMetrics {
+        public int numConnectionSuccess = 0;
+        public int numConnectionAuthFailure = 0;
+        public int numConnectionNonAuthFailure = 0;
+
+        public WifiMetricsProto.CarrierWifiMetrics toProto() {
+            WifiMetricsProto.CarrierWifiMetrics proto =
+                    new WifiMetricsProto.CarrierWifiMetrics();
+            proto.numConnectionSuccess = numConnectionSuccess;
+            proto.numConnectionAuthFailure = numConnectionAuthFailure;
+            proto.numConnectionNonAuthFailure = numConnectionNonAuthFailure;
+            return proto;
+        }
+
+        public void clear() {
+            numConnectionSuccess = 0;
+            numConnectionAuthFailure = 0;
+            numConnectionNonAuthFailure = 0;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("numConnectionSuccess=")
+                    .append(numConnectionSuccess)
+                    .append(", numConnectionAuthFailure=")
+                    .append(numConnectionAuthFailure)
+                    .append(", numConnectionNonAuthFailure")
+                    .append(numConnectionNonAuthFailure);
+            return sb.toString();
+        }
+    }
 
     public WifiMetrics(Context context, FrameworkFacade facade, Clock clock, Looper looper,
             WifiAwareMetrics awareMetrics, RttMetrics rttMetrics,
@@ -1410,9 +1462,12 @@ public class WifiMetrics {
                         mBssidBlocklistMonitor.getNumBlockedBssidsForSsid(config.SSID);
                 mCurrentConnectionEvent.mConnectionEvent.networkType =
                         WifiMetricsProto.ConnectionEvent.TYPE_UNKNOWN;
+                mCurrentConnectionEvent.mConnectionEvent.isOsuProvisioned = false;
                 if (config.isPasspoint()) {
                     mCurrentConnectionEvent.mConnectionEvent.networkType =
                             WifiMetricsProto.ConnectionEvent.TYPE_PASSPOINT;
+                    mCurrentConnectionEvent.mConnectionEvent.isOsuProvisioned =
+                            !TextUtils.isEmpty(config.updateIdentifier);
                 } else if (WifiConfigurationUtil.isConfigForSaeNetwork(config)) {
                     mCurrentConnectionEvent.mConnectionEvent.networkType =
                             WifiMetricsProto.ConnectionEvent.TYPE_WPA3;
@@ -1540,7 +1595,7 @@ public class WifiMetrics {
                         connectivityFailureCode;
                 mCurrentConnectionEvent.mConnectionEvent.level2FailureReason = level2FailureReason;
 
-                // Write metrics to WestWorld
+                // Write metrics to statsd
                 int wwFailureCode = getConnectionResultFailureCode(level2FailureCode,
                         level2FailureReason);
                 if (wwFailureCode != -1) {
@@ -1687,6 +1742,15 @@ public class WifiMetrics {
     public void setEnhancedMacRandomizationForceEnabled(boolean enabled) {
         synchronized (mLock) {
             mWifiLogProto.isEnhancedMacRandomizationForceEnabled = enabled;
+        }
+    }
+
+    /**
+     * Wifi wake feature toggle.
+     */
+    public void setWifiWakeEnabled(boolean enabled) {
+        synchronized (mLock) {
+            mWifiLogProto.isWifiWakeEnabled = enabled;
         }
     }
 
@@ -2101,14 +2165,20 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mTxLinkSpeedCount2g.increment(txLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_LOW_END_FREQ) {
                 mTxLinkSpeedCount5gLow.increment(txLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_MID_END_FREQ) {
                 mTxLinkSpeedCount5gMid.increment(txLinkSpeed);
-            } else {
+            } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_HIGH_END_FREQ) {
                 mTxLinkSpeedCount5gHigh.increment(txLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_LOW_END_FREQ) {
+                mTxLinkSpeedCount6gLow.increment(txLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_MID_END_FREQ) {
+                mTxLinkSpeedCount6gMid.increment(txLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_HIGH_END_FREQ) {
+                mTxLinkSpeedCount6gHigh.increment(txLinkSpeed);
             }
         }
     }
@@ -2126,14 +2196,20 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mRxLinkSpeedCount2g.increment(rxLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_LOW_END_FREQ) {
                 mRxLinkSpeedCount5gLow.increment(rxLinkSpeed);
             } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_MID_END_FREQ) {
                 mRxLinkSpeedCount5gMid.increment(rxLinkSpeed);
-            } else {
+            } else if (frequency <= KnownBandsChannelHelper.BAND_5_GHZ_HIGH_END_FREQ) {
                 mRxLinkSpeedCount5gHigh.increment(rxLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_LOW_END_FREQ) {
+                mRxLinkSpeedCount6gLow.increment(rxLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_MID_END_FREQ) {
+                mRxLinkSpeedCount6gMid.increment(rxLinkSpeed);
+            } else if (frequency <= KnownBandsChannelHelper.BAND_6_GHZ_HIGH_END_FREQ) {
+                mRxLinkSpeedCount6gHigh.increment(rxLinkSpeed);
             }
         }
     }
@@ -2150,7 +2226,7 @@ public class WifiMetrics {
             return;
         }
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 mChannelUtilizationHistogram2G.increment(channelUtilization);
             } else {
                 mChannelUtilizationHistogramAbove2G.increment(channelUtilization);
@@ -2168,7 +2244,7 @@ public class WifiMetrics {
     public void incrementThroughputKbpsCount(int txThroughputKbps, int rxThroughputKbps,
             int frequency) {
         synchronized (mLock) {
-            if (frequency <= KnownBandsChannelHelper.BAND_24_GHZ_END_FREQ) {
+            if (ScanResult.is24GHz(frequency)) {
                 if (txThroughputKbps >= 0) {
                     mTxThroughputMbpsHistogram2G.increment(txThroughputKbps / 1000);
                 }
@@ -3026,7 +3102,7 @@ public class WifiMetrics {
                 for (ConnectionEvent event : mConnectionEventList) {
                     String eventLine = event.toString();
                     if (event == mCurrentConnectionEvent) {
-                        eventLine += "CURRENTLY OPEN EVENT";
+                        eventLine += " CURRENTLY OPEN EVENT";
                     }
                     pw.println(eventLine);
                 }
@@ -3058,6 +3134,7 @@ public class WifiMetrics {
                         + mWifiLogProto.isVerboseLoggingEnabled);
                 pw.println("mWifiLogProto.isEnhancedMacRandomizationForceEnabled="
                         + mWifiLogProto.isEnhancedMacRandomizationForceEnabled);
+                pw.println("mWifiLogProto.isWifiWakeEnabled=" + mWifiLogProto.isWifiWakeEnabled);
                 pw.println("mWifiLogProto.numNetworksAddedByUser="
                         + mWifiLogProto.numNetworksAddedByUser);
                 pw.println("mWifiLogProto.numNetworksAddedByApps="
@@ -3581,6 +3658,8 @@ public class WifiMetrics {
                         + mWifiNetworkSuggestionApiListSizeHistogram);
                 pw.println("mWifiNetworkSuggestionApiAppTypeCounter:\n"
                         + mWifiNetworkSuggestionApiAppTypeCounter);
+                printUserApprovalSuggestionAppReaction(pw);
+                printUserApprovalCarrierReaction(pw);
                 pw.println("mNetworkIdToNominatorId:\n" + mNetworkIdToNominatorId);
                 pw.println("mWifiLockStats:\n" + mWifiLockStats);
                 pw.println("mWifiLockHighPerfAcqDurationSecHistogram:\n"
@@ -3601,10 +3680,18 @@ public class WifiMetrics {
                 pw.println("mWifiLogProto.txLinkSpeedCount5gLow=" + mTxLinkSpeedCount5gLow);
                 pw.println("mWifiLogProto.txLinkSpeedCount5gMid=" + mTxLinkSpeedCount5gMid);
                 pw.println("mWifiLogProto.txLinkSpeedCount5gHigh=" + mTxLinkSpeedCount5gHigh);
+                pw.println("mWifiLogProto.txLinkSpeedCount6gLow=" + mTxLinkSpeedCount6gLow);
+                pw.println("mWifiLogProto.txLinkSpeedCount6gMid=" + mTxLinkSpeedCount6gMid);
+                pw.println("mWifiLogProto.txLinkSpeedCount6gHigh=" + mTxLinkSpeedCount6gHigh);
+
                 pw.println("mWifiLogProto.rxLinkSpeedCount2g=" + mRxLinkSpeedCount2g);
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gLow=" + mRxLinkSpeedCount5gLow);
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gMid=" + mRxLinkSpeedCount5gMid);
                 pw.println("mWifiLogProto.rxLinkSpeedCount5gHigh=" + mRxLinkSpeedCount5gHigh);
+                pw.println("mWifiLogProto.rxLinkSpeedCount6gLow=" + mRxLinkSpeedCount6gLow);
+                pw.println("mWifiLogProto.rxLinkSpeedCount6gMid=" + mRxLinkSpeedCount6gMid);
+                pw.println("mWifiLogProto.rxLinkSpeedCount6gHigh=" + mRxLinkSpeedCount6gHigh);
+
                 pw.println("mWifiLogProto.numIpRenewalFailure="
                         + mWifiLogProto.numIpRenewalFailure);
                 pw.println("mWifiLogProto.connectionDurationStats="
@@ -3627,6 +3714,8 @@ public class WifiMetrics {
                         + mTxThroughputMbpsHistogramAbove2G);
                 pw.println("mRxThroughputMbpsHistogramAbove2G:\n"
                         + mRxThroughputMbpsHistogramAbove2G);
+                pw.println("mCarrierWifiMetrics:\n"
+                        + mCarrierWifiMetrics);
 
                 dumpInitPartialScanMetrics(pw);
             }
@@ -3685,6 +3774,20 @@ public class WifiMetrics {
         line.append(",total_duration_ms=" + stats.totalDurationMs);
         line.append(",pno_duration_ms=" + stats.pnoDurationMs);
         pw.println(line.toString());
+    }
+
+    private void printUserApprovalSuggestionAppReaction(PrintWriter pw) {
+        pw.println("mUserApprovalSuggestionAppUiUserReaction:");
+        for (UserReaction event : mUserApprovalSuggestionAppUiReactionList) {
+            pw.println(event);
+        }
+    }
+
+    private void printUserApprovalCarrierReaction(PrintWriter pw) {
+        pw.println("mUserApprovalCarrierUiUserReaction:");
+        for (UserReaction event : mUserApprovalCarrierUiReactionList) {
+            pw.println(event);
+        }
     }
 
     /**
@@ -4045,9 +4148,9 @@ public class WifiMetrics {
             for (int i = 0; i < mConnectToNetworkNotificationActionCount.size(); i++) {
                 ConnectToNetworkNotificationAndActionCount keyVal =
                         new ConnectToNetworkNotificationAndActionCount();
-                int key = mConnectToNetworkNotificationActionCount.keyAt(i);
-                keyVal.notification = key / CONNECT_TO_NETWORK_NOTIFICATION_ACTION_KEY_MULTIPLIER;
-                keyVal.action = key % CONNECT_TO_NETWORK_NOTIFICATION_ACTION_KEY_MULTIPLIER;
+                int k = mConnectToNetworkNotificationActionCount.keyAt(i);
+                keyVal.notification =  k / CONNECT_TO_NETWORK_NOTIFICATION_ACTION_KEY_MULTIPLIER;
+                keyVal.action = k % CONNECT_TO_NETWORK_NOTIFICATION_ACTION_KEY_MULTIPLIER;
                 keyVal.recommender =
                         ConnectToNetworkNotificationAndActionCount.RECOMMENDER_OPEN;
                 keyVal.count = mConnectToNetworkNotificationActionCount.valueAt(i);
@@ -4207,6 +4310,13 @@ public class WifiMetrics {
                             });
             mWifiLogProto.wifiNetworkSuggestionApiLog = mWifiNetworkSuggestionApiLog;
 
+            UserReactionToApprovalUiEvent events = new UserReactionToApprovalUiEvent();
+            events.userApprovalAppUiReaction = mUserApprovalSuggestionAppUiReactionList
+                    .toArray(new UserReaction[0]);
+            events.userApprovalCarrierUiReaction = mUserApprovalCarrierUiReactionList
+                    .toArray(new UserReaction[0]);
+            mWifiLogProto.userReactionToApprovalUiEvent = events;
+
             mWifiLockStats.highPerfLockAcqDurationSecHistogram =
                     mWifiLockHighPerfAcqDurationSecHistogram.toProto();
 
@@ -4241,10 +4351,18 @@ public class WifiMetrics {
             mWifiLogProto.txLinkSpeedCount5GLow = mTxLinkSpeedCount5gLow.toProto();
             mWifiLogProto.txLinkSpeedCount5GMid = mTxLinkSpeedCount5gMid.toProto();
             mWifiLogProto.txLinkSpeedCount5GHigh = mTxLinkSpeedCount5gHigh.toProto();
+            mWifiLogProto.txLinkSpeedCount6GLow = mTxLinkSpeedCount6gLow.toProto();
+            mWifiLogProto.txLinkSpeedCount6GMid = mTxLinkSpeedCount6gMid.toProto();
+            mWifiLogProto.txLinkSpeedCount6GHigh = mTxLinkSpeedCount6gHigh.toProto();
+
             mWifiLogProto.rxLinkSpeedCount2G = mRxLinkSpeedCount2g.toProto();
             mWifiLogProto.rxLinkSpeedCount5GLow = mRxLinkSpeedCount5gLow.toProto();
             mWifiLogProto.rxLinkSpeedCount5GMid = mRxLinkSpeedCount5gMid.toProto();
             mWifiLogProto.rxLinkSpeedCount5GHigh = mRxLinkSpeedCount5gHigh.toProto();
+            mWifiLogProto.rxLinkSpeedCount6GLow = mRxLinkSpeedCount6gLow.toProto();
+            mWifiLogProto.rxLinkSpeedCount6GMid = mRxLinkSpeedCount6gMid.toProto();
+            mWifiLogProto.rxLinkSpeedCount6GHigh = mRxLinkSpeedCount6gHigh.toProto();
+
             HealthMonitorMetrics healthMonitorMetrics = mWifiHealthMonitor.buildProto();
             if (healthMonitorMetrics != null) {
                 mWifiLogProto.healthMonitorMetrics = healthMonitorMetrics;
@@ -4281,6 +4399,9 @@ public class WifiMetrics {
             initialPartialScanStats.failedScanChannelCountHistogram =
                     mInitPartialScanFailureHistogram.toProto();
             mWifiLogProto.initPartialScanStats = initialPartialScanStats;
+            mWifiLogProto.carrierWifiMetrics = mCarrierWifiMetrics.toProto();
+            mWifiLogProto.mainlineModuleVersion = mWifiHealthMonitor.getWifiStackVersion();
+
         }
     }
 
@@ -4387,10 +4508,16 @@ public class WifiMetrics {
             mTxLinkSpeedCount5gLow.clear();
             mTxLinkSpeedCount5gMid.clear();
             mTxLinkSpeedCount5gHigh.clear();
+            mTxLinkSpeedCount6gLow.clear();
+            mTxLinkSpeedCount6gMid.clear();
+            mTxLinkSpeedCount6gHigh.clear();
             mRxLinkSpeedCount2g.clear();
             mRxLinkSpeedCount5gLow.clear();
             mRxLinkSpeedCount5gMid.clear();
             mRxLinkSpeedCount5gHigh.clear();
+            mRxLinkSpeedCount6gLow.clear();
+            mRxLinkSpeedCount6gMid.clear();
+            mRxLinkSpeedCount6gHigh.clear();
             mWifiAlertReasonCounts.clear();
             mWifiScoreCounts.clear();
             mWifiUsabilityScoreCounts.clear();
@@ -4468,10 +4595,11 @@ public class WifiMetrics {
             mLinkProbeStaEventCount = 0;
             mNetworkSelectionExperimentPairNumChoicesCounts.clear();
             mWifiNetworkSuggestionApiLog.clear();
-            mWifiNetworkSuggestionApiLog.clear();
             mWifiNetworkRequestApiMatchSizeHistogram.clear();
             mWifiNetworkSuggestionApiListSizeHistogram.clear();
             mWifiNetworkSuggestionApiAppTypeCounter.clear();
+            mUserApprovalSuggestionAppUiReactionList.clear();
+            mUserApprovalCarrierUiReactionList.clear();
             mWifiLockHighPerfAcqDurationSecHistogram.clear();
             mWifiLockLowLatencyAcqDurationSecHistogram.clear();
             mWifiLockHighPerfActiveSessionDurationSecHistogram.clear();
@@ -4497,6 +4625,7 @@ public class WifiMetrics {
             mInitPartialScanFailureCount = 0;
             mInitPartialScanSuccessHistogram.clear();
             mInitPartialScanFailureHistogram.clear();
+            mCarrierWifiMetrics.clear();
         }
     }
 
@@ -4655,6 +4784,9 @@ public class WifiMetrics {
         staEvent.totalTxBytes = mFacade.getTotalTxBytes();
         staEvent.totalRxBytes = mFacade.getTotalRxBytes();
         staEvent.screenOn = mScreenOn;
+        if (mWifiDataStall != null) {
+            staEvent.isCellularDataAvailable = mWifiDataStall.isCellularDataAvailable();
+        }
         mSupplicantStateChangeBitmask = 0;
         mLastPollRssi = -127;
         mLastPollFreq = -1;
@@ -4870,6 +5002,7 @@ public class WifiMetrics {
         if (event.totalTxBytes > 0) sb.append(" totalTxBytes=").append(event.totalTxBytes);
         if (event.totalRxBytes > 0) sb.append(" totalRxBytes=").append(event.totalRxBytes);
         sb.append(" screenOn=").append(event.screenOn);
+        sb.append(" cellularData=").append(event.isCellularDataAvailable);
         if (event.supplicantStateChangesBitmask != 0) {
             sb.append(", ").append(supplicantStateChangesBitmaskToString(
                     event.supplicantStateChangesBitmask));
@@ -5921,6 +6054,15 @@ public class WifiMetrics {
         }
     }
 
+    /** Increment number of user revoke suggestion permission. Including from settings or
+     * disallowed from UI.
+     */
+    public void incrementNetworkSuggestionUserRevokePermission() {
+        synchronized (mLock) {
+            mWifiNetworkSuggestionApiLog.userRevokeAppSuggestionPermission++;
+        }
+    }
+
     /** Clear and set the latest network suggestion API max list size histogram */
     public void noteNetworkSuggestionApiListSizeHistogram(List<Integer> listSizes) {
         synchronized (mLock) {
@@ -5948,8 +6090,59 @@ public class WifiMetrics {
                 default:
                     typeCode = WifiNetworkSuggestionApiLog.TYPE_UNKNOWN;
             }
+            mWifiNetworkSuggestionApiAppTypeCounter.increment(typeCode);
         }
-        mWifiNetworkSuggestionApiAppTypeCounter.increment(typeCode);
+    }
+
+    /** Add user action to the approval suggestion app UI */
+    public void addUserApprovalSuggestionAppUiReaction(@WifiNetworkSuggestionsManager.UserActionCode
+            int actionType, boolean isDialog) {
+        int actionCode;
+        switch (actionType) {
+            case WifiNetworkSuggestionsManager.ACTION_USER_ALLOWED_APP:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_ALLOWED;
+                break;
+            case WifiNetworkSuggestionsManager.ACTION_USER_DISALLOWED_APP:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_DISALLOWED;
+                break;
+            case WifiNetworkSuggestionsManager.ACTION_USER_DISMISS:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_DISMISS;
+                break;
+            default:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_UNKNOWN;
+        }
+        UserReaction event = new UserReaction();
+        event.userAction = actionCode;
+        event.isDialog = isDialog;
+        synchronized (mLock) {
+            mUserApprovalSuggestionAppUiReactionList.add(event);
+        }
+    }
+
+    /** Add user action to the approval Carrier Imsi protection exemption UI */
+    public void addUserApprovalCarrierUiReaction(@WifiCarrierInfoManager.UserActionCode
+            int actionType, boolean isDialog) {
+        int actionCode;
+        switch (actionType) {
+            case WifiCarrierInfoManager.ACTION_USER_ALLOWED_CARRIER:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_ALLOWED;
+                break;
+            case WifiCarrierInfoManager.ACTION_USER_DISALLOWED_CARRIER:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_DISALLOWED;
+                break;
+            case WifiCarrierInfoManager.ACTION_USER_DISMISS:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_DISMISS;
+                break;
+            default:
+                actionCode = UserReactionToApprovalUiEvent.ACTION_UNKNOWN;
+        }
+        UserReaction event = new UserReaction();
+        event.userAction = actionCode;
+        event.isDialog = isDialog;
+
+        synchronized (mLock) {
+            mUserApprovalCarrierUiReactionList.add(event);
+        }
     }
 
     /**
@@ -6228,6 +6421,15 @@ public class WifiMetrics {
     }
 
     /**
+     * Sets health monitor RSSI poll valid time in ms
+     */
+    public void setHealthMonitorRssiPollValidTimeMs(int rssiPollValidTimeMs) {
+        synchronized (mLock) {
+            mExperimentValues.healthMonitorRssiPollValidTimeMs = rssiPollValidTimeMs;
+        }
+    }
+
+    /**
      * Increment connection duration while link layer stats report are on
      */
     public void incrementConnectionDuration(int timeDeltaLastTwoPollsMs,
@@ -6346,5 +6548,41 @@ public class WifiMetrics {
      */
     public void noteSoftApClientBlocked(int maxClient) {
         mSoftApConfigLimitationMetrics.maxClientSettingWhenReachHistogram.increment(maxClient);
+    }
+
+    /**
+     * Increment number of connection with different BSSID between framework and firmware selection.
+     */
+    public void incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware() {
+        synchronized (mLock) {
+            mWifiLogProto.numBssidDifferentSelectionBetweenFrameworkAndFirmware++;
+        }
+    }
+
+    /**
+     * Note the carrier wifi network connected successfully.
+     */
+    public void incrementNumOfCarrierWifiConnectionSuccess() {
+        synchronized (mLock) {
+            mCarrierWifiMetrics.numConnectionSuccess++;
+        }
+    }
+
+    /**
+     * Note the carrier wifi network connection authentication failure.
+     */
+    public void incrementNumOfCarrierWifiConnectionAuthFailure() {
+        synchronized (mLock) {
+            mCarrierWifiMetrics.numConnectionAuthFailure++;
+        }
+    }
+
+    /**
+     * Note the carrier wifi network connection non-authentication failure.
+     */
+    public void incrementNumOfCarrierWifiConnectionNonAuthFailure() {
+        synchronized (mLock) {
+            mCarrierWifiMetrics.numConnectionNonAuthFailure++;
+        }
     }
 }

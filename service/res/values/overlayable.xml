@@ -13,7 +13,7 @@
 
 <!-- These values can be used to control wifi stack behavior/features on individual devices.
      These can be overridden by OEM's by using an RRO overlay app.
-     There is a sample RRO overlay app under frameworks/opt/net/wifi/RROOverlaySampleApp -->
+     See device/google/coral/rro_overlays/WifiOverlay/ for a sample overlay app. -->
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <overlayable name="WifiCustomization">
         <!-- START VENDOR CUSTOMIZATION -->
@@ -57,6 +57,11 @@
           <item type="integer" name="config_wifiFrameworkScoreLowRssiThreshold6ghz" />
           <item type="integer" name="config_wifiFrameworkScoreGoodRssiThreshold6ghz" />
           <item type="integer" name="config_wifiFrameworkSoftApShutDownTimeoutMilliseconds" />
+          <item type="bool" name="config_wifiSoftapResetChannelConfig" />
+          <item type="bool" name="config_wifiSoftapResetHiddenConfig" />
+          <item type="bool" name="config_wifiSoftapResetUserControlConfig" />
+          <item type="bool" name="config_wifiSoftapResetAutoShutdownTimerConfig" />
+          <item type="bool" name="config_wifiSoftapResetMaxClientSettingConfig" />
           <item type="string"  name="config_wifiSoftap2gChannelList" />
           <item type="string"  name="config_wifiSoftap5gChannelList" />
           <item type="string"  name="config_wifiSoftap6gChannelList" />
@@ -81,6 +86,7 @@
           <item type="bool" name="config_wifiSoftapHeSuBeamformeeSupported" />
           <item type="bool" name="config_wifiSoftapHeMuBeamformerSupported" />
           <item type="bool" name="config_wifiSoftapHeTwtSupported" />
+          <item type="bool" name="config_wifiLocalOnlyHotspot6ghz" />
           <item type="bool" name="config_wifi_local_only_hotspot_5ghz" />
           <item type="bool" name="config_wifi_connected_mac_randomization_supported" />
           <item type="bool" name="config_wifi_p2p_mac_randomization_supported" />
@@ -126,10 +132,18 @@
           <item type="integer" name="config_wifiHighMovementNetworkSelectionOptimizationRssiDelta" />
           <item type="integer" name="config_wifiRttBackgroundExecGapMs" />
           <item type="integer" name="config_wifiPollRssiIntervalMilliseconds" />
+          <item type="bool" name="config_wifiChannelUtilizationOverrideEnabled" />
+          <item type="integer" name="config_wifiChannelUtilizationOverride2g" />
+          <item type="integer" name="config_wifiChannelUtilizationOverride5g" />
+          <item type="integer" name="config_wifiChannelUtilizationOverride6g" />
           <item type="bool" name="config_wifiSaeUpgradeEnabled" />
           <item type="bool" name="config_wifiSaeUpgradeOffloadEnabled" />
           <item type="integer" name="config_wifiMaxNativeFailureSelfRecoveryPerHour" />
           <item type="bool" name="config_wifiIgnoreOpenSavedNetworkWhenSecureSuggestionAvailable" />
+          <item type="bool" name="config_wifiSoftapAcsIncludeDfs" />
+          <item type="integer" name="config_wifiMovingPnoScanIntervalMillis" />
+          <item type="integer" name="config_wifiStationaryPnoScanIntervalMillis" />
+          <item type="integer" name="config_wifiDelayDisconnectOnImsLostMs" />
           <!-- Params from config.xml that can be overlayed -->
 
           <!-- Params from strings.xml that can be overlayed -->

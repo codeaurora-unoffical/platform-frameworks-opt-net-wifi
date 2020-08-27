@@ -18,6 +18,7 @@ package com.android.server.wifi;
 
 import static android.net.wifi.WifiConfiguration.NetworkSelectionStatus.DISABLE_REASON_INFOS;
 
+import android.Manifest;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
@@ -834,35 +835,23 @@ public class WifiConfigManager {
     }
 
     /**
-     * Method to send out the configured networks change broadcast when a single network
-     * configuration is changed.
+     * Method to send out the configured networks change broadcast when network configurations
+     * changed.
      *
-     * @param network WifiConfiguration corresponding to the network that was changed.
+     * In Android R we stopped sending out WifiConfiguration due to user privacy concerns.
+     * Thus, no matter how many networks changed,
+     * {@link WifiManager#EXTRA_MULTIPLE_NETWORKS_CHANGED} is always set to true, and
+     * {@link WifiManager#EXTRA_WIFI_CONFIGURATION} is always null.
+     *
      * @param reason  The reason for the change, should be one of WifiManager.CHANGE_REASON_ADDED,
      *                WifiManager.CHANGE_REASON_REMOVED, or WifiManager.CHANGE_REASON_CHANGE.
      */
-    private void sendConfiguredNetworkChangedBroadcast(
-            WifiConfiguration network, int reason) {
-        Intent intent = new Intent(WifiManager.CONFIGURED_NETWORKS_CHANGED_ACTION);
-        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
-        intent.putExtra(WifiManager.EXTRA_MULTIPLE_NETWORKS_CHANGED, false);
-        // Create a new WifiConfiguration with passwords masked before we send it out.
-        WifiConfiguration broadcastNetwork = new WifiConfiguration(network);
-        maskPasswordsInWifiConfiguration(broadcastNetwork);
-        intent.putExtra(WifiManager.EXTRA_WIFI_CONFIGURATION, broadcastNetwork);
-        intent.putExtra(WifiManager.EXTRA_CHANGE_REASON, reason);
-        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
-    }
-
-    /**
-     * Method to send out the configured networks change broadcast when multiple network
-     * configurations are changed.
-     */
-    private void sendConfiguredNetworksChangedBroadcast() {
+    private void sendConfiguredNetworkChangedBroadcast(int reason) {
         Intent intent = new Intent(WifiManager.CONFIGURED_NETWORKS_CHANGED_ACTION);
         intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
         intent.putExtra(WifiManager.EXTRA_MULTIPLE_NETWORKS_CHANGED, true);
-        mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+        intent.putExtra(WifiManager.EXTRA_CHANGE_REASON, reason);
+        mContext.sendBroadcastAsUser(intent, UserHandle.ALL, Manifest.permission.ACCESS_WIFI_STATE);
     }
 
     /**
@@ -1376,7 +1365,6 @@ public class WifiConfigManager {
         }
         WifiConfiguration newConfig = getInternalConfiguredNetwork(result.getNetworkId());
         sendConfiguredNetworkChangedBroadcast(
-                newConfig,
                 result.isNewNetwork()
                         ? WifiManager.CHANGE_REASON_ADDED
                         : WifiManager.CHANGE_REASON_CONFIG_CHANGE);
@@ -1475,7 +1463,7 @@ public class WifiConfigManager {
         if (!config.ephemeral && !config.isPasspoint()) {
             mLruConnectionTracker.removeNetwork(config);
         }
-        sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_REMOVED);
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_REMOVED);
         // Unless the removed network is ephemeral or Passpoint, persist the network removal.
         if (!config.ephemeral && !config.isPasspoint()) {
             saveToStore(true);
@@ -1688,7 +1676,7 @@ public class WifiConfigManager {
      */
     private void setNetworkStatus(WifiConfiguration config, int status) {
         config.status = status;
-        sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_CONFIG_CHANGE);
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_CONFIG_CHANGE);
     }
 
     /**
@@ -1949,7 +1937,7 @@ public class WifiConfigManager {
             removeConnectChoiceFromAllNetworks(config.getKey());
             clearNetworkConnectChoice(config.networkId);
         }
-        sendConfiguredNetworkChangedBroadcast(config, WifiManager.CHANGE_REASON_CONFIG_CHANGE);
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_CONFIG_CHANGE);
         if (!config.ephemeral) {
             saveToStore(true);
         }
@@ -2364,6 +2352,9 @@ public class WifiConfigManager {
      * @param scanDetail ScanDetail instance  to use for looking up the network.
      * @return WifiConfiguration object representing the network corresponding to the scanDetail,
      * null if none exists.
+     *
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * getSavedNetworkForScanDetail()).
      */
     public WifiConfiguration getConfiguredNetworkForScanDetail(ScanDetail scanDetail) {
         ScanResult scanResult = scanDetail.getScanResult();
@@ -2391,6 +2382,8 @@ public class WifiConfigManager {
      * {@link #mScanDetailCaches} for the retrieved network.
      *
      * @param scanDetail input a scanDetail from the scan result
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * updateScanDetailCacheFromScanDetail()).
      */
     public void updateScanDetailCacheFromScanDetail(ScanDetail scanDetail) {
         WifiConfiguration network = getConfiguredNetworkForScanDetail(scanDetail);
@@ -2407,6 +2400,8 @@ public class WifiConfigManager {
      * @param scanDetail input a scanDetail from the scan result
      * @return WifiConfiguration object representing the network corresponding to the scanDetail,
      * null if none exists.
+     * TODO (b/142035508): This should only return saved networks (and rename to
+     * getSavedNetworkForScanDetailAndCache()).
      */
     public WifiConfiguration getConfiguredNetworkForScanDetailAndCache(ScanDetail scanDetail) {
         WifiConfiguration network = getConfiguredNetworkForScanDetail(scanDetail);
@@ -3049,7 +3044,7 @@ public class WifiConfigManager {
         // on load (i.e. boot) so that if the user changed SIMs while the device was powered off,
         // we do not reuse stale credentials that would lead to authentication failure.
         resetSimNetworks();
-        sendConfiguredNetworksChangedBroadcast();
+        sendConfiguredNetworkChangedBroadcast(WifiManager.CHANGE_REASON_ADDED);
         mPendingStoreRead = false;
     }
 
@@ -3222,6 +3217,9 @@ public class WifiConfigManager {
             pw.println(network);
         }
         pw.println("WifiConfigManager - Configured networks End ----");
+        pw.println("WifiConfigManager - ConfigurationMap Begin ----");
+        mConfiguredNetworks.dump(fd, pw, args);
+        pw.println("WifiConfigManager - ConfigurationMap End ----");
         pw.println("WifiConfigManager - Next network ID to be allocated " + mNextNetworkId);
         pw.println("WifiConfigManager - Last selected network ID " + mLastSelectedNetworkId);
         pw.println("WifiConfigManager - PNO scan frequency culling enabled = "
@@ -3242,9 +3240,11 @@ public class WifiConfigManager {
                 mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
         final boolean hasNetworkSetupWizardPermission =
                 mWifiPermissionsUtil.checkNetworkSetupWizardPermission(uid);
+        final boolean hasNetworkManagedProvisioningPermission =
+                mWifiPermissionsUtil.checkNetworkManagedProvisioningPermission(uid);
         // If |uid| corresponds to the device owner, allow all modifications.
         if (isProfileOwner || isDeviceOwner || hasNetworkSettingsPermission
-                || hasNetworkSetupWizardPermission) {
+                || hasNetworkSetupWizardPermission || hasNetworkManagedProvisioningPermission) {
             return true;
         }
         if (mVerboseLoggingEnabled) {

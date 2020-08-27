@@ -84,6 +84,12 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
                         return def;
                     }
                 });
+        when(DeviceConfig.getLong(anyString(), anyString(), anyLong()))
+                .then(new AnswerWithArguments() {
+                    public long answer(String namespace, String field, long def) {
+                        return def;
+                    }
+                });
         when(DeviceConfig.getString(anyString(), anyString(), anyString()))
                 .then(new AnswerWithArguments() {
                     public String answer(String namespace, String field, String def) {
@@ -124,10 +130,14 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
                 mDeviceConfigFacade.getDataStallTxPerThr());
         assertEquals(DeviceConfigFacade.DEFAULT_DATA_STALL_CCA_LEVEL_THR,
                 mDeviceConfigFacade.getDataStallCcaLevelThr());
-        assertEquals(DeviceConfigFacade.DEFAULT_TPUT_SUFFICIENT_THR_LOW_KBPS,
-                mDeviceConfigFacade.getTputSufficientLowThrKbps());
-        assertEquals(DeviceConfigFacade.DEFAULT_TPUT_SUFFICIENT_THR_HIGH_KBPS,
-                mDeviceConfigFacade.getTputSufficientHighThrKbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_TX_TPUT_SUFFICIENT_THR_LOW_KBPS,
+                mDeviceConfigFacade.getTxTputSufficientLowThrKbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_TX_TPUT_SUFFICIENT_THR_HIGH_KBPS,
+                mDeviceConfigFacade.getTxTputSufficientHighThrKbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_RX_TPUT_SUFFICIENT_THR_LOW_KBPS,
+                mDeviceConfigFacade.getRxTputSufficientLowThrKbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_RX_TPUT_SUFFICIENT_THR_HIGH_KBPS,
+                mDeviceConfigFacade.getRxTputSufficientHighThrKbps());
         assertEquals(DeviceConfigFacade.DEFAULT_TPUT_SUFFICIENT_RATIO_THR_NUM,
                 mDeviceConfigFacade.getTputSufficientRatioThrNum());
         assertEquals(DeviceConfigFacade.DEFAULT_TPUT_SUFFICIENT_RATIO_THR_DEN,
@@ -179,6 +189,22 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
         assertEquals(false, mDeviceConfigFacade.isOverlappingConnectionBugreportEnabled());
         assertEquals(DeviceConfigFacade.DEFAULT_OVERLAPPING_CONNECTION_DURATION_THRESHOLD_MS,
                 mDeviceConfigFacade.getOverlappingConnectionDurationThresholdMs());
+        assertEquals(DeviceConfigFacade.DEFAULT_TX_LINK_SPEED_LOW_THRESHOLD_MBPS,
+                mDeviceConfigFacade.getTxLinkSpeedLowThresholdMbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_RX_LINK_SPEED_LOW_THRESHOLD_MBPS,
+                mDeviceConfigFacade.getRxLinkSpeedLowThresholdMbps());
+        assertEquals(DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_RSSI_POLL_VALID_TIME_MS,
+                mDeviceConfigFacade.getHealthMonitorRssiPollValidTimeMs());
+        assertEquals(DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_SHORT_CONNECTION_DURATION_THR_MS,
+                mDeviceConfigFacade.getHealthMonitorShortConnectionDurationThrMs());
+        assertEquals(DeviceConfigFacade.DEFAULT_ABNORMAL_DISCONNECTION_REASON_CODE_MASK,
+                mDeviceConfigFacade.getAbnormalDisconnectionReasonCodeMask());
+        assertEquals(DeviceConfigFacade.DEFAULT_NONSTATIONARY_SCAN_RSSI_VALID_TIME_MS,
+                mDeviceConfigFacade.getNonstationaryScanRssiValidTimeMs());
+        assertEquals(DeviceConfigFacade.DEFAULT_STATIONARY_SCAN_RSSI_VALID_TIME_MS,
+                mDeviceConfigFacade.getStationaryScanRssiValidTimeMs());
+        assertEquals(DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_FW_ALERT_VALID_TIME_MS,
+                mDeviceConfigFacade.getHealthMonitorFwAlertValidTimeMs());
     }
 
     /**
@@ -205,6 +231,10 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
                 anyInt())).thenReturn(4000);
         when(DeviceConfig.getInt(anyString(), eq("tput_sufficient_high_thr_kbps"),
                 anyInt())).thenReturn(8000);
+        when(DeviceConfig.getInt(anyString(), eq("rx_tput_sufficient_low_thr_kbps"),
+                anyInt())).thenReturn(5000);
+        when(DeviceConfig.getInt(anyString(), eq("rx_tput_sufficient_high_thr_kbps"),
+                anyInt())).thenReturn(9000);
         when(DeviceConfig.getInt(anyString(), eq("tput_sufficient_ratio_thr_num"),
                 anyInt())).thenReturn(3);
         when(DeviceConfig.getInt(anyString(), eq("tput_sufficient_ratio_thr_den"),
@@ -261,7 +291,22 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
                 anyBoolean())).thenReturn(true);
         when(DeviceConfig.getInt(anyString(), eq("overlapping_connection_duration_threshold_ms"),
                 anyInt())).thenReturn(50000);
-
+        when(DeviceConfig.getInt(anyString(), eq("tx_link_speed_low_threshold_mbps"),
+                anyInt())).thenReturn(9);
+        when(DeviceConfig.getInt(anyString(), eq("rx_link_speed_low_threshold_mbps"),
+                anyInt())).thenReturn(10);
+        when(DeviceConfig.getInt(anyString(), eq("health_monitor_short_connection_duration_thr_ms"),
+                anyInt())).thenReturn(30_000);
+        when(DeviceConfig.getLong(anyString(), eq("abnormal_disconnection_reason_code_mask"),
+                anyLong())).thenReturn(0xffff_fff3_0000_ffffL);
+        when(DeviceConfig.getInt(anyString(), eq("health_monitor_rssi_poll_valid_time_ms"),
+                anyInt())).thenReturn(2000);
+        when(DeviceConfig.getInt(anyString(), eq("nonstationary_scan_rssi_valid_time_ms"),
+                anyInt())).thenReturn(4000);
+        when(DeviceConfig.getInt(anyString(), eq("stationary_scan_rssi_valid_time_ms"),
+                anyInt())).thenReturn(3000);
+        when(DeviceConfig.getInt(anyString(), eq("health_monitor_fw_alert_valid_time_ms"),
+                anyInt())).thenReturn(1000);
         mOnPropertiesChangedListenerCaptor.getValue().onPropertiesChanged(null);
 
         // Verifying fields are updated to the new values
@@ -275,8 +320,10 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
         assertEquals(1500, mDeviceConfigFacade.getDataStallRxTputThrKbps());
         assertEquals(95, mDeviceConfigFacade.getDataStallTxPerThr());
         assertEquals(80, mDeviceConfigFacade.getDataStallCcaLevelThr());
-        assertEquals(4000, mDeviceConfigFacade.getTputSufficientLowThrKbps());
-        assertEquals(8000, mDeviceConfigFacade.getTputSufficientHighThrKbps());
+        assertEquals(4000, mDeviceConfigFacade.getTxTputSufficientLowThrKbps());
+        assertEquals(8000, mDeviceConfigFacade.getTxTputSufficientHighThrKbps());
+        assertEquals(5000, mDeviceConfigFacade.getRxTputSufficientLowThrKbps());
+        assertEquals(9000, mDeviceConfigFacade.getRxTputSufficientHighThrKbps());
         assertEquals(3, mDeviceConfigFacade.getTputSufficientRatioThrNum());
         assertEquals(2, mDeviceConfigFacade.getTputSufficientRatioThrDen());
         assertEquals(10, mDeviceConfigFacade.getTxPktPerSecondThr());
@@ -306,5 +353,15 @@ public class DeviceConfigFacadeTest extends WifiBaseTest {
         assertEquals(1000, mDeviceConfigFacade.getBugReportMinWindowMs());
         assertEquals(true, mDeviceConfigFacade.isOverlappingConnectionBugreportEnabled());
         assertEquals(50000, mDeviceConfigFacade.getOverlappingConnectionDurationThresholdMs());
+        assertEquals(9, mDeviceConfigFacade.getTxLinkSpeedLowThresholdMbps());
+        assertEquals(10, mDeviceConfigFacade.getRxLinkSpeedLowThresholdMbps());
+        assertEquals(30_000,
+                mDeviceConfigFacade.getHealthMonitorShortConnectionDurationThrMs());
+        assertEquals(0xffff_fff3_0000_ffffL,
+                mDeviceConfigFacade.getAbnormalDisconnectionReasonCodeMask());
+        assertEquals(2000, mDeviceConfigFacade.getHealthMonitorRssiPollValidTimeMs());
+        assertEquals(4000, mDeviceConfigFacade.getNonstationaryScanRssiValidTimeMs());
+        assertEquals(3000, mDeviceConfigFacade.getStationaryScanRssiValidTimeMs());
+        assertEquals(1000, mDeviceConfigFacade.getHealthMonitorFwAlertValidTimeMs());
     }
 }

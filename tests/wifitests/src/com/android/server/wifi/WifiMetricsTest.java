@@ -318,6 +318,7 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final boolean IS_SCANNING_ALWAYS_ENABLED = true;
     private static final boolean IS_VERBOSE_LOGGING_ENABLED = true;
     private static final boolean IS_ENHANCED_MAC_RANDOMIZATION_FORCE_ENABLED = true;
+    private static final boolean IS_WIFI_WAKE_ENABLED = true;
     private static final int NUM_EMPTY_SCAN_RESULTS = 19;
     private static final int NUM_NON_EMPTY_SCAN_RESULTS = 23;
     private static final int NUM_SCAN_UNKNOWN = 1;
@@ -439,6 +440,8 @@ public class WifiMetricsTest extends WifiBaseTest {
     private static final int NUM_NETWORK_ABNORMAL_ASSOC_REJECTION = 2;
     private static final int NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY = 4;
     private static final int NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS = 5;
+    private static final int NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE = 3;
+    private static final long WIFI_MAINLINE_MODULE_VERSION = 123456L;
 
     /** Number of notifications per "Connect to Network" notification type. */
     private static final int[] NUM_CONNECT_TO_NETWORK_NOTIFICATIONS = {0, 10, 20, 30, 40};
@@ -677,6 +680,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         mWifiMetrics.setVerboseLoggingEnabled(IS_VERBOSE_LOGGING_ENABLED);
         mWifiMetrics.setEnhancedMacRandomizationForceEnabled(
                 IS_ENHANCED_MAC_RANDOMIZATION_FORCE_ENABLED);
+        mWifiMetrics.setWifiWakeEnabled(IS_WIFI_WAKE_ENABLED);
 
         for (int i = 0; i < NUM_EMPTY_SCAN_RESULTS; i++) {
             mWifiMetrics.incrementEmptyScanResultCount();
@@ -907,6 +911,9 @@ public class WifiMetricsTest extends WifiBaseTest {
         for (int i = 0; i < NUM_PNO_FOUND_NETWORK_EVENTS; i++) {
             mWifiMetrics.incrementPnoFoundNetworkEventCount();
         }
+        for (int i = 0; i < NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE; i++) {
+            mWifiMetrics.incrementNumBssidDifferentSelectionBetweenFrameworkAndFirmware();
+        }
 
         // set and increment "connect to network" notification metrics
         for (int i = 0; i < NUM_CONNECT_TO_NETWORK_NOTIFICATIONS.length; i++) {
@@ -1004,6 +1011,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         metrics.numNetworkSufficientRecentStatsOnly = NUM_NETWORK_SUFFICIENT_RECENT_STATS_ONLY;
         metrics.numNetworkSufficientRecentPrevStats = NUM_NETWORK_SUFFICIENT_RECENT_PREV_STATS;
         when(mWifiHealthMonitor.buildProto()).thenReturn(metrics);
+        when(mWifiHealthMonitor.getWifiStackVersion()).thenReturn(WIFI_MAINLINE_MODULE_VERSION);
     }
 
     private void addSoftApEventsToMetrics() {
@@ -1127,6 +1135,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(IS_VERBOSE_LOGGING_ENABLED, mDecodedProto.isVerboseLoggingEnabled);
         assertEquals(IS_ENHANCED_MAC_RANDOMIZATION_FORCE_ENABLED,
                 mDecodedProto.isEnhancedMacRandomizationForceEnabled);
+        assertEquals(IS_WIFI_WAKE_ENABLED, mDecodedProto.isWifiWakeEnabled);
         assertEquals("mDecodedProto.numEmptyScanResults == NUM_EMPTY_SCAN_RESULTS",
                 NUM_EMPTY_SCAN_RESULTS, mDecodedProto.numEmptyScanResults);
         assertEquals("mDecodedProto.numNonEmptyScanResults == NUM_NON_EMPTY_SCAN_RESULTS",
@@ -1321,6 +1330,8 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numPasspointProviderWithSelfSignedRootCa);
         assertEquals(NUM_PASSPOINT_PROVIDERS_WITH_EXPIRATION_DATE,
                 mDecodedProto.numPasspointProviderWithSubscriptionExpiration);
+        assertEquals(NUM_BSSID_SELECTION_DIFFERENT_BETWEEN_FRAMEWORK_FIRMWARE,
+                mDecodedProto.numBssidDifferentSelectionBetweenFrameworkAndFirmware);
 
         assertEquals(NUM_RADIO_MODE_CHANGE_TO_MCC, mDecodedProto.numRadioModeChangeToMcc);
         assertEquals(NUM_RADIO_MODE_CHANGE_TO_SCC, mDecodedProto.numRadioModeChangeToScc);
@@ -1403,6 +1414,7 @@ public class WifiMetricsTest extends WifiBaseTest {
                 mDecodedProto.numConnectRequestWithFilsAkm);
         assertEquals(NUM_L2_CONNECTION_THROUGH_FILS_AUTHENTICATION,
                 mDecodedProto.numL2ConnectionThroughFilsAuthentication);
+        assertEquals(WIFI_MAINLINE_MODULE_VERSION, mDecodedProto.mainlineModuleVersion);
 
     }
 
@@ -1750,10 +1762,11 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(1, mDecodedProto.connectionEvent.length);
         assertEquals(WifiMetricsProto.ConnectionEvent.TYPE_OPEN,
                 mDecodedProto.connectionEvent[0].networkType);
+        assertFalse(mDecodedProto.connectionEvent[0].isOsuProvisioned);
     }
 
     /**
-     * Verify the ConnectionEvent is labeled with networkType passpoint correctly.
+     * Verify the ConnectionEvent is labeled with networkType Passpoint correctly.
      */
     @Test
     public void testConnectionNetworkTypePasspoint() throws Exception {
@@ -1769,6 +1782,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(1, mDecodedProto.connectionEvent.length);
         assertEquals(WifiMetricsProto.ConnectionEvent.TYPE_PASSPOINT,
                 mDecodedProto.connectionEvent[0].networkType);
+        assertFalse(mDecodedProto.connectionEvent[0].isOsuProvisioned);
     }
 
     /**
@@ -1935,10 +1949,10 @@ public class WifiMetricsTest extends WifiBaseTest {
     }
 
     /**
-     * Test logging to WestWorld when a connection event finishes.
+     * Test logging to statsd when a connection event finishes.
      */
     @Test
-    public void testLogWifiConnectionResultWestworld() throws Exception {
+    public void testLogWifiConnectionResultStatsd() throws Exception {
         // static mocking for WifiStatsLog
         mSession = ExtendedMockito.mockitoSession()
                 .strictness(Strictness.LENIENT)
@@ -2282,6 +2296,7 @@ public class WifiMetricsTest extends WifiBaseTest {
         }
         mTestLooper.dispatchAll();
         wifiMetrics.setScreenState(true);
+        when(mWifiDataStall.isCellularDataAvailable()).thenReturn(true);
         for (int i = 0; i < mTestStaLogInts.length; i++) {
             int[] lia = mTestStaLogInts[i];
             wifiMetrics.logStaEvent(lia[0], lia[1], lia[2] == 1 ? mTestWifiConfig : null);
@@ -2321,6 +2336,7 @@ public class WifiMetricsTest extends WifiBaseTest {
             assertConfigInfoEqualsWifiConfig(
                     evs[7] == 1 ? mTestWifiConfig : null, event.configInfo);
             assertEquals(true, event.screenOn);
+            assertEquals(true, event.isCellularDataAvailable);
             j++;
         }
         assertEquals(mExpectedValues.length, j);
@@ -4177,6 +4193,9 @@ public class WifiMetricsTest extends WifiBaseTest {
                 add(60);
             }});
 
+        mWifiMetrics.incrementNetworkSuggestionUserRevokePermission();
+        mWifiMetrics.incrementNetworkSuggestionUserRevokePermission();
+
         dumpProtoAndDeserialize();
 
         assertEquals(4, mDecodedProto.wifiNetworkSuggestionApiLog.numModification);
@@ -4202,6 +4221,60 @@ public class WifiMetricsTest extends WifiBaseTest {
         assertEquals(WifiMetricsProto.WifiNetworkSuggestionApiLog.TYPE_NON_PRIVILEGED,
                 mDecodedProto.wifiNetworkSuggestionApiLog.appCountPerType[2].appType);
         assertEquals(3, mDecodedProto.wifiNetworkSuggestionApiLog.appCountPerType[2].count);
+    }
+
+    /**
+     * Test the generation of 'UserReactionToApprovalUiEvent' message.
+     */
+    @Test
+    public void testUserReactionToApprovalUiEvent() throws Exception {
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(1,  true);
+        mWifiMetrics.addUserApprovalSuggestionAppUiReaction(2,  false);
+
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_ALLOWED_CARRIER, true);
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_DISMISS, false);
+        mWifiMetrics.addUserApprovalCarrierUiReaction(
+                WifiCarrierInfoManager.ACTION_USER_DISALLOWED_CARRIER, false);
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(2,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction.length);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_ALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[0]
+                        .userAction);
+        assertEquals(true,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[0]
+                        .isDialog);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[1]
+                        .userAction);
+        assertEquals(false,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalAppUiReaction[1]
+                        .isDialog);
+
+        assertEquals(3,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction.length);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_ALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[0]
+                        .userAction);
+        assertEquals(true,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[0]
+                        .isDialog);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISMISS,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[1]
+                        .userAction);
+        assertEquals(false,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[1]
+                        .isDialog);
+        assertEquals(WifiMetricsProto.UserReactionToApprovalUiEvent.ACTION_DISALLOWED,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[2]
+                        .userAction);
+        assertEquals(false,
+                mDecodedProto.userReactionToApprovalUiEvent.userApprovalCarrierUiReaction[2]
+                        .isDialog);
     }
 
     private NetworkSelectionExperimentDecisions findUniqueNetworkSelectionExperimentDecisions(
@@ -4906,5 +4979,44 @@ public class WifiMetricsTest extends WifiBaseTest {
         // Connection event 3 doesn't overlap with 2
         assertEquals(0, mWifiMetrics.startConnectionEvent(mTestWifiConfig, "TestNetwork",
                 WifiMetricsProto.ConnectionEvent.ROAM_ENTERPRISE));
+    }
+
+    @Test
+    public void testCarrierWifiConnectionEvent() throws Exception {
+        mWifiMetrics.incrementNumOfCarrierWifiConnectionSuccess();
+        for (int i = 0; i < 2; i++) {
+            mWifiMetrics.incrementNumOfCarrierWifiConnectionAuthFailure();
+        }
+        for (int i = 0; i < 3; i++) {
+            mWifiMetrics.incrementNumOfCarrierWifiConnectionNonAuthFailure();
+        }
+
+        dumpProtoAndDeserialize();
+
+        assertEquals(1, mDecodedProto.carrierWifiMetrics.numConnectionSuccess);
+        assertEquals(2, mDecodedProto.carrierWifiMetrics.numConnectionAuthFailure);
+        assertEquals(3, mDecodedProto.carrierWifiMetrics.numConnectionNonAuthFailure);
+    }
+
+    /**
+     * Verify the ConnectionEvent is labeled with networkType Passpoint correctly and that the OSU
+     * provisioned flag is set to true.
+     */
+    @Test
+    public void testConnectionNetworkTypePasspointFromOsu() throws Exception {
+        WifiConfiguration config = WifiConfigurationTestUtil.createPasspointNetwork();
+        config.updateIdentifier = "7";
+        mWifiMetrics.startConnectionEvent(config, "RED",
+                WifiMetricsProto.ConnectionEvent.ROAM_NONE);
+        mWifiMetrics.endConnectionEvent(
+                WifiMetrics.ConnectionEvent.FAILURE_ASSOCIATION_TIMED_OUT,
+                WifiMetricsProto.ConnectionEvent.HLF_NONE,
+                WifiMetricsProto.ConnectionEvent.FAILURE_REASON_UNKNOWN);
+        dumpProtoAndDeserialize();
+
+        assertEquals(1, mDecodedProto.connectionEvent.length);
+        assertEquals(WifiMetricsProto.ConnectionEvent.TYPE_PASSPOINT,
+                mDecodedProto.connectionEvent[0].networkType);
+        assertTrue(mDecodedProto.connectionEvent[0].isOsuProvisioned);
     }
 }

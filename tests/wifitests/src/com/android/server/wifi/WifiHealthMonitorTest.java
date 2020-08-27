@@ -110,6 +110,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
     private WifiConfiguration mWifiConfig;
     private String mDriverVersion;
     private String mFirmwareVersion;
+    private static final long MODULE_VERSION = 1L;
     private TestAlarmManager mAlarmManager;
     private TestLooper mLooper = new TestLooper();
     private List<WifiConfiguration> mConfiguredNetworks;
@@ -152,7 +153,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
 
         mDriverVersion = "build 1.1";
         mFirmwareVersion = "HW 1.1";
-        mPackageInfo.versionCode = 1;
+        when(mPackageInfo.getLongVersionCode()).thenReturn(MODULE_VERSION);
         when(mContext.getPackageName()).thenReturn("WifiAPK");
         when(mPackageManager.getPackageInfo(anyString(), anyInt())).thenReturn(mPackageInfo);
         when(mContext.getPackageManager()).thenReturn(mPackageManager);
@@ -165,7 +166,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
                 .thenReturn(mAlarmManager.getAlarmManager());
 
         mScanData = mockScanData();
-        mWifiScanner = mockWifiScanner(WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+        mWifiScanner = mockWifiScanner(WifiScanner.WIFI_BAND_ALL);
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         when(mWifiNative.getDriverVersion()).thenReturn(mDriverVersion);
         when(mWifiNative.getFirmwareVersion()).thenReturn(mFirmwareVersion);
@@ -199,6 +200,18 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_RATIO_THR_NUMERATOR);
         when(mDeviceConfigFacade.getHealthMonitorMinNumConnectionAttempt()).thenReturn(
                 DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_MIN_NUM_CONNECTION_ATTEMPT);
+        when(mDeviceConfigFacade.getHealthMonitorShortConnectionDurationThrMs()).thenReturn(
+                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_SHORT_CONNECTION_DURATION_THR_MS);
+        when(mDeviceConfigFacade.getAbnormalDisconnectionReasonCodeMask()).thenReturn(
+                DeviceConfigFacade.DEFAULT_ABNORMAL_DISCONNECTION_REASON_CODE_MASK);
+        when(mDeviceConfigFacade.getHealthMonitorRssiPollValidTimeMs()).thenReturn(
+                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_RSSI_POLL_VALID_TIME_MS);
+        when(mDeviceConfigFacade.getHealthMonitorFwAlertValidTimeMs()).thenReturn(
+                DeviceConfigFacade.DEFAULT_HEALTH_MONITOR_FW_ALERT_VALID_TIME_MS);
+        when(mDeviceConfigFacade.getNonstationaryScanRssiValidTimeMs()).thenReturn(
+                DeviceConfigFacade.DEFAULT_NONSTATIONARY_SCAN_RSSI_VALID_TIME_MS);
+        when(mDeviceConfigFacade.getStationaryScanRssiValidTimeMs()).thenReturn(
+                DeviceConfigFacade.DEFAULT_STATIONARY_SCAN_RSSI_VALID_TIME_MS);
         mWifiHealthMonitor = new WifiHealthMonitor(mContext, mWifiInjector, mClock,
                 mWifiConfigManager, mWifiScoreCard, new Handler(mLooper.getLooper()), mWifiNative,
                 "some seed", mDeviceConfigFacade);
@@ -293,7 +306,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         millisecondsPass(1000);
         mWifiScoreCard.noteSignalPoll(mWifiInfo);
         millisecondsPass(2000);
-        int disconnectionReason = 3;
+        int disconnectionReason = 0;
         mWifiScoreCard.noteNonlocalDisconnect(disconnectionReason);
         millisecondsPass(10);
         mWifiScoreCard.resetConnectionState();
@@ -310,6 +323,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         // trigger extractCurrentSoftwareBuildInfo() call to update currSoftwareBuildInfo
         mWifiHealthMonitor.installMemoryStoreSetUpDetectionAlarm(mMemoryStore);
         mWifiHealthMonitor.setWifiEnabled(true);
+        assertEquals(0, mWifiHealthMonitor.getWifiStackVersion());
         millisecondsPass(5000);
         mWifiScanner.startScan(mScanSettings, mScanListener);
         mAlarmManager.dispatch(WifiHealthMonitor.POST_BOOT_DETECTION_TIMER_TAG);
@@ -331,6 +345,14 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
             public void write(String key, String name, byte[] value) {
                 mKeys.add(key);
                 mBlobs.add(value);
+            }
+
+            @Override
+            public void setCluster(String key, String cluster) {
+            }
+
+            @Override
+            public void removeCluster(String cluster) {
             }
         });
         mBlobListeners.get(0).onBlobRetrieved(serialized);
@@ -357,6 +379,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
                 .getWifiFirmwareVersion());
         assertEquals(mFirmwareVersion, wifiSystemInfoStats.getPrevSoftwareBuildInfo()
                 .getWifiFirmwareVersion());
+        assertEquals(MODULE_VERSION, mWifiHealthMonitor.getWifiStackVersion());
 
         // Check write
         String writtenHex = hexStringFromByteArray(mBlobs.get(mKeys.size() - 1));
@@ -387,8 +410,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
         SystemInfoStats systemInfoStats = SystemInfoStats.parseFrom(serialized);
         WifiSoftwareBuildInfo currSoftwareBuildInfoFromMemory = wifiSystemInfoStats
                 .fromSoftwareBuildInfo(systemInfoStats.getCurrSoftwareBuildInfo());
-        assertEquals(mPackageInfo.versionCode,
-                currSoftwareBuildInfoFromMemory.getWifiStackVersion());
+        assertEquals(MODULE_VERSION, currSoftwareBuildInfoFromMemory.getWifiStackVersion());
         assertEquals(mDriverVersion, currSoftwareBuildInfoFromMemory.getWifiDriverVersion());
         assertEquals(mFirmwareVersion, currSoftwareBuildInfoFromMemory.getWifiFirmwareVersion());
         assertEquals(Build.DISPLAY, currSoftwareBuildInfoFromMemory.getOsBuildVersion());
@@ -531,7 +553,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
     }
 
     /**
-     * Check WestWorld logging after one daily detection with high non-local disconnection rate
+     * Check statsd logging after one daily detection with high non-local disconnection rate
      */
     @Test
     public void testWifiStatsLogWrite() throws Exception {
@@ -688,10 +710,19 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
             public void read(String key, String name, WifiScoreCard.BlobListener listener) {
                 mBlobListeners.add(listener);
             }
+
             @Override
             public void write(String key, String name, byte[] value) {
                 mKeys.add(key);
                 mBlobs.add(value);
+            }
+
+            @Override
+            public void setCluster(String key, String cluster) {
+            }
+
+            @Override
+            public void removeCluster(String cluster) {
             }
         });
         mBlobListeners.get(0).onBlobRetrieved(serialized);
@@ -703,7 +734,7 @@ public class WifiHealthMonitorTest extends WifiBaseTest {
 
         // Add Above2G only scan data
         mScanData = mockScanDataAbove2GOnly();
-        mWifiScanner = mockWifiScanner(WifiScanner.WIFI_BAND_BOTH_WITH_DFS);
+        mWifiScanner = mockWifiScanner(WifiScanner.WIFI_BAND_ALL);
         when(mWifiInjector.getWifiScanner()).thenReturn(mWifiScanner);
         millisecondsPass(5000);
         mWifiHealthMonitor.setWifiEnabled(true);

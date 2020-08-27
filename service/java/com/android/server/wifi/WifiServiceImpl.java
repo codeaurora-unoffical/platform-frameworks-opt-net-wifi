@@ -51,7 +51,6 @@ import android.net.Network;
 import android.net.NetworkStack;
 import android.net.Uri;
 import android.net.ip.IpClientUtil;
-import android.net.shared.Inet4AddressUtils;
 import android.net.wifi.IActionListener;
 import android.net.wifi.IDppCallback;
 import android.net.wifi.ILocalOnlyHotspotCallback;
@@ -110,6 +109,7 @@ import android.util.MutableBoolean;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.AsyncChannel;
+import com.android.net.module.util.Inet4AddressUtils;
 import com.android.server.wifi.hotspot2.PasspointManager;
 import com.android.server.wifi.hotspot2.PasspointProvider;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
@@ -303,7 +303,6 @@ public class WifiServiceImpl extends BaseWifiService {
         mCountryCode = mWifiInjector.getWifiCountryCode();
         mClientModeImpl = mWifiInjector.getClientModeImpl();
         mActiveModeWarden = mWifiInjector.getActiveModeWarden();
-        mClientModeImpl.enableRssiPolling(true);                  //TODO(b/65033024) strange startup
         mScanRequestProxy = mWifiInjector.getScanRequestProxy();
         mSettingsStore = mWifiInjector.getWifiSettingsStore();
         mPowerManager = mContext.getSystemService(PowerManager.class);
@@ -880,6 +879,14 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mLog.info("startSoftAp uid=%").c(Binder.getCallingUid()).flush();
 
+        SoftApConfiguration softApConfig = null;
+        if (wifiConfig != null) {
+            softApConfig = ApConfigUtil.fromWifiConfiguration(wifiConfig);
+            if (softApConfig == null) {
+                return false;
+            }
+        }
+
         if (!mTetheredSoftApTracker.setEnablingIfAllowed()) {
             mLog.err("Tethering is already active.").flush();
             return false;
@@ -891,17 +898,14 @@ public class WifiServiceImpl extends BaseWifiService {
             mLohsSoftApTracker.stopAll();
         }
 
-        if (wifiConfig != null) {
-            SoftApConfiguration softApConfig = ApConfigUtil.fromWifiConfiguration(wifiConfig);
-            if (softApConfig == null) return false;
-            return startSoftApInternal(new SoftApModeConfiguration(
-                    WifiManager.IFACE_IP_MODE_TETHERED,
-                    softApConfig, mTetheredSoftApTracker.getSoftApCapability()));
-        } else {
-            return startSoftApInternal(new SoftApModeConfiguration(
-                    WifiManager.IFACE_IP_MODE_TETHERED, null,
-                    mTetheredSoftApTracker.getSoftApCapability()));
+        if (!startSoftApInternal(new SoftApModeConfiguration(
+                WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
+                mTetheredSoftApTracker.getSoftApCapability()))) {
+            mTetheredSoftApTracker.setFailedWhileEnabling();
+            return false;
         }
+
+        return true;
     }
 
     private boolean validateSoftApBand(int apBand) {
@@ -952,11 +956,15 @@ public class WifiServiceImpl extends BaseWifiService {
             mLohsSoftApTracker.stopAll();
         }
 
-        return startSoftApInternal(new SoftApModeConfiguration(
+        if (!startSoftApInternal(new SoftApModeConfiguration(
                 WifiManager.IFACE_IP_MODE_TETHERED, softApConfig,
-                mTetheredSoftApTracker.getSoftApCapability()));
-    }
+                mTetheredSoftApTracker.getSoftApCapability()))) {
+            mTetheredSoftApTracker.setFailedWhileEnabling();
+            return false;
+        }
 
+        return true;
+    }
 
     /**
      * Internal method to start softap mode. Callers of this method should have already checked
@@ -1051,6 +1059,14 @@ public class WifiServiceImpl extends BaseWifiService {
                 }
                 mTetheredSoftApState = WIFI_AP_STATE_ENABLING;
                 return true;
+            }
+        }
+
+        public void setFailedWhileEnabling() {
+            synchronized (mLock) {
+                if (mTetheredSoftApState == WIFI_AP_STATE_ENABLING) {
+                    mTetheredSoftApState = WIFI_AP_STATE_FAILED;
+                }
             }
         }
 
@@ -1432,12 +1448,20 @@ public class WifiServiceImpl extends BaseWifiService {
 
         @GuardedBy("mLocalOnlyHotspotRequests")
         private void startForFirstRequestLocked(LocalOnlyHotspotRequestInfo request) {
-            boolean is5Ghz = hasAutomotiveFeature(mContext)
-                    && mContext.getResources().getBoolean(
-                    R.bool.config_wifi_local_only_hotspot_5ghz)
-                    && is5GhzBandSupportedInternal();
+            int band = SoftApConfiguration.BAND_2GHZ;
 
-            int band = is5Ghz ? SoftApConfiguration.BAND_5GHZ : SoftApConfiguration.BAND_2GHZ;
+            // For auto only
+            if (hasAutomotiveFeature(mContext)) {
+                if (mContext.getResources().getBoolean(R.bool.config_wifiLocalOnlyHotspot6ghz)
+                        && mContext.getResources().getBoolean(R.bool.config_wifiSoftap6ghzSupported)
+                        && is6GhzBandSupportedInternal()) {
+                    band = SoftApConfiguration.BAND_6GHZ;
+                } else if (mContext.getResources().getBoolean(
+                        R.bool.config_wifi_local_only_hotspot_5ghz)
+                        && is5GhzBandSupportedInternal()) {
+                    band = SoftApConfiguration.BAND_5GHZ;
+                }
+            }
 
             SoftApConfiguration softApConfig = WifiApConfigStore.generateLocalOnlyHotspotConfig(
                     mContext, band, request.getCustomConfig());
@@ -3200,8 +3224,9 @@ public class WifiServiceImpl extends BaseWifiService {
                 WifiConfigManager.ENHANCED_MAC_RANDOMIZATION_FEATURE_FORCE_ENABLE_FLAG, 0) == 1
                 ? true : false;
         mWifiMetrics.setEnhancedMacRandomizationForceEnabled(isEnhancedMacRandEnabled);
-        mWifiMetrics.setIsScanningAlwaysEnabled(isScanAlwaysAvailable());
+        mWifiMetrics.setIsScanningAlwaysEnabled(mSettingsStore.isScanAlwaysAvailable());
         mWifiMetrics.setVerboseLoggingEnabled(mVerboseLoggingEnabled);
+        mWifiMetrics.setWifiWakeEnabled(mWifiInjector.getWakeupController().isEnabled());
     }
 
     @Override
@@ -3472,7 +3497,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (mVerboseLoggingEnabled) {
             mLog.info("getCurrentNetwork uid=%").c(Binder.getCallingUid()).flush();
         }
-        return mClientModeImpl.getCurrentNetwork();
+        return mClientModeImpl.syncGetCurrentNetwork(mClientModeImplChannel);
     }
 
     public static String toHexString(String s) {
