@@ -32,6 +32,7 @@ import android.net.wifi.WifiManager;
 import android.os.Handler;
 import android.os.IHwBinder.DeathRecipient;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -418,6 +419,15 @@ public class HostapdHal {
         return false;
     }
 
+    private boolean isWifiSoftapIeee80211axSupported() {
+        if (!SystemProperties.getBoolean("ro.vendor.wlan.11ax", true)) {
+            Log.i(TAG, "Disable 11ax due to ro.vendor.wlan.11ax is false");
+            return false;
+        }
+        return mContext.getResources().getBoolean(
+                       R.bool.config_wifiSoftapIeee80211axSupported);
+    }
+
     /**
      * Add and start a new access point.
      *
@@ -495,8 +505,7 @@ public class HostapdHal {
                         ifaceParams1_2.V1_1 = ifaceParams1_1;
 
                         ifaceParams1_2.hwModeParams.enable80211AX =
-                                mContext.getResources().getBoolean(
-                                    R.bool.config_wifiSoftapIeee80211axSupported);
+                                isWifiSoftapIeee80211axSupported();
                         ifaceParams1_2.hwModeParams.enable6GhzBand =
                                 mContext.getResources().getBoolean(
                                     R.bool.config_wifiSoftap6ghzSupported);
