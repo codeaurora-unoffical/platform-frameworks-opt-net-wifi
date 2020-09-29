@@ -74,6 +74,49 @@ public class KnownBandsChannelHelper extends ChannelHelper {
         copyChannels(mBandsToChannels[9], channels2G.length + channels5G.length + channelsDfs.length, channels6G);
     }
 
+    protected void setBandChannels(int[] channels2G, int[] channels5G, int[] channelsDfs, int[] channels6G) {
+        mBandsToChannels = new WifiScanner.ChannelSpec[10][];
+
+        mBandsToChannels[0] = NO_CHANNELS;
+
+        mBandsToChannels[1] = new WifiScanner.ChannelSpec[channels2G.length];
+        copyChannels(mBandsToChannels[1], 0, channels2G);
+
+        mBandsToChannels[2] = new WifiScanner.ChannelSpec[channels5G.length];
+        copyChannels(mBandsToChannels[2], 0, channels5G);
+
+        mBandsToChannels[3] = new WifiScanner.ChannelSpec[channels2G.length + channels5G.length];
+        copyChannels(mBandsToChannels[3], 0, channels2G);
+        copyChannels(mBandsToChannels[3], channels2G.length, channels5G);
+
+        mBandsToChannels[4] = new WifiScanner.ChannelSpec[channelsDfs.length];
+        copyChannels(mBandsToChannels[4], 0, channelsDfs);
+
+        mBandsToChannels[5] = new WifiScanner.ChannelSpec[channels2G.length + channelsDfs.length];
+        copyChannels(mBandsToChannels[5], 0, channels2G);
+        copyChannels(mBandsToChannels[5], channels2G.length, channelsDfs);
+
+        mBandsToChannels[6] = new WifiScanner.ChannelSpec[channels5G.length + channelsDfs.length];
+        copyChannels(mBandsToChannels[6], 0, channels5G);
+        copyChannels(mBandsToChannels[6], channels5G.length, channelsDfs);
+
+        mBandsToChannels[7] = new WifiScanner.ChannelSpec[
+                channels2G.length + channels5G.length + channelsDfs.length];
+        copyChannels(mBandsToChannels[7], 0, channels2G);
+        copyChannels(mBandsToChannels[7], channels2G.length, channels5G);
+        copyChannels(mBandsToChannels[7], channels2G.length + channels5G.length, channelsDfs);
+
+        mBandsToChannels[8] = new WifiScanner.ChannelSpec[channels6G.length];
+        copyChannels(mBandsToChannels[8], 0, channels6G);
+
+        mBandsToChannels[9] = new WifiScanner.ChannelSpec[
+                channels2G.length + channels5G.length + channelsDfs.length + channels6G.length];
+        copyChannels(mBandsToChannels[9], 0, channels2G);
+        copyChannels(mBandsToChannels[9], channels2G.length, channels5G);
+        copyChannels(mBandsToChannels[9], channels2G.length + channels5G.length, channelsDfs);
+        copyChannels(mBandsToChannels[9], channels2G.length + channels5G.length + channelsDfs.length, channels6G);
+    }
+
     private static void copyChannels(
             WifiScanner.ChannelSpec[] channelSpec, int offset, int[] channels) {
         for (int i = 0; i < channels.length; i++) {
