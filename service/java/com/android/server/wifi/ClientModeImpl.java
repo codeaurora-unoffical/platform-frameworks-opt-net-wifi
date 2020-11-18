@@ -2713,6 +2713,17 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Send NETWORK_STATE_CHANGED_ACTION with current state info.
+     */
+    private void sendNetworkChangeBroadcast() {
+        Intent intent = new Intent(WifiManager.NETWORK_STATE_CHANGED_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        NetworkInfo networkInfo = makeNetworkInfo();
+        intent.putExtra(WifiManager.EXTRA_NETWORK_INFO, networkInfo);
+        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    /**
      * Record the detailed state of a network.
      *
      * @param state the new {@code DetailedState}
@@ -2883,10 +2894,6 @@ public class ClientModeImpl extends StateMachine {
      * using the interface, stopping DHCP & disabling interface
      */
     private void handleNetworkDisconnect() {
-        handleNetworkDisconnect(false);
-    }
-
-    private void handleNetworkDisconnect(boolean connectionInProgress) {
         if (mVerboseLoggingEnabled) {
             log("handleNetworkDisconnect:"
                     + " stack:" + Thread.currentThread().getStackTrace()[2].getMethodName()
@@ -3783,6 +3790,10 @@ public class ClientModeImpl extends StateMachine {
         }
     }
 
+    public void registerModeListener(ClientModeManager.Listener clientModeImplListener) {
+        mClientModeCallback = clientModeImplListener;
+    }
+
     /**
      * Helper method to start other services and get state ready for client mode
      */
@@ -4002,6 +4013,10 @@ public class ClientModeImpl extends StateMachine {
             mWifiScoreCard.noteSupplicantStateChanged(mWifiInfo);
             mWifiHealthMonitor.setWifiEnabled(true);
             mWifiDataStall.init();
+
+            if (mClientModeCallback != null) {
+                 mClientModeCallback.onStarted();
+            }
         }
 
         @Override
@@ -4502,24 +4517,9 @@ public class ClientModeImpl extends StateMachine {
                     // idempotent commands are executed twice (stopping Dhcp, enabling the SPS mode
                     // at the chip etc...
                     if (mVerboseLoggingEnabled) log("ConnectModeState: Network connection lost ");
-                    mLastNetworkId = message.arg1;
-                    mWifiConfigManager.clearRecentFailureReason(mLastNetworkId);
-                    mLastBssid = (String) message.obj;
-                    // TODO: This check should not be needed after WifiStateMachinePrime refactor.
-                    // Currently, the last connected network configuration is left in
-                    // wpa_supplicant, this may result in wpa_supplicant initiating connection
-                    // to it after a config store reload. Hence the old network Id lookups may not
-                    // work, so disconnect the network and let network selector reselect a new
-                    // network.
-
-                    ScanResult scanResult = getScanResultForBssid(mLastBssid);
-                    boolean mConnectionInProgress =
-                        (mTargetWifiConfiguration != null) && (scanResult != null) &&
-                        !mTargetWifiConfiguration.SSID.equals("\""+scanResult.SSID+"\"");
                     clearNetworkCachedDataIfNeeded(getTargetWifiConfiguration(), message.arg2);
-                    handleNetworkDisconnect(mConnectionInProgress);
-                    if (!mConnectionInProgress)
-                        transitionTo(mDisconnectedState);
+                    handleNetworkDisconnect();
+                    transitionTo(mDisconnectedState);
                     break;
                 case CMD_QUERY_OSU_ICON:
                     mPasspointManager.queryPasspointIcon(
@@ -5117,6 +5117,7 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_IPV4_PROVISIONING_SUCCESS: {
                     handleIPv4Success((DhcpResultsParcelable) message.obj);
+                    sendNetworkChangeBroadcast();
                     break;
                 }
                 case CMD_IPV4_PROVISIONING_FAILURE: {
@@ -5202,6 +5203,7 @@ public class ClientModeImpl extends StateMachine {
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
                     if (!mLastBssid.equals((String) message.obj)) {
                         mLastBssid = (String) message.obj;
+                        sendNetworkChangeBroadcast();
                     }
                     if (mIsWhitelistRoaming) {
                         mIsWhitelistRoaming = false;
@@ -5300,6 +5302,7 @@ public class ClientModeImpl extends StateMachine {
                                 }
                             }
                         }
+                        sendNetworkChangeBroadcast();
                     }
                     break;
                 case CMD_START_RSSI_MONITORING_OFFLOAD:
@@ -5595,6 +5598,7 @@ public class ClientModeImpl extends StateMachine {
                         mLastBssid = (String) message.obj;
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
+                        sendNetworkChangeBroadcast();
 
                         // Successful framework roam! (probably)
                         mBssidBlocklistMonitor.handleBssidConnectionSuccess(mLastBssid,
@@ -7160,7 +7164,7 @@ public class ClientModeImpl extends StateMachine {
             if (mWifiInfo.is24GHz() &&
                     mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_5G))
                 filter5G = true;
-            else if (mWifiInfo.is5GHz() &&
+            else if ((mWifiInfo.is5GHz() || mWifiInfo.is6GHz()) &&
                         mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))
                 filter2G = true;
         }
@@ -7206,7 +7210,7 @@ public class ClientModeImpl extends StateMachine {
 
         if (isConnected()
             && ((mWifiInfo.is24GHz() && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_5G))
-            || (mWifiInfo.is5GHz() && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))))
+            || ((mWifiInfo.is5GHz() || mWifiInfo.is6GHz()) && mWifiNative.qtiConnectedbands.get(WifiNative.ConnectedBand.BAND_2G))))
             return true;
         return false;
     }
