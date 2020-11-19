@@ -39,6 +39,7 @@ import android.os.HidlSupport.Mutable;
 import android.os.HwRemoteBinder;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.util.Log;
 import android.util.LongSparseArray;
 import android.util.MutableBoolean;
@@ -571,6 +572,11 @@ public class HalDeviceManager {
     private class WifiIfaceInfo {
         public String name;
         public IWifiIface iface;
+
+        @Override
+        public String toString() {
+            return "{name=" + name + ", iface=" + iface + "}";
+        }
     }
 
     private class WifiChipInfo {
@@ -590,7 +596,7 @@ public class HalDeviceManager {
             for (int type: IFACE_TYPES_BY_PRIORITY) {
                 sb.append(", ifaces[" + type + "].length=").append(ifaces[type].length);
             }
-            sb.append(")");
+            sb.append("}");
             return sb.toString();
         }
     }
@@ -1374,6 +1380,70 @@ public class HalDeviceManager {
         return results;
     }
 
+    /*
+     * Chipinfo can't figure out IfaceType.AP to be AP or AP+AP.
+     * So add addtional check to AP+AP+P2P concurrency.
+     */
+    private boolean checkVendorConcurrency(int requestedIfaceType,
+            WifiChipInfo[] chipInfos) {
+        int counter_ap = 0;
+        int counter_sta = 0;
+        int counter_p2p = 0;
+        int counter_nan = 0;
+        boolean dual = (SystemProperties.getInt(
+                "persist.vendor.wifi.softap.dualband", 0) == 1);
+
+        // update counters.
+        for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+             if (entry.type == IfaceType.AP) {
+                 counter_ap ++;
+             } else if (entry.type == IfaceType.STA) {
+                 counter_sta ++;
+             } else if (entry.type == IfaceType.P2P) {
+                 counter_p2p ++;
+             } else if (entry.type == IfaceType.NAN) {
+                 counter_nan ++;
+             }
+        }
+
+        Log.i(TAG, "CONC: Requested new iface=" + requestedIfaceType
+              + ", existing=[STA " + counter_sta + ", AP " + counter_ap
+              + ", P2P " + counter_p2p + ", NAN " + counter_nan + "]");
+
+        if (requestedIfaceType == IfaceType.AP && dual) {
+            // disable P2P then enable AP+AP
+            for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+                if (entry.type == IfaceType.P2P) {
+                    // find chip
+                    for (WifiChipInfo ci: chipInfos) {
+                        if (ci.chipId == entry.chipId) {
+                            // find WifiIfaceInfo
+                            WifiIfaceInfo[] ifaceInfos = ci.ifaces[entry.type];
+                            for (WifiIfaceInfo ifo: ifaceInfos) {
+                                if (ifo.name.equals(entry.name)) {
+                                    Log.i(TAG, "CONC: Remove " + entry.name + " before enable AP+AP");
+                                    removeIfaceInternal(ifo.iface);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (requestedIfaceType == IfaceType.P2P) {
+             // block P2P when AP+AP enabled
+             for (InterfaceCacheEntry entry : mInterfaceInfoCache.values()) {
+                if (entry.type == IfaceType.AP
+                    && entry.name.contains("wifi_br")) {
+                    Log.i(TAG, "CONC: Reject P2P iface due to AP+AP enabled");
+                    return false;
+                }
+             }
+        }
+
+        return true;
+    }
+
     private IWifiIface createIface(int ifaceType, boolean lowPriority,
             InterfaceDestroyedListener destroyedListener, Handler handler) {
         if (mDbg) {
@@ -1391,6 +1461,10 @@ public class HalDeviceManager {
             if (!validateInterfaceCache(chipInfos)) {
                 Log.e(TAG, "createIface: local cache is invalid!");
                 stopWifi(); // major error: shutting down
+                return null;
+            }
+
+            if (!checkVendorConcurrency(ifaceType, chipInfos)) {
                 return null;
             }
 
@@ -1561,8 +1635,8 @@ public class HalDeviceManager {
             IWifiChip.ChipMode chipMode, int[] chipIfaceCombo, int ifaceType, boolean lowPriority) {
         if (VDBG) {
             Log.d(TAG, "canIfaceComboSupportRequest: chipInfo=" + chipInfo + ", chipMode="
-                    + chipMode + ", chipIfaceCombo=" + chipIfaceCombo + ", ifaceType=" + ifaceType
-                    + ", lowPriority=" + lowPriority);
+                    + chipMode + ", chipIfaceCombo=" + Arrays.toString(chipIfaceCombo)
+                    + ", ifaceType=" + ifaceType + ", lowPriority=" + lowPriority);
         }
 
         // short-circuit: does the chipIfaceCombo even support the requested type?
@@ -1633,9 +1707,9 @@ public class HalDeviceManager {
                     return null;
                 }
 
-                // delete the most recently created interfaces or LOW priority interfaces
-                interfacesToBeRemovedFirst = selectInterfacesToDelete(tooManyInterfaces,
-                        chipInfo.ifaces[type]);
+                // delete the most recently created interfaces
+                interfacesToBeRemovedFirst.addAll(selectInterfacesToDelete(tooManyInterfaces,
+                        chipInfo.ifaces[type]));
             }
         }
 
@@ -1713,7 +1787,7 @@ public class HalDeviceManager {
      * Type-specific rules (but note that the general rules are appied first):
      * 4. Request for AP or STA will destroy any other interface
      * 5. Request for P2P will destroy NAN-only (but will destroy a second STA per #3)
-     * 6. Request for NAN will not destroy any interface (but will destroy a second STA per #3)
+     * 6. Request for NAN will destroy P2P-only (but will destroy a second STA per #3)
      *
      * Note: the 'numNecessaryInterfaces' is used to specify how many interfaces would be needed to
      * be deleted. This is used to determine whether there are that many low priority interfaces
@@ -1749,14 +1823,14 @@ public class HalDeviceManager {
             return true;
         }
 
-        // rule 6
-        if (requestedIfaceType == IfaceType.NAN) {
-            return false;
-        }
-
         // rule 5
         if (requestedIfaceType == IfaceType.P2P) {
             return existingIfaceType == IfaceType.NAN;
+        }
+
+        // rule 6
+        if (requestedIfaceType == IfaceType.NAN) {
+            return existingIfaceType == IfaceType.P2P;
         }
 
         // rule 4, the requestIfaceType is either AP or STA
