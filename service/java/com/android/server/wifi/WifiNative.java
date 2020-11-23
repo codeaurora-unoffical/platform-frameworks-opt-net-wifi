@@ -4036,17 +4036,17 @@ public class WifiNative {
         /* one of band is connected in 2.4 GHz */
         public static final int BAND_2G = 1;
 
-        /* one of band is connected in 5 GHz */
+        /* one of band is connected in 5 GHz or 6 GHz */
         public static final int BAND_5G = 2;
     }
 
-    public void qtiUpdateConnectedBand(boolean set, int wifiId, int band) {
+    public void qtiUpdateConnectedBand(int wifiId, int band) {
         if (band < 0 || band > ConnectedBand.BAND_5G) {
             Log.e(TAG, "Unknown band option: " + band);
             return;
         }
 
-        if (set)
+        if (band != ConnectedBand.BAND_NONE)
             mIfaceBands.put(wifiId, band);
         else
             mIfaceBands.remove(wifiId);
@@ -4062,5 +4062,17 @@ public class WifiNative {
             if (mVerboseLoggingEnabled)
                 Log.d(TAG, "ConnectedBand bitset="+qtiConnectedbands);
         }
+    }
+
+    /** updates linked networks of the |networkId| in supplicant if it's the current network,
+     * if the current configured network matches |networkId|.
+     *
+     * @param ifaceName Name of the interface.
+     * @param networkId network id of the network to be updated from supplicant.
+     * @param linkedNetworks linked networks to be configured in supplicant.
+     */
+    public boolean updateLinkedNetworks(@NonNull String ifaceName, int networkId,
+                    HashMap<String, WifiConfiguration> linkedNetworks) {
+        return mSupplicantStaIfaceHal.updateLinkedNetworks(ifaceName, networkId, linkedNetworks);
     }
 }

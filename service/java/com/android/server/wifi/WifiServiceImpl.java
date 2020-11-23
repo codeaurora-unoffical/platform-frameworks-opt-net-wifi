@@ -33,6 +33,8 @@ import static com.android.server.wifi.WifiSettingsConfigStore.SOFTAP_BEACON_PROT
 import static com.android.server.wifi.WifiSettingsConfigStore.SOFTAP_OCV_ENABLED;
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_VERBOSE_LOGGING_ENABLED;
 import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_COVERAGE_EXTEND_FEATURE_ENABLED;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_WHITELIST_ROAMING_ENABLED;
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED;
 import android.annotation.CheckResult;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -1077,9 +1079,10 @@ public class WifiServiceImpl extends BaseWifiService {
         SoftApConfiguration softApConfig = apConfig.getSoftApConfiguration();
 
         if (softApConfig == null && TextUtils.isEmpty(mCountryCode.getCountryCode())) {
-            Log.d(TAG, "Starting softap without country code. Fallback to 2G band");
+            Log.d(TAG, "Starting softap without country code. Fallback to 2G band!");
             softApConfig = new SoftApConfiguration.Builder(mWifiApConfigStore.getApConfiguration())
                 .setBand(SoftApConfiguration.BAND_2GHZ).build();
+            mWifiApConfigStore.setApConfiguration(softApConfig);
         }
 
         setDualSapMode(softApConfig);
@@ -2001,8 +2004,13 @@ public class WifiServiceImpl extends BaseWifiService {
     @NonNull
     @Override
     public SoftApConfiguration getSoftApConfiguration() {
-        enforceNetworkSettingsPermission();
         int uid = Binder.getCallingUid();
+        if (!mWifiPermissionsUtil.checkConfigOverridePermission(uid)
+                && !mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)) {
+            // random apps should not be allowed to read the user specified config
+            throw new SecurityException("App not allowed to read or update stored WiFi Ap config "
+                    + "(uid = " + uid + ")");
+        }
         if (mVerboseLoggingEnabled) {
             mLog.info("getSoftApConfiguration uid=%").c(uid).flush();
         }
@@ -2055,9 +2063,14 @@ public class WifiServiceImpl extends BaseWifiService {
     @Override
     public boolean setSoftApConfiguration(
             @NonNull SoftApConfiguration softApConfig, @NonNull String packageName) {
-        enforceNetworkSettingsPermission();
         int uid = Binder.getCallingUid();
         boolean privileged = mWifiPermissionsUtil.checkNetworkSettingsPermission(uid);
+        if (!mWifiPermissionsUtil.checkConfigOverridePermission(uid)
+                && !privileged) {
+            // random apps should not be allowed to read the user specified config
+            throw new SecurityException("App not allowed to read or update stored WiFi Ap config "
+                    + "(uid = " + uid + ")");
+        }
         mLog.info("setSoftApConfiguration uid=%").c(uid).flush();
         if (softApConfig == null) return false;
         if (WifiApConfigStore.validateApWifiConfiguration(softApConfig, privileged)) {
@@ -5045,4 +5058,35 @@ public class WifiServiceImpl extends BaseWifiService {
         return config.staId;
     }
 
+    @Override
+    public boolean isWhitelistNetworkRoamingEnabled() {
+        enforceAccessPermission();
+        return mWifiInjector.getSettingsConfigStore().get(WIFI_WHITELIST_ROAMING_ENABLED);
+    }
+
+    @Override
+    public void enableWhitelistNetworkRoaming(boolean enable) {
+        enforceAccessPermission();
+        enforceNetworkSettingsPermission();
+        mLog.info("enableWhitelistNetworkRoaming uid=% enable=%")
+                .c(Binder.getCallingUid())
+                .c(enable).flush();
+        mWifiInjector.getSettingsConfigStore().put(WIFI_WHITELIST_ROAMING_ENABLED, enable);
+    }
+
+    @Override
+    public boolean isNewNetworkAutoConnectionEnabled() {
+        enforceAccessPermission();
+        return mWifiInjector.getSettingsConfigStore().get(WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED);
+    }
+
+    @Override
+    public void enableNewNetworkAutoConnection(boolean enable) {
+        enforceAccessPermission();
+        enforceNetworkSettingsPermission();
+        mLog.info("enableNewNetworkAutoConnection uid=% enable=%")
+                .c(Binder.getCallingUid())
+                .c(enable).flush();
+        mWifiInjector.getSettingsConfigStore().put(WIFI_NEW_NETWORK_AUTO_CONNECTION_ENABLED, enable);
+    }
 }
