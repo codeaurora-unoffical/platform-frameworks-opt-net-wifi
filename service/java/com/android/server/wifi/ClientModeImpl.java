@@ -2713,6 +2713,17 @@ public class ClientModeImpl extends StateMachine {
     }
 
     /**
+     * Send NETWORK_STATE_CHANGED_ACTION with current state info.
+     */
+    private void sendNetworkChangeBroadcast() {
+        Intent intent = new Intent(WifiManager.NETWORK_STATE_CHANGED_ACTION);
+        intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY_BEFORE_BOOT);
+        NetworkInfo networkInfo = makeNetworkInfo();
+        intent.putExtra(WifiManager.EXTRA_NETWORK_INFO, networkInfo);
+        mContext.sendStickyBroadcastAsUser(intent, UserHandle.ALL);
+    }
+
+    /**
      * Record the detailed state of a network.
      *
      * @param state the new {@code DetailedState}
@@ -3105,6 +3116,7 @@ public class ClientModeImpl extends StateMachine {
             ssid = getTargetSsid();
         }
         if (level2FailureCode != WifiMetrics.ConnectionEvent.FAILURE_NONE) {
+            updateConnectedBand(mWifiInfo.getFrequency(), false);
             int blocklistReason = convertToBssidBlocklistMonitorFailureReason(
                     level2FailureCode, level2FailureReason);
             if (blocklistReason != -1) {
@@ -3851,7 +3863,7 @@ public class ClientModeImpl extends StateMachine {
         mWifiNative.setConcurrencyPriority(true);
 
         // Reset Connected band entries
-        mWifiNative.qtiUpdateConnectedBand(false, STA_PRIMARY, WifiNative.ConnectedBand.BAND_NONE);
+        mWifiNative.qtiUpdateConnectedBand(STA_PRIMARY, WifiNative.ConnectedBand.BAND_NONE);
     }
 
     /**
@@ -3881,7 +3893,7 @@ public class ClientModeImpl extends StateMachine {
 		mWifiConfigManager.clearUserTemporarilyDisabledList();
 
         // Reset Connected band entries
-        mWifiNative.qtiUpdateConnectedBand(false, STA_PRIMARY, WifiNative.ConnectedBand.BAND_NONE);
+        mWifiNative.qtiUpdateConnectedBand(STA_PRIMARY, WifiNative.ConnectedBand.BAND_NONE);
     }
 
     void registerConnected() {
@@ -5106,6 +5118,7 @@ public class ClientModeImpl extends StateMachine {
                     break;
                 case CMD_IPV4_PROVISIONING_SUCCESS: {
                     handleIPv4Success((DhcpResultsParcelable) message.obj);
+                    sendNetworkChangeBroadcast();
                     break;
                 }
                 case CMD_IPV4_PROVISIONING_FAILURE: {
@@ -5189,8 +5202,9 @@ public class ClientModeImpl extends StateMachine {
                     mLastNetworkId = message.arg1;
                     mWifiInfo.setNetworkId(mLastNetworkId);
                     mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
-                    if (!mLastBssid.equals((String) message.obj)) {
+                    if (mLastBssid == null || !mLastBssid.equals((String) message.obj)) {
                         mLastBssid = (String) message.obj;
+                        sendNetworkChangeBroadcast();
                     }
                     if (mIsWhitelistRoaming) {
                         mIsWhitelistRoaming = false;
@@ -5289,6 +5303,7 @@ public class ClientModeImpl extends StateMachine {
                                 }
                             }
                         }
+                        sendNetworkChangeBroadcast();
                     }
                     break;
                 case CMD_START_RSSI_MONITORING_OFFLOAD:
@@ -5584,6 +5599,7 @@ public class ClientModeImpl extends StateMachine {
                         mLastBssid = (String) message.obj;
                         mWifiInfo.setBSSID(mLastBssid);
                         mWifiInfo.setNetworkId(mLastNetworkId);
+                        sendNetworkChangeBroadcast();
 
                         // Successful framework roam! (probably)
                         mBssidBlocklistMonitor.handleBssidConnectionSuccess(mLastBssid,
@@ -7168,14 +7184,18 @@ public class ClientModeImpl extends StateMachine {
     }
 
     private void updateConnectedBand(int freq, boolean set) {
-        if (set) mWifiInfo.setFrequency(freq);
         if (mVerboseLoggingEnabled)
             Log.d(TAG, "updateConnectedBand freq="+freq+" set="+set);
+        if (set) {
+            mWifiInfo.setFrequency(freq);
 
-        if (ScanResult.is24GHz(freq)) {
-            mWifiNative.qtiUpdateConnectedBand(set, STA_PRIMARY, WifiNative.ConnectedBand.BAND_2G);
-        } else if (ScanResult.is5GHz(freq)) {
-            mWifiNative.qtiUpdateConnectedBand(set, STA_PRIMARY, WifiNative.ConnectedBand.BAND_5G);
+            if (ScanResult.is24GHz(freq)) {
+                mWifiNative.qtiUpdateConnectedBand(STA_PRIMARY, WifiNative.ConnectedBand.BAND_2G);
+            } else if (ScanResult.is5GHz(freq) || ScanResult.is6GHz(freq)) {
+                mWifiNative.qtiUpdateConnectedBand(STA_PRIMARY, WifiNative.ConnectedBand.BAND_5G);
+            }
+        } else {
+             mWifiNative.qtiUpdateConnectedBand(STA_PRIMARY, WifiNative.ConnectedBand.BAND_NONE);
         }
     }
 
