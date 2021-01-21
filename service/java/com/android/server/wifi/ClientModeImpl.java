@@ -258,6 +258,7 @@ public class ClientModeImpl extends StateMachine {
     private final ActivityManager mActivityManager;
 
     private boolean mScreenOn = false;
+    private boolean mDisconnected = false;
 
     private String mInterfaceName;
     /* The interface for ipClient */
@@ -5085,6 +5086,9 @@ public class ClientModeImpl extends StateMachine {
                 }
             }
             mCountryCode.setReadyForChange(true);
+            if (!mDisconnected)
+                mWifiNative.disconnect(mInterfaceName);
+            mDisconnected = false;
             mWifiMetrics.setWifiState(WifiMetricsProto.WifiLog.WIFI_DISCONNECTED);
             mWifiStateTracker.updateState(WifiStateTracker.DISCONNECTED);
             //Inform WifiLockManager
@@ -5185,6 +5189,7 @@ public class ClientModeImpl extends StateMachine {
                     mWifiMetrics.logStaEvent(StaEvent.TYPE_FRAMEWORK_DISCONNECT,
                             StaEvent.DISCONNECT_GENERIC);
                     mWifiNative.disconnect(mInterfaceName);
+                    mDisconnected = true;
                     transitionTo(mDisconnectingState);
                     break;
                 case WifiP2pServiceImpl.DISCONNECT_WIFI_REQUEST:
@@ -6264,6 +6269,16 @@ public class ClientModeImpl extends StateMachine {
      */
     public void allowAutoJoinGlobal(boolean choice) {
         mWifiConnectivityManager.setAutoJoinEnabledExternal(choice);
+    }
+
+    /**
+     * Allow quick connect on partial scan results
+     *
+     * @param choice true-enable; false-disable
+     */
+    public void allowConnectOnPartialScanResults(boolean enable) {
+        mWifiConnectivityManager.allowConnectOnPartialScanResults(enable);
+        mWifiNative.allowConnectOnPartialScanResults(enable);
     }
 
     /**
