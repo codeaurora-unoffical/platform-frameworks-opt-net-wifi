@@ -193,7 +193,8 @@ public class WifiInjector {
                 ServiceManager.getService(Context.NETWORKMANAGEMENT_SERVICE));
         mWifiNative = new WifiNative(
                 mWifiVendorHal, mSupplicantStaIfaceHal, mHostapdHal, mWificondControl,
-                mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics);
+                mWifiMonitor, mNwManagementService, mPropertyService, mWifiMetrics,
+                new Handler(mWifiStateMachineHandlerThread.getLooper()));
         mWifiP2pMonitor = new WifiP2pMonitor(this);
         mSupplicantP2pIfaceHal = new SupplicantP2pIfaceHal(mWifiP2pMonitor);
         mWifiP2pNative = new WifiP2pNative(mSupplicantP2pIfaceHal, mHalDeviceManager);
@@ -253,7 +254,8 @@ public class WifiInjector {
                 (AppOpsManager) mContext.getSystemService(Context.APP_OPS_SERVICE),
                 (ActivityManager) mContext.getSystemService(Context.ACTIVITY_SERVICE),
                 this, mWifiConfigManager,
-                mWifiPermissionsUtil, mWifiMetrics, mClock);
+                mWifiPermissionsUtil, mWifiMetrics, mClock, mFrameworkFacade,
+                new Handler(wifiStateMachineLooper));
         mSarManager = new SarManager(mContext, makeTelephonyManager(), wifiStateMachineLooper,
                 mWifiNative, new SystemSensorManager(mContext, wifiStateMachineLooper));
         if (mUseRealLogger) {

@@ -67,6 +67,7 @@ import android.net.wifi.WifiWakeReasonAndCounts;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.MutableBoolean;
@@ -1157,7 +1158,10 @@ public class WifiVendorHal {
             featureSet |= WifiManager.WIFI_FEATURE_P2P;
         }
         if (supportedIfaceTypes.contains(IfaceType.NAN)) {
-            featureSet |= WifiManager.WIFI_FEATURE_AWARE;
+            // disable NAN if vendor aware is set to false
+            if (SystemProperties.getBoolean("ro.vendor.wlan.aware", true)) {
+                featureSet |= WifiManager.WIFI_FEATURE_AWARE;
+            }
         }
 
         return featureSet;

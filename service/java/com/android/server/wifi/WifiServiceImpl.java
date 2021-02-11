@@ -1020,6 +1020,17 @@ public class WifiServiceImpl extends IWifiManager.Stub {
         }
     }
 
+	private void setDualSapMode(WifiConfiguration apConfig) {
+        if (apConfig == null)
+            apConfig = mWifiApConfigStore.getApConfiguration();
+        if (apConfig.apBand == WifiConfiguration.AP_BAND_DUAL) {
+            mLog.trace("setDualSapMode uid=%").c(Binder.getCallingUid()).flush();
+            mWifiApConfigStore.setDualSapStatus(true);
+        } else {
+            mWifiApConfigStore.setDualSapStatus(false);
+        }
+    }
+
     /**
      * Internal method to start softap mode. Callers of this method should have already checked
      * proper permissions beyond the NetworkStack permission.
@@ -1027,6 +1038,7 @@ public class WifiServiceImpl extends IWifiManager.Stub {
     private boolean startSoftApInternal(WifiConfiguration wifiConfig, int mode) {
         mLog.trace("startSoftApInternal uid=% mode=%")
                 .c(Binder.getCallingUid()).c(mode).flush();
+        setDualSapMode(wifiConfig);
 
         // null wifiConfig is a meaningful input for CMD_SET_AP
         if (wifiConfig == null || WifiApConfigStore.validateApWifiConfiguration(wifiConfig)) {

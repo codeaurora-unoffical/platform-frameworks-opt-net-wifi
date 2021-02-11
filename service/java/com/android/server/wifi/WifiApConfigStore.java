@@ -93,6 +93,7 @@ public class WifiApConfigStore {
     private boolean mRequiresApBandConversion = false;
 
     private String mBridgeInterfaceName = null;
+    private boolean mDualSapStatus = false;
 
     WifiApConfigStore(Context context, Looper looper,
             BackupManagerProxy backupManagerProxy, FrameworkFacade frameworkFacade) {
@@ -147,6 +148,14 @@ public class WifiApConfigStore {
 
     public synchronized String getBridgeInterface() {
         return mBridgeInterfaceName;
+    }
+
+    public synchronized boolean getDualSapStatus() {
+        return mDualSapStatus;
+    }
+
+    public synchronized void setDualSapStatus(boolean enable) {
+        mDualSapStatus = enable;
     }
 
     private final BroadcastReceiver mBroadcastReceiver =
